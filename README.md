@@ -7,7 +7,7 @@ Worker Python pronto per Railway che monitora coppie crypto su Kraken, calcola i
 ## Funzionalità
 
 - Worker continuo, senza web server.
-- Scan ogni 5 minuti.
+- Scan ogni 5 minuti
 - Exchange: Kraken.
 - Timeframe principale: 15m.
 - Conferma trend: 1h.
@@ -109,21 +109,11 @@ python main.py
 
 ## Deploy su Railway
 
-Railway usa il comando worker `python main.py`. Il progetto include sia il `Procfile` sia `railpack.json` per forzare il comando di avvio corretto anche quando Railway/Railpack propone un default errato come `python app.py`:
+Railway usa il `Procfile` incluso:
 
 ```Procfile
 worker: python main.py
 ```
-
-```json
-{
-  "deploy": {
-    "startCommand": "python main.py"
-  }
-}
-```
-
-Il file `.python-version` e `railpack.json` richiedono Python 3.12 per evitare incompatibilità con pacchetti scientifici su versioni Python troppo nuove.
 
 Non devi esporre porte HTTP perché questa app è un worker continuo.
 
@@ -241,19 +231,7 @@ Il file `Procfile` contiene già:
 worker: python main.py
 ```
 
-In più, `railpack.json` forza esplicitamente il comando:
-
-```text
-python main.py
-```
-
-Se nei log di build o deploy vedi ancora `python app.py`, vai in Railway nel servizio del bot e controlla **Settings → Deploy → Custom Start Command**. Deve essere vuoto oppure impostato a:
-
-```text
-python main.py
-```
-
-Dopo il deploy, Railway avvia il processo come worker. Non serve una porta pubblica perché non è una web app.
+Dopo il deploy, Railway avvia il processo come worker. Se necessario, controlla nelle impostazioni del servizio che il comando di start sia `python main.py` o che Railway stia usando il `Procfile`.
 
 ### 10. Come verificare dai log che il bot stia funzionando
 
