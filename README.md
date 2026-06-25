@@ -355,27 +355,6 @@ git push
 5. Railway rileverà il push e avvierà un nuovo deploy.
 6. Controlla i log Railway per verificare che il worker sia partito correttamente.
 
-## Backtest su TradingView
-
-Il file `tradingview_strategy.pine` contiene una strategia Pine Script v5 che replica solo le regole BUY/LONG del worker Python per fare backtest su TradingView.
-
-Uso consigliato:
-
-1. Apri TradingView.
-2. Apri il grafico della coppia da testare.
-3. Imposta il timeframe del grafico a 15 minuti.
-4. Apri **Pine Editor**.
-5. Copia il contenuto di `tradingview_strategy.pine`.
-6. Clicca **Add to chart**.
-7. Apri **Strategy Tester** per vedere risultati, drawdown e trade.
-
-Note:
-
-- La conferma trend usa il timeframe 1h tramite `request.security`.
-- La strategia TradingView mostra e testa solo ingressi BUY/LONG, con stop loss e due target come il bot Python.
-- Per ottenere risultati confrontabili, usa simboli Kraken su TradingView quando disponibili, ad esempio `KRAKEN:BTCUSD`.
-- I risultati del backtest possono differire dai segnali reali per spread, slippage, dati del broker/exchange e regole di esecuzione TradingView.
-
 ## Avvertenza
 
 Questo bot genera segnali tecnici automatici e non costituisce consulenza finanziaria. Testa sempre la strategia prima di usarla con capitale reale.

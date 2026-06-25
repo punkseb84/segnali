@@ -6,10 +6,10 @@ simple technical strategy, and sends LONG/SHORT alerts to Telegram.
 
 from __future__ import annotations
 
+import sys
 import json
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 from typing import Any

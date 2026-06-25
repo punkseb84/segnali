@@ -1,7 +1,7 @@
 //@version=5
 strategy(
-     title="Kraken Crypto Signal Bot - LONG Backtest",
-     shorttitle="Kraken Signal LONG",
+     title="Kraken Crypto Signal Bot - Backtest",
+     shorttitle="Kraken Signal Bot",
      overlay=true,
      initial_capital=10000,
      currency=currency.USD,
@@ -12,7 +12,7 @@ strategy(
      commission_value=0.1,
      process_orders_on_close=true)
 
-// This Pine strategy mirrors only the LONG/BUY rules from the Python worker.
+// This Pine strategy mirrors the Python worker rules.
 // Use it on a 15-minute chart for the closest match with the bot.
 
 trendTimeframe = input.timeframe("60", "Trend confirmation timeframe")
@@ -31,31 +31,51 @@ trendClose = request.security(syminfo.tickerid, trendTimeframe, close, barmerge.
 trendEma200 = request.security(syminfo.tickerid, trendTimeframe, ta.ema(close, 200), barmerge.gaps_off, barmerge.lookahead_off)
 
 bullishTrend1h = trendClose > trendEma200
+bearishTrend1h = trendClose < trendEma200
 bullishEmaStack = ema20 > ema50 and ema50 > ema200
+bearishEmaStack = ema20 < ema50 and ema50 < ema200
 rsiLongZone = rsi14 >= 50 and rsi14 <= 70
+rsiShortZone = rsi14 >= 30 and rsi14 <= 50
 macdCrossUp = macdHist[1] < 0 and macdHist > 0
+macdCrossDown = macdHist[1] > 0 and macdHist < 0
 volumeConfirmed = volume > volumeAvg20
 
 longSignal = bullishTrend1h and bullishEmaStack and rsiLongZone and macdCrossUp and volumeConfirmed
+shortSignal = bearishTrend1h and bearishEmaStack and rsiShortZone and macdCrossDown and volumeConfirmed
 
 longRisk = 1.5 * atr14
 longStop = close - longRisk
 longTarget1 = close + 1.5 * longRisk
 longTarget2 = close + 3.0 * longRisk
 
+shortRisk = 1.5 * atr14
+shortStop = close + shortRisk
+shortTarget1 = close - 1.5 * shortRisk
+shortTarget2 = close - 3.0 * shortRisk
+
 if longSignal and strategy.position_size <= 0
     strategy.entry("LONG", strategy.long)
     strategy.exit("LONG T1", from_entry="LONG", limit=longTarget1, stop=longStop, qty_percent=50)
     strategy.exit("LONG T2", from_entry="LONG", limit=longTarget2, stop=longStop, qty_percent=50)
 
+if shortSignal and strategy.position_size >= 0
+    strategy.entry("SHORT", strategy.short)
+    strategy.exit("SHORT T1", from_entry="SHORT", limit=shortTarget1, stop=shortStop, qty_percent=50)
+    strategy.exit("SHORT T2", from_entry="SHORT", limit=shortTarget2, stop=shortStop, qty_percent=50)
+
 plot(ema20, title="EMA 20", color=color.new(color.teal, 0))
 plot(ema50, title="EMA 50", color=color.new(color.orange, 0))
 plot(ema200, title="EMA 200", color=color.new(color.purple, 0))
 
-plotshape(showSignals and longSignal, title="BUY/LONG signal", style=shape.labelup, text="BUY", color=color.new(color.green, 0), textcolor=color.white, location=location.belowbar, size=size.small)
+plotshape(showSignals and longSignal, title="LONG signal", style=shape.labelup, text="LONG", color=color.new(color.green, 0), textcolor=color.white, location=location.belowbar, size=size.small)
+plotshape(showSignals and shortSignal, title="SHORT signal", style=shape.labeldown, text="SHORT", color=color.new(color.red, 0), textcolor=color.white, location=location.abovebar, size=size.small)
 
 plot(showRiskLevels and longSignal ? longStop : na, title="LONG Stop Loss", color=color.new(color.red, 0), style=plot.style_linebr)
 plot(showRiskLevels and longSignal ? longTarget1 : na, title="LONG Target 1", color=color.new(color.green, 0), style=plot.style_linebr)
 plot(showRiskLevels and longSignal ? longTarget2 : na, title="LONG Target 2", color=color.new(color.green, 40), style=plot.style_linebr)
+plot(showRiskLevels and shortSignal ? shortStop : na, title="SHORT Stop Loss", color=color.new(color.red, 0), style=plot.style_linebr)
+plot(showRiskLevels and shortSignal ? shortTarget1 : na, title="SHORT Target 1", color=color.new(color.green, 0), style=plot.style_linebr)
+plot(showRiskLevels and shortSignal ? shortTarget2 : na, title="SHORT Target 2", color=color.new(color.green, 40), style=plot.style_linebr)
 
-alertcondition(longSignal, title="BUY/LONG alert", message="BUY/LONG {{ticker}} | Entry: {{close}} | Timeframe: 15m | Confirm: 1h bullish trend")
+alertcondition(longSignal, title="LONG alert", message="LONG {{ticker}} | Entry: {{close}} | Timeframe: 15m | Confirm: 1h bullish trend")
+alertcondition(shortSignal, title="SHORT alert", message="SHORT {{ticker}} | Entry: {{close}} | Timeframe: 15m | Confirm: 1h bearish trend")
