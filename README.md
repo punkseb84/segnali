@@ -7,7 +7,7 @@ Worker Python pronto per Railway che monitora coppie crypto su Kraken, calcola i
 ## Funzionalità
 
 - Worker continuo, senza web server.
-- Scan ogni 5 minuti.
+- Scan ogni 5 minuti
 - Exchange: Kraken.
 - Timeframe principale: 15m.
 - Conferma trend: 1h.
