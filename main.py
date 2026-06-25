@@ -6,6 +6,7 @@ simple technical strategy, and sends LONG/SHORT alerts to Telegram.
 
 from __future__ import annotations
 
+import sys
 import json
 import logging
 import os
@@ -37,6 +38,7 @@ SIGNAL_STATE_FILE = Path(os.getenv("SIGNAL_STATE_FILE", "last_signals.json"))
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s | %(levelname)s | %(message)s",
+    stream=sys.stdout,
 )
 logger = logging.getLogger("crypto-signal-worker")
 
