@@ -33,7 +33,28 @@ Worker Python pronto per Railway che monitora coppie crypto su Kraken, calcola i
 Le coppie predefinite sono definite in `main.py`:
 
 ```python
-SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "BNB/USD", "DOGE/USD"]
+SYMBOLS = [
+    "BTC/USD",
+    "ETH/USD",
+    "SOL/USD",
+    "XRP/USD",
+    "BNB/USD",
+    "DOGE/USD",
+    "ADA/USD",
+    "AVAX/USD",
+    "DOT/USD",
+    "LINK/USD",
+    "LTC/USD",
+    "BCH/USD",
+    "XLM/USD",
+    "TRX/USD",
+    "UNI/USD",
+    "AAVE/USD",
+    "ATOM/USD",
+    "NEAR/USD",
+    "FIL/USD",
+    "ETC/USD",
+]
 ```
 
 Se Kraken non rende disponibile una coppia, il bot la salta e scrive un warning nei log.
@@ -278,7 +299,28 @@ All'avvio dovresti anche ricevere su Telegram:
 Apri `main.py` e modifica la lista:
 
 ```python
-SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "BNB/USD", "DOGE/USD"]
+SYMBOLS = [
+    "BTC/USD",
+    "ETH/USD",
+    "SOL/USD",
+    "XRP/USD",
+    "BNB/USD",
+    "DOGE/USD",
+    "ADA/USD",
+    "AVAX/USD",
+    "DOT/USD",
+    "LINK/USD",
+    "LTC/USD",
+    "BCH/USD",
+    "XLM/USD",
+    "TRX/USD",
+    "UNI/USD",
+    "AAVE/USD",
+    "ATOM/USD",
+    "NEAR/USD",
+    "FIL/USD",
+    "ETC/USD",
+]
 ```
 
 Esempio:
@@ -354,6 +396,27 @@ git push
 
 5. Railway rileverà il push e avvierà un nuovo deploy.
 6. Controlla i log Railway per verificare che il worker sia partito correttamente.
+
+## Backtest su TradingView
+
+Il file `tradingview_strategy.pine` contiene una strategia Pine Script v6 che replica solo le regole BUY/LONG del worker Python per fare backtest su TradingView.
+
+Uso consigliato:
+
+1. Apri TradingView.
+2. Apri il grafico della coppia da testare.
+3. Imposta il timeframe del grafico a 15 minuti.
+4. Apri **Pine Editor**.
+5. Copia il contenuto di `tradingview_strategy.pine`.
+6. Clicca **Add to chart**.
+7. Apri **Strategy Tester** per vedere risultati, drawdown e trade.
+
+Note:
+
+- La conferma trend usa il timeframe 1h tramite `request.security`.
+- La strategia TradingView mostra e testa solo ingressi BUY/LONG, con stop loss e due target come il bot Python.
+- Per ottenere risultati confrontabili, usa simboli Kraken su TradingView quando disponibili, ad esempio `KRAKEN:BTCUSD`.
+- I risultati del backtest possono differire dai segnali reali per spread, slippage, dati del broker/exchange e regole di esecuzione TradingView.
 
 ## Avvertenza
 

@@ -6,10 +6,10 @@ simple technical strategy, and sends LONG/SHORT alerts to Telegram.
 
 from __future__ import annotations
 
-import sys
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -28,7 +28,28 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "BNB/USD", "DOGE/USD"]
+SYMBOLS = [
+    "BTC/USD",
+    "ETH/USD",
+    "SOL/USD",
+    "XRP/USD",
+    "BNB/USD",
+    "DOGE/USD",
+    "ADA/USD",
+    "AVAX/USD",
+    "DOT/USD",
+    "LINK/USD",
+    "LTC/USD",
+    "BCH/USD",
+    "XLM/USD",
+    "TRX/USD",
+    "UNI/USD",
+    "AAVE/USD",
+    "ATOM/USD",
+    "NEAR/USD",
+    "FIL/USD",
+    "ETC/USD",
+]
 MAIN_TIMEFRAME = "15m"
 TREND_TIMEFRAME = "1h"
 LOOP_SLEEP_SECONDS = 300
