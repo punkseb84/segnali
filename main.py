@@ -72,6 +72,13 @@ logging.basicConfig(
 logger = logging.getLogger("crypto-signal-worker")
 
 
+def redact_secret(text: str, secret: str) -> str:
+    """Remove sensitive tokens from text before writing logs."""
+    if not secret:
+        return text
+    return text.replace(secret, "***REDACTED***")
+
+
 def utc_now() -> datetime:
     """Return the current UTC datetime with timezone information."""
     return datetime.now(timezone.utc)
@@ -214,11 +221,19 @@ def send_telegram_message(message: str) -> bool:
 
     try:
         response = requests.post(url, json=payload, timeout=20)
-        response.raise_for_status()
+        if not response.ok:
+            logger.error(
+                "Telegram send failed: status=%s response=%s",
+                response.status_code,
+                response.text[:500],
+            )
+            return False
+
         logger.info("Telegram message sent")
         return True
     except requests.RequestException as exc:
-        logger.error("Telegram send failed: %s", exc)
+        safe_error = redact_secret(str(exc), TELEGRAM_BOT_TOKEN)
+        logger.error("Telegram send failed before response: %s", safe_error)
         return False
 
 
