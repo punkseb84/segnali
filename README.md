@@ -111,6 +111,11 @@ cp .env.example .env
 ```env
 TELEGRAM_BOT_TOKEN=123456789:token_reale
 TELEGRAM_CHAT_ID=123456789
+SIGNAL_HISTORY_FILE=signal_history.json
+TRADE_STATE_FILE=trades.json
+REPORT_STATE_FILE=report_state.json
+DAILY_REPORT_TIME=09:00
+REPORT_TIMEZONE=Europe/Rome
 ```
 
 5. Avvia il worker:
@@ -127,6 +132,11 @@ python main.py
 | `TELEGRAM_CHAT_ID` | Sì | ID della chat, gruppo o canale dove inviare i segnali. |
 | `LOG_LEVEL` | No | Livello log, default `INFO`. |
 | `SIGNAL_STATE_FILE` | No | Percorso file JSON anti-duplicazione, default `last_signals.json`. |
+| `SIGNAL_HISTORY_FILE` | No | Percorso storico segnali inviati, default `signal_history.json`. |
+| `TRADE_STATE_FILE` | No | Percorso tracking teorico trade, default `trades.json`. |
+| `REPORT_STATE_FILE` | No | Percorso stato ultimo report giornaliero, default `report_state.json`. |
+| `DAILY_REPORT_TIME` | No | Orario report giornaliero in formato `HH:MM`, default `09:00`. |
+| `REPORT_TIMEZONE` | No | Timezone report giornaliero, default `Europe/Rome`. |
 
 ## Deploy su Railway
 
@@ -396,6 +406,47 @@ git push
 
 5. Railway rileverà il push e avvierà un nuovo deploy.
 6. Controlla i log Railway per verificare che il worker sia partito correttamente.
+
+## Report giornaliero Telegram
+
+Il worker salva ogni segnale Telegram inviato in `signal_history.json` e crea un trade teorico in `trades.json`. A ogni ciclo controlla i trade aperti usando le ultime candele chiuse e invia un aggiornamento Telegram quando un trade raggiunge Target 1, Target 2 o Stop Loss.
+
+Ogni giorno viene inviato un report Telegram con:
+
+- segnali delle ultime 24 ore;
+- numero di LONG e SHORT;
+- trade aperti;
+- trade chiusi nelle ultime 24 ore;
+- Target 1 raggiunti;
+- Target 2 raggiunti;
+- Stop Loss raggiunti;
+- risultato teorico in R.
+
+Configurazione default:
+
+```env
+SIGNAL_HISTORY_FILE=signal_history.json
+TRADE_STATE_FILE=trades.json
+REPORT_STATE_FILE=report_state.json
+DAILY_REPORT_TIME=09:00
+REPORT_TIMEZONE=Europe/Rome
+```
+
+Per cambiare orario del report su Railway, modifica `DAILY_REPORT_TIME`, ad esempio:
+
+```env
+DAILY_REPORT_TIME=08:30
+```
+
+Per cambiare timezone, modifica `REPORT_TIMEZONE`, ad esempio:
+
+```env
+REPORT_TIMEZONE=Europe/Rome
+```
+
+Il report viene inviato una sola volta al giorno: lo stato dell'ultimo invio viene salvato in `report_state.json`.
+
+Nota Railway: questa è una prima versione senza database. I file JSON locali possono essere persi o resettati quando il servizio viene ricreato, redeployato o spostato su un nuovo container. Per uno storico affidabile nel lungo periodo sarà meglio usare in futuro PostgreSQL, Redis o uno storage esterno.
 
 ## Backtest su TradingView
 
