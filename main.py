@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
 from ta.volatility import AverageTrueRange
+from trade_utils import evaluate_trade_candles, format_price
 
 load_dotenv()
 
@@ -164,6 +165,7 @@ def append_signal_history(history: list[dict[str, Any]], signal: dict[str, Any])
             "candle_timestamp": signal["candle_timestamp"],
             "timeframe": MAIN_TIMEFRAME,
             "trend_timeframe": TREND_TIMEFRAME,
+            "exchange": "Kraken",
         }
     )
     save_signal_history(history)
@@ -352,10 +354,10 @@ def format_signal_message(signal: dict[str, Any]) -> str:
 
     return (
         f"{icon} {signal['direction']} {signal['symbol']}\n"
-        f"Entry: {signal['entry']:.2f}\n"
-        f"Stop Loss: {signal['stop_loss']:.2f}\n"
-        f"Target 1: {signal['target_1']:.2f}\n"
-        f"Target 2: {signal['target_2']:.2f}\n"
+        f"Entry: {format_price(signal['entry'])}\n"
+        f"Stop Loss: {format_price(signal['stop_loss'])}\n"
+        f"Target 1: {format_price(signal['target_1'])}\n"
+        f"Target 2: {format_price(signal['target_2'])}\n"
         f"Timeframe: {MAIN_TIMEFRAME}\n"
         f"Conferma: trend 1h {trend_text}\n"
         "Motivi:\n"
@@ -381,13 +383,22 @@ def create_trade(signal: dict[str, Any]) -> dict[str, Any]:
         "candle_timestamp": signal["candle_timestamp"],
         "timeframe": MAIN_TIMEFRAME,
         "trend_timeframe": TREND_TIMEFRAME,
+        "exchange": "Kraken",
         "status": "open",
         "target_1_hit": False,
         "target_2_hit": False,
         "stop_loss_hit": False,
         "opened_at": utc_now_iso(),
         "closed_at": None,
+        "result": "OPEN",
         "result_r": None,
+        "analyzed_candles": 0,
+        "min_after_entry": None,
+        "max_after_entry": None,
+        "decisive_candle_timestamp": None,
+        "decisive_candle_ohlc": None,
+        "last_checked_candle_timestamp": None,
+        "check_from_candle_timestamp": None,
     }
 
 
@@ -398,56 +409,33 @@ def format_trade_update_message(trade: dict[str, Any], event: str) -> str:
         "TARGET_1": "Target 1 raggiunto",
         "TARGET_2": "Target 2 raggiunto",
         "STOP_LOSS": "Stop Loss raggiunto",
+        "AMBIGUOUS": "Candela ambigua: Stop Loss e Target raggiunti nella stessa candela",
     }[event]
     result = trade.get("result_r")
     result_line = f"\nRisultato teorico: {result:.2f}R" if isinstance(result, (int, float)) else ""
     return (
         f"{icon} {status_text}\n"
         f"{trade['direction']} {trade['symbol']}\n"
-        f"Entry: {trade['entry']:.2f}\n"
-        f"Stop Loss: {trade['stop_loss']:.2f}\n"
-        f"Target 1: {trade['target_1']:.2f}\n"
-        f"Target 2: {trade['target_2']:.2f}"
+        f"Entry: {format_price(trade['entry'])}\n"
+        f"Stop Loss: {format_price(trade['stop_loss'])}\n"
+        f"Target 1: {format_price(trade['target_1'])}\n"
+        f"Target 2: {format_price(trade['target_2'])}"
         f"{result_line}"
     )
 
 
-def update_trade_with_candle(trade: dict[str, Any], candle: pd.Series) -> str | None:
-    """Update one open theoretical trade using a closed candle."""
-    high = float(candle["high"])
-    low = float(candle["low"])
-    direction = trade["direction"]
-
-    if direction == "LONG":
-        stop_hit = low <= trade["stop_loss"]
-        target_1_hit = high >= trade["target_1"]
-        target_2_hit = high >= trade["target_2"]
-    else:
-        stop_hit = high >= trade["stop_loss"]
-        target_1_hit = low <= trade["target_1"]
-        target_2_hit = low <= trade["target_2"]
-
-    # Conservative assumption when stop and target happen inside the same candle.
-    if stop_hit:
-        trade["status"] = "closed"
-        trade["stop_loss_hit"] = True
-        trade["closed_at"] = utc_now_iso()
-        trade["result_r"] = 0.25 if trade.get("target_1_hit") else -1.0
-        return "STOP_LOSS"
-
-    if target_2_hit:
-        trade["target_1_hit"] = True
-        trade["target_2_hit"] = True
-        trade["status"] = "closed"
-        trade["closed_at"] = utc_now_iso()
-        trade["result_r"] = 2.25
-        return "TARGET_2"
-
-    if target_1_hit and not trade.get("target_1_hit"):
-        trade["target_1_hit"] = True
-        return "TARGET_1"
-
-    return None
+def candles_to_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Convert an OHLCV DataFrame to plain dictionaries for trade evaluation."""
+    return [
+        {
+            "timestamp": int(row["timestamp"]),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+        }
+        for _, row in frame.iterrows()
+    ]
 
 
 def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list[dict[str, Any]]) -> None:
@@ -455,13 +443,13 @@ def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list
     if frame.empty:
         return
 
-    latest_candle = frame.iloc[-1]
+    candles = candles_to_records(frame)
     changed = False
     for trade in trades:
         if trade.get("symbol") != symbol or trade.get("status") != "open":
             continue
 
-        event = update_trade_with_candle(trade, latest_candle)
+        event = evaluate_trade_candles(trade, candles, MAIN_TIMEFRAME)
         if event is None:
             continue
 
@@ -531,16 +519,38 @@ def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, An
 
     if not recent_signals:
         lines.append("\nNessun segnale generato nelle ultime 24 ore.")
-        return "\n".join(lines)
+    else:
+        lines.append("\nPer coppia:")
+        for symbol, count in sorted(per_symbol.items()):
+            lines.append(f"- {symbol}: {count}")
 
-    lines.append("\nPer coppia:")
-    for symbol, count in sorted(per_symbol.items()):
-        lines.append(f"- {symbol}: {count}")
+        lines.append("\nUltimi segnali:")
+        for signal in recent_signals[-10:]:
+            icon = "🟢" if signal.get("direction") == "LONG" else "🔴"
+            lines.append(f"- {icon} {signal.get('direction')} {signal.get('symbol')} @ {format_price(signal.get('entry', 0))}")
 
-    lines.append("\nUltimi segnali:")
-    for signal in recent_signals[-10:]:
-        icon = "🟢" if signal.get("direction") == "LONG" else "🔴"
-        lines.append(f"- {icon} {signal.get('direction')} {signal.get('symbol')} @ {float(signal.get('entry', 0)):.2f}")
+    lines.append("\nDebug trade controllati:")
+    for trade in trades[-10:]:
+        decisive_ohlc = trade.get("decisive_candle_ohlc") or {}
+        decisive_text = "n/a"
+        if decisive_ohlc:
+            decisive_text = (
+                f"O:{format_price(decisive_ohlc.get('open', 0))} "
+                f"H:{format_price(decisive_ohlc.get('high', 0))} "
+                f"L:{format_price(decisive_ohlc.get('low', 0))} "
+                f"C:{format_price(decisive_ohlc.get('close', 0))}"
+            )
+
+        result = trade.get("result") or ("OPEN" if trade.get("status") == "open" else "UNKNOWN")
+        lines.extend(
+            [
+                f"- {trade.get('symbol')} {trade.get('direction')} | risultato: {result}",
+                f"  Entry {format_price(trade.get('entry', 0))} | SL {format_price(trade.get('stop_loss', 0))} | T1 {format_price(trade.get('target_1', 0))} | T2 {format_price(trade.get('target_2', 0))}",
+                f"  Segnale: {trade.get('opened_at')} | Exchange: {trade.get('exchange', 'Kraken')} | TF: {trade.get('timeframe', MAIN_TIMEFRAME)}",
+                f"  Candele analizzate: {trade.get('analyzed_candles', 0)} | Min: {format_price(trade.get('min_after_entry') or 0)} | Max: {format_price(trade.get('max_after_entry') or 0)}",
+                f"  Candela decisiva: {trade.get('decisive_candle_timestamp') or 'n/a'} | OHLC: {decisive_text}",
+            ]
+        )
 
     return "\n".join(lines)
 
@@ -597,6 +607,16 @@ def process_symbol(
 
     signal = calculate_signal(symbol, add_indicators(main_frame), add_indicators(trend_frame))
     if signal is None:
+        return
+
+    if signal["direction"] == "LONG" and signal["stop_loss"] >= signal["entry"]:
+        logger.warning("Invalid LONG signal for %s: stop loss is not below entry", symbol)
+        return
+    if signal["direction"] == "SHORT" and signal["stop_loss"] <= signal["entry"]:
+        logger.warning("Invalid SHORT signal for %s: stop loss is not above entry", symbol)
+        return
+    if format_price(signal["entry"]) == format_price(signal["stop_loss"]):
+        logger.warning("Invalid signal for %s: formatted entry and stop loss are equal", symbol)
         return
 
     state_key = f"{symbol}:{signal['direction']}"

@@ -448,6 +448,21 @@ Il report viene inviato una sola volta al giorno: lo stato dell'ultimo invio vie
 
 Nota Railway: questa è una prima versione senza database. I file JSON locali possono essere persi o resettati quando il servizio viene ricreato, redeployato o spostato su un nuovo container. Per uno storico affidabile nel lungo periodo sarà meglio usare in futuro PostgreSQL, Redis o uno storage esterno.
 
+## Precisione prezzi e controllo Stop/Target
+
+I messaggi Telegram e i report usano una formattazione centralizzata dei prezzi con almeno 3 decimali, così valori come `Entry: 1.204` e `Stop Loss: 1.198` non vengono più appiattiti a `1.20`.
+
+Il tracking teorico dei trade usa esclusivamente candele OHLC chiuse:
+
+- LONG Stop Loss: raggiunto solo se `low <= stop_loss`;
+- LONG Target: raggiunto solo se `high >= target`;
+- SHORT Stop Loss: raggiunto solo se `high >= stop_loss`;
+- SHORT Target: raggiunto solo se `low <= target`.
+
+Il controllo parte dalla prima candela successiva all'orario di invio del segnale. Se un segnale arriva alle 03:46 su timeframe 15m, la verifica inizia dalla candela delle 04:00, non dalla candela già aperta alle 03:45.
+
+Se nella stessa candela vengono raggiunti sia Stop Loss sia Target, il trade viene marcato come `AMBIGUO` e non viene forzato automaticamente a SL o TP.
+
 ## Backtest su TradingView
 
 Il file `tradingview_strategy.pine` contiene una strategia Pine Script v6 che replica solo le regole BUY/LONG del worker Python per fare backtest su TradingView.
