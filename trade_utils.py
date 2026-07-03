@@ -88,7 +88,7 @@ def _store_decisive_candle(trade: dict[str, Any], candle: dict[str, Any]) -> Non
     }
 
 
-def evaluate_trade_candles(trade: dict[str, Any], candles: Iterable[dict[str, Any]], timeframe: str) -> str | None:
+def evaluate_trade_candles(trade: dict[str, Any], candles: Iterable[dict[str, Any]], timeframe: str, same_candle_priority: str = "SL") -> str | None:
     """Evaluate an open theoretical trade using OHLC candles only.
 
     The function only considers candles that open after the signal was sent,
@@ -133,11 +133,29 @@ def evaluate_trade_candles(trade: dict[str, Any], candles: Iterable[dict[str, An
             target_2_hit = low <= float(trade["target_2"])
 
         if stop_hit and (target_1_hit or target_2_hit):
-            trade["status"] = "ambiguous"
-            trade["result"] = "AMBIGUO"
+            priority = same_candle_priority.upper().strip()
+            if priority == "TP":
+                if target_2_hit:
+                    trade["target_1_hit"] = True
+                    trade["target_2_hit"] = True
+                    trade["status"] = "closed"
+                    trade["result"] = "TP2"
+                    trade["closed_at"] = datetime.now(timezone.utc).isoformat()
+                    trade["result_r"] = 2.25
+                    _store_decisive_candle(trade, candle)
+                    return "TARGET_2"
+                trade["target_1_hit"] = True
+                trade["result"] = "TP1"
+                _store_decisive_candle(trade, candle)
+                event = "TARGET_1"
+                continue
+            trade["status"] = "closed"
+            trade["stop_loss_hit"] = True
+            trade["result"] = "SL"
             trade["closed_at"] = datetime.now(timezone.utc).isoformat()
+            trade["result_r"] = 0.25 if trade.get("target_1_hit") else -1.0
             _store_decisive_candle(trade, candle)
-            return "AMBIGUOUS"
+            return "STOP_LOSS"
 
         if stop_hit:
             trade["status"] = "closed"
@@ -165,3 +183,124 @@ def evaluate_trade_candles(trade: dict[str, Any], candles: Iterable[dict[str, An
             event = "TARGET_1"
 
     return event
+
+
+def calculate_trade_metrics(
+    direction: str,
+    entry: float,
+    stop_loss: float,
+    target_1: float,
+    target_2: float,
+    capital: float,
+    buy_fee_percent: float,
+    sell_fee_percent: float,
+    spread_percent: float,
+    slippage_percent: float,
+) -> dict[str, float]:
+    """Estimate real trade economics including fees, spread, and slippage."""
+    buy_fee_rate = buy_fee_percent / 100
+    sell_fee_rate = sell_fee_percent / 100
+    half_spread_rate = spread_percent / 100 / 2
+    slippage_rate = slippage_percent / 100
+
+    def long_pnl(exit_price: float) -> dict[str, float]:
+        entry_effective = entry * (1 + half_spread_rate + slippage_rate)
+        exit_effective = exit_price * (1 - half_spread_rate - slippage_rate)
+        quantity = capital / (entry_effective * (1 + buy_fee_rate))
+        gross_cost = quantity * entry_effective
+        buy_fee = gross_cost * buy_fee_rate
+        gross_exit = quantity * exit_effective
+        sell_fee = gross_exit * sell_fee_rate
+        net_pnl = gross_exit - sell_fee - gross_cost - buy_fee
+        return {
+            "net_pnl": net_pnl,
+            "gross_pnl": gross_exit - gross_cost,
+            "buy_fee": buy_fee,
+            "sell_fee": sell_fee,
+            "spread_cost": abs(quantity * entry * half_spread_rate) + abs(quantity * exit_price * half_spread_rate),
+            "slippage_cost": abs(quantity * entry * slippage_rate) + abs(quantity * exit_price * slippage_rate),
+        }
+
+    def short_pnl(exit_price: float) -> dict[str, float]:
+        entry_effective = entry * (1 - half_spread_rate - slippage_rate)
+        exit_effective = exit_price * (1 + half_spread_rate + slippage_rate)
+        gross_pnl = capital * ((entry_effective - exit_effective) / entry_effective)
+        buy_fee = capital * buy_fee_rate
+        sell_fee = capital * sell_fee_rate
+        spread_cost = capital * (spread_percent / 100)
+        slippage_cost = capital * (slippage_percent / 100) * 2
+        net_pnl = gross_pnl - buy_fee - sell_fee
+        return {
+            "net_pnl": net_pnl,
+            "gross_pnl": gross_pnl,
+            "buy_fee": buy_fee,
+            "sell_fee": sell_fee,
+            "spread_cost": spread_cost,
+            "slippage_cost": slippage_cost,
+        }
+
+    pnl_func = long_pnl if direction.upper() == "LONG" else short_pnl
+    stop = pnl_func(stop_loss)
+    t1 = pnl_func(target_1)
+    t2 = pnl_func(target_2)
+    theoretical_risk = abs(entry - stop_loss)
+    theoretical_profit_1 = abs(target_1 - entry)
+    theoretical_profit_2 = abs(target_2 - entry)
+    loss_abs = abs(stop["net_pnl"])
+    net_rr_1 = t1["net_pnl"] / loss_abs if loss_abs else 0.0
+    net_rr_2 = t2["net_pnl"] / loss_abs if loss_abs else 0.0
+
+    return {
+        "capital_at_entry": capital,
+        "theoretical_risk": theoretical_risk,
+        "theoretical_profit_target_1": theoretical_profit_1,
+        "theoretical_profit_target_2": theoretical_profit_2,
+        "theoretical_rr_target_1": theoretical_profit_1 / theoretical_risk if theoretical_risk else 0.0,
+        "theoretical_rr_target_2": theoretical_profit_2 / theoretical_risk if theoretical_risk else 0.0,
+        "net_profit_target_1": t1["net_pnl"],
+        "net_profit_target_2": t2["net_pnl"],
+        "net_loss_stop": stop["net_pnl"],
+        "net_rr_target_1": net_rr_1,
+        "net_rr_target_2": net_rr_2,
+        "gross_profit_target_1": t1["gross_pnl"],
+        "gross_profit_target_2": t2["gross_pnl"],
+        "gross_loss_stop": stop["gross_pnl"],
+        "estimated_buy_fee": t1["buy_fee"],
+        "estimated_sell_fee_target_1": t1["sell_fee"],
+        "estimated_sell_fee_target_2": t2["sell_fee"],
+        "estimated_sell_fee_stop": stop["sell_fee"],
+        "estimated_spread_cost_target_1": t1["spread_cost"],
+        "estimated_spread_cost_target_2": t2["spread_cost"],
+        "estimated_spread_cost_stop": stop["spread_cost"],
+        "estimated_slippage_cost_target_1": t1["slippage_cost"],
+        "estimated_slippage_cost_target_2": t2["slippage_cost"],
+        "estimated_slippage_cost_stop": stop["slippage_cost"],
+    }
+
+
+def pnl_for_outcome(trade: dict[str, Any], event: str) -> dict[str, float]:
+    """Return net/gross/cost estimates for a final trade outcome."""
+    metrics = trade.get("cost_metrics", {})
+    if event == "TARGET_2":
+        return {
+            "net_pnl": float(metrics.get("net_profit_target_2", 0)),
+            "gross_pnl": float(metrics.get("gross_profit_target_2", 0)),
+            "fees": float(metrics.get("estimated_buy_fee", 0)) + float(metrics.get("estimated_sell_fee_target_2", 0)),
+            "spread": float(metrics.get("estimated_spread_cost_target_2", 0)),
+            "slippage": float(metrics.get("estimated_slippage_cost_target_2", 0)),
+        }
+    if event == "STOP_LOSS" and trade.get("target_1_hit"):
+        return {
+            "net_pnl": 0.5 * float(metrics.get("net_profit_target_1", 0)) + 0.5 * float(metrics.get("net_loss_stop", 0)),
+            "gross_pnl": 0.5 * float(metrics.get("gross_profit_target_1", 0)) + 0.5 * float(metrics.get("gross_loss_stop", 0)),
+            "fees": float(metrics.get("estimated_buy_fee", 0)) + 0.5 * float(metrics.get("estimated_sell_fee_target_1", 0)) + 0.5 * float(metrics.get("estimated_sell_fee_stop", 0)),
+            "spread": 0.5 * float(metrics.get("estimated_spread_cost_target_1", 0)) + 0.5 * float(metrics.get("estimated_spread_cost_stop", 0)),
+            "slippage": 0.5 * float(metrics.get("estimated_slippage_cost_target_1", 0)) + 0.5 * float(metrics.get("estimated_slippage_cost_stop", 0)),
+        }
+    return {
+        "net_pnl": float(metrics.get("net_loss_stop", 0)),
+        "gross_pnl": float(metrics.get("gross_loss_stop", 0)),
+        "fees": float(metrics.get("estimated_buy_fee", 0)) + float(metrics.get("estimated_sell_fee_stop", 0)),
+        "spread": float(metrics.get("estimated_spread_cost_stop", 0)),
+        "slippage": float(metrics.get("estimated_slippage_cost_stop", 0)),
+    }

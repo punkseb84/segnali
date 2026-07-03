@@ -19,13 +19,23 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import ccxt
 import pandas as pd
+from config import (
+    BUY_FEE_PERCENT,
+    EQUITY_STATE_FILE,
+    INITIAL_CAPITAL,
+    MIN_NET_RR,
+    SAME_CANDLE_PRIORITY,
+    SELL_FEE_PERCENT,
+    SLIPPAGE_PERCENT,
+    SPREAD_PERCENT,
+)
 import requests
 from ccxt.base.errors import BadSymbol, DDoSProtection, ExchangeError, NetworkError, RateLimitExceeded
 from dotenv import load_dotenv
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
 from ta.volatility import AverageTrueRange
-from trade_utils import evaluate_trade_candles, format_price, generate_signal_id
+from trade_utils import calculate_trade_metrics, evaluate_trade_candles, format_price, generate_signal_id, pnl_for_outcome
 
 load_dotenv()
 
@@ -182,6 +192,83 @@ def load_trades() -> list[dict[str, Any]]:
 def save_trades(trades: list[dict[str, Any]]) -> None:
     """Save theoretical trade tracking state."""
     save_json_file(TRADE_STATE_FILE, trades)
+
+
+
+
+def default_equity_state() -> dict[str, Any]:
+    """Initial compound-equity state for realistic paper performance."""
+    return {
+        "initial_capital": INITIAL_CAPITAL,
+        "current_capital": INITIAL_CAPITAL,
+        "max_capital": INITIAL_CAPITAL,
+        "max_drawdown": 0.0,
+        "net_profit_total": 0.0,
+        "gross_profit_total": 0.0,
+        "fees_total": 0.0,
+        "spread_cost_total": 0.0,
+        "slippage_cost_total": 0.0,
+        "trades": 0,
+        "tp1": 0,
+        "tp2": 0,
+        "sl": 0,
+        "wins": 0,
+        "losses": 0,
+        "gross_wins": 0.0,
+        "gross_losses": 0.0,
+        "theoretical_rr_sum": 0.0,
+        "net_rr_sum": 0.0,
+    }
+
+
+def load_equity_state() -> dict[str, Any]:
+    """Load compound-equity state."""
+    data = load_json_file(EQUITY_STATE_FILE, default_equity_state())
+    state = default_equity_state()
+    if isinstance(data, dict):
+        state.update(data)
+    return state
+
+
+def save_equity_state(state: dict[str, Any]) -> None:
+    """Save compound-equity state."""
+    save_json_file(EQUITY_STATE_FILE, state)
+
+
+def update_equity_state(equity_state: dict[str, Any], trade: dict[str, Any], event: str) -> None:
+    """Update compound capital and performance stats for a final trade event."""
+    if trade.get("equity_accounted") or event == "TARGET_1":
+        return
+
+    pnl = pnl_for_outcome(trade, event)
+    net_pnl = pnl["net_pnl"]
+    current_capital = float(equity_state.get("current_capital", INITIAL_CAPITAL)) + net_pnl
+    equity_state["current_capital"] = current_capital
+    equity_state["max_capital"] = max(float(equity_state.get("max_capital", INITIAL_CAPITAL)), current_capital)
+    max_capital = float(equity_state.get("max_capital", INITIAL_CAPITAL))
+    drawdown = max_capital - current_capital
+    equity_state["max_drawdown"] = max(float(equity_state.get("max_drawdown", 0)), drawdown)
+    equity_state["net_profit_total"] = float(equity_state.get("net_profit_total", 0)) + net_pnl
+    equity_state["gross_profit_total"] = float(equity_state.get("gross_profit_total", 0)) + pnl["gross_pnl"]
+    equity_state["fees_total"] = float(equity_state.get("fees_total", 0)) + pnl["fees"]
+    equity_state["spread_cost_total"] = float(equity_state.get("spread_cost_total", 0)) + pnl["spread"]
+    equity_state["slippage_cost_total"] = float(equity_state.get("slippage_cost_total", 0)) + pnl["slippage"]
+    equity_state["trades"] = int(equity_state.get("trades", 0)) + 1
+    equity_state["tp1"] = int(equity_state.get("tp1", 0)) + (1 if trade.get("target_1_hit") else 0)
+    equity_state["tp2"] = int(equity_state.get("tp2", 0)) + (1 if event == "TARGET_2" else 0)
+    equity_state["sl"] = int(equity_state.get("sl", 0)) + (1 if event == "STOP_LOSS" else 0)
+    equity_state["wins"] = int(equity_state.get("wins", 0)) + (1 if net_pnl > 0 else 0)
+    equity_state["losses"] = int(equity_state.get("losses", 0)) + (1 if net_pnl < 0 else 0)
+    if net_pnl > 0:
+        equity_state["gross_wins"] = float(equity_state.get("gross_wins", 0)) + net_pnl
+    elif net_pnl < 0:
+        equity_state["gross_losses"] = float(equity_state.get("gross_losses", 0)) + abs(net_pnl)
+    metrics = trade.get("cost_metrics", {})
+    equity_state["theoretical_rr_sum"] = float(equity_state.get("theoretical_rr_sum", 0)) + float(metrics.get("theoretical_rr_target_1", 0))
+    equity_state["net_rr_sum"] = float(equity_state.get("net_rr_sum", 0)) + float(metrics.get("net_rr_target_1", 0))
+    trade["net_pnl"] = net_pnl
+    trade["capital_after_close"] = current_capital
+    trade["equity_accounted"] = True
 
 
 def load_report_state() -> dict[str, Any]:
@@ -366,6 +453,17 @@ def format_signal_message(signal: dict[str, Any]) -> str:
         f"Target 1: {format_price(signal['target_1'])}\n"
         f"Target 2: {format_price(signal['target_2'])}\n"
         f"Timeframe: {MAIN_TIMEFRAME}\n"
+        "\nCosti stimati:\n"
+        f"- Fee acquisto: {BUY_FEE_PERCENT:.2f}%\n"
+        f"- Fee vendita: {SELL_FEE_PERCENT:.2f}%\n"
+        f"- Spread stimato: {SPREAD_PERCENT:.2f}%\n"
+        f"- Slippage stimato: {SLIPPAGE_PERCENT:.2f}%\n"
+        "Analisi operazione:\n"
+        f"- RR teorico: {signal['cost_metrics']['theoretical_rr_target_1']:.2f}\n"
+        f"- RR netto: {signal['cost_metrics']['net_rr_target_1']:.2f}\n"
+        f"- Profitto netto stimato T1: €{format_price(signal['cost_metrics']['net_profit_target_1'])}\n"
+        f"- Perdita netta stimata SL: €{format_price(abs(signal['cost_metrics']['net_loss_stop']))}\n"
+
         f"Conferma: trend 1h {trend_text}\n"
         "Motivi:\n"
         f"- {price_reason}\n"
@@ -409,6 +507,8 @@ def create_trade(signal: dict[str, Any]) -> dict[str, Any]:
         "decisive_candle_ohlc": None,
         "last_checked_candle_timestamp": None,
         "check_from_candle_timestamp": None,
+        "cost_metrics": signal.get("cost_metrics", {}),
+        "equity_accounted": False,
     }
 
 
@@ -449,7 +549,7 @@ def candles_to_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list[dict[str, Any]]) -> None:
+def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list[dict[str, Any]], equity_state: dict[str, Any]) -> None:
     """Check open theoretical trades for one symbol against the latest candle."""
     if frame.empty:
         return
@@ -460,7 +560,7 @@ def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list
         if trade.get("symbol") != symbol or trade.get("status") != "open":
             continue
 
-        event = evaluate_trade_candles(trade, candles, MAIN_TIMEFRAME)
+        event = evaluate_trade_candles(trade, candles, MAIN_TIMEFRAME, SAME_CANDLE_PRIORITY)
         if event is None:
             continue
 
@@ -469,6 +569,10 @@ def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list
             format_trade_update_message(trade, event),
             reply_to_message_id=trade.get("telegram_message_id"),
         )
+        if event in {"TARGET_2", "STOP_LOSS"}:
+            update_equity_state(equity_state, trade, event)
+            save_equity_state(equity_state)
+
         if telegram_result:
             trade["last_update_message_id"] = telegram_result.get("message_id")
             logger.info("Trade update sent for %s %s: %s", trade["symbol"], trade["direction"], event)
@@ -499,7 +603,7 @@ def get_recent_closed_trades(trades: list[dict[str, Any]], now_utc: datetime, ho
     return recent
 
 
-def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], now_local: datetime) -> str:
+def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], equity_state: dict[str, Any], now_local: datetime) -> str:
     """Build the daily Telegram report message."""
     now_utc = now_local.astimezone(timezone.utc)
     recent_signals = get_recent_signals(history, now_utc)
@@ -512,6 +616,7 @@ def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, An
     target_2_count = sum(1 for trade in recent_closed_trades if trade.get("target_2_hit"))
     stop_count = sum(1 for trade in recent_closed_trades if trade.get("stop_loss_hit"))
     result_r = sum(float(trade.get("result_r") or 0) for trade in recent_closed_trades)
+    daily_net_profit = sum(float(trade.get("net_pnl") or 0) for trade in recent_closed_trades)
 
     per_symbol: dict[str, int] = {}
     for signal in recent_signals:
@@ -531,6 +636,21 @@ def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, An
         f"Target 2 presi: {target_2_count}",
         f"Stop Loss presi: {stop_count}",
         f"Risultato teorico: {result_r:.2f}R",
+        f"Capitale iniziale: €{format_price(equity_state.get('initial_capital', INITIAL_CAPITAL))}",
+        f"Capitale attuale: €{format_price(equity_state.get('current_capital', INITIAL_CAPITAL))}",
+        f"Guadagno netto giornata: €{format_price(daily_net_profit)}",
+        f"Guadagno totale netto: €{format_price(equity_state.get('net_profit_total', 0))}",
+        f"Numero operazioni: {equity_state.get('trades', 0)}",
+        f"TP1: {equity_state.get('tp1', 0)}",
+        f"TP2: {equity_state.get('tp2', 0)}",
+        f"SL: {equity_state.get('sl', 0)}",
+        f"Commissioni pagate: €{format_price(equity_state.get('fees_total', 0))}",
+        f"Spread stimato: €{format_price(equity_state.get('spread_cost_total', 0))}",
+        f"Slippage stimato: €{format_price(equity_state.get('slippage_cost_total', 0))}",
+        f"Profit Factor: {(float(equity_state.get('gross_wins', 0)) / float(equity_state.get('gross_losses', 1) or 1)):.2f}",
+        f"Win Rate: {((int(equity_state.get('wins', 0)) / int(equity_state.get('trades', 1) or 1)) * 100):.2f}%",
+        f"RR medio netto: {(float(equity_state.get('net_rr_sum', 0)) / int(equity_state.get('trades', 1) or 1)):.2f}",
+        f"Drawdown massimo: €{format_price(equity_state.get('max_drawdown', 0))}",
     ]
 
     if not recent_signals:
@@ -588,7 +708,7 @@ def should_send_daily_report(now_local: datetime, report_state: dict[str, Any]) 
     return True
 
 
-def maybe_send_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], report_state: dict[str, Any]) -> None:
+def maybe_send_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], equity_state: dict[str, Any], report_state: dict[str, Any]) -> None:
     """Send the daily Telegram report once per local day when due."""
     timezone_info = get_report_timezone()
     now_local = utc_now().astimezone(timezone_info)
@@ -597,7 +717,7 @@ def maybe_send_daily_report(history: list[dict[str, Any]], trades: list[dict[str
     if not should_send_daily_report(now_local, report_state):
         return
 
-    message = format_daily_report(history, trades, now_local)
+    message = format_daily_report(history, trades, equity_state, now_local)
     if send_telegram_message(message):
         report_state["last_report_date"] = now_local.date().isoformat()
         report_state["last_report_sent_at"] = utc_now_iso()
@@ -611,6 +731,7 @@ def process_symbol(
     signal_state: dict[str, str],
     signal_history: list[dict[str, Any]],
     trades: list[dict[str, Any]],
+    equity_state: dict[str, Any],
 ) -> None:
     """Fetch data, update trades, evaluate strategy, and send a Telegram signal if needed."""
     logger.info("Checking %s", symbol)
@@ -619,7 +740,7 @@ def process_symbol(
     if main_frame is None or trend_frame is None:
         return
 
-    update_open_trades_for_symbol(symbol, main_frame, trades)
+    update_open_trades_for_symbol(symbol, main_frame, trades, equity_state)
 
     signal = calculate_signal(symbol, add_indicators(main_frame), add_indicators(trend_frame))
     if signal is None:
@@ -633,6 +754,29 @@ def process_symbol(
         return
     if format_price(signal["entry"]) == format_price(signal["stop_loss"]):
         logger.warning("Invalid signal for %s: formatted entry and stop loss are equal", symbol)
+        return
+
+    cost_metrics = calculate_trade_metrics(
+        signal["direction"],
+        signal["entry"],
+        signal["stop_loss"],
+        signal["target_1"],
+        signal["target_2"],
+        float(equity_state.get("current_capital", INITIAL_CAPITAL)),
+        BUY_FEE_PERCENT,
+        SELL_FEE_PERCENT,
+        SPREAD_PERCENT,
+        SLIPPAGE_PERCENT,
+    )
+    signal["cost_metrics"] = cost_metrics
+    if cost_metrics["net_rr_target_1"] < MIN_NET_RR:
+        logger.info(
+            "Skipping %s %s signal: net RR %.2f is below MIN_NET_RR %.2f",
+            signal["direction"],
+            symbol,
+            cost_metrics["net_rr_target_1"],
+            MIN_NET_RR,
+        )
         return
 
     signal_sent_at = utc_now()
@@ -663,6 +807,7 @@ def run_worker() -> None:
     signal_history = load_signal_history()
     trades = load_trades()
     report_state = load_report_state()
+    equity_state = load_equity_state()
 
     try:
         exchange.load_markets()
@@ -676,12 +821,12 @@ def run_worker() -> None:
         logger.info("Starting scan cycle")
         for symbol in SYMBOLS:
             try:
-                process_symbol(exchange, symbol, signal_state, signal_history, trades)
+                process_symbol(exchange, symbol, signal_state, signal_history, trades, equity_state)
             except Exception as exc:  # Defensive guard so one symbol never kills the worker.
                 logger.exception("Unexpected error while processing %s: %s", symbol, exc)
 
         try:
-            maybe_send_daily_report(signal_history, trades, report_state)
+            maybe_send_daily_report(signal_history, trades, equity_state, report_state)
         except Exception as exc:  # Defensive guard so reporting never kills the worker.
             logger.exception("Unexpected error while sending daily report: %s", exc)
 

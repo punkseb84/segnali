@@ -448,6 +448,30 @@ Il report viene inviato una sola volta al giorno: lo stato dell'ultimo invio vie
 
 Nota Railway: questa è una prima versione senza database. I file JSON locali possono essere persi o resettati quando il servizio viene ricreato, redeployato o spostato su un nuovo container. Per uno storico affidabile nel lungo periodo sarà meglio usare in futuro PostgreSQL, Redis o uno storage esterno.
 
+## Simulazione capitale e costi operativi
+
+Il bot mantiene invariata la logica di generazione dei segnali, ma applica un filtro qualità dopo la generazione: il segnale viene inviato solo se il rapporto rischio/rendimento netto stimato su Target 1 è almeno `MIN_NET_RR`.
+
+Configurazione default:
+
+```env
+INITIAL_CAPITAL=100.00
+BUY_FEE_PERCENT=0.10
+SELL_FEE_PERCENT=0.10
+SPREAD_PERCENT=0.00
+SLIPPAGE_PERCENT=0.00
+MIN_NET_RR=1.30
+SAME_CANDLE_PRIORITY=SL
+EQUITY_STATE_FILE=equity_state.json
+```
+
+La simulazione usa il 100% del capitale disponibile per ogni operazione teorica, senza leva. Alla chiusura di un trade aggiorna il capitale composto e salva lo stato in `equity_state.json`. Le metriche includono capitale iniziale, capitale attuale, massimo capitale, drawdown massimo, profitto netto, profitto lordo, commissioni, spread, slippage, win rate, profit factor e RR medio netto.
+
+`SAME_CANDLE_PRIORITY` decide cosa fare se nella stessa candela vengono toccati sia Stop Loss sia Target:
+
+- `SL` considera prima lo Stop Loss;
+- `TP` considera prima il Target.
+
 ## ID segnale e collegamento esiti
 
 Ogni segnale Telegram include un identificativo leggibile nel formato:

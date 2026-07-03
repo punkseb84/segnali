@@ -2,7 +2,7 @@ import unittest
 
 from datetime import datetime, timezone
 
-from trade_utils import evaluate_trade_candles, format_price, generate_signal_id
+from trade_utils import calculate_trade_metrics, evaluate_trade_candles, format_price, generate_signal_id
 
 
 def make_trade(**overrides):
@@ -59,7 +59,7 @@ class TradeEvaluationTest(unittest.TestCase):
         self.assertTrue(trade["target_1_hit"])
         self.assertEqual(trade["result"], "TP1")
 
-    def test_ambiguous_candle_is_not_forced_to_stop_or_target(self):
+    def test_same_candle_priority_sl_defaults_to_stop_loss(self):
         trade = make_trade()
         candles = [
             {"timestamp": 1782878400000, "open": 74.2, "high": 75.100, "low": 73.430, "close": 74.8},
@@ -67,11 +67,24 @@ class TradeEvaluationTest(unittest.TestCase):
 
         event = evaluate_trade_candles(trade, candles, "15m")
 
-        self.assertEqual(event, "AMBIGUOUS")
-        self.assertEqual(trade["status"], "ambiguous")
-        self.assertEqual(trade["result"], "AMBIGUO")
-        self.assertFalse(trade["stop_loss_hit"])
+        self.assertEqual(event, "STOP_LOSS")
+        self.assertEqual(trade["status"], "closed")
+        self.assertEqual(trade["result"], "SL")
+        self.assertTrue(trade["stop_loss_hit"])
         self.assertFalse(trade["target_1_hit"])
+
+    def test_same_candle_priority_tp_can_prefer_target(self):
+        trade = make_trade()
+        candles = [
+            {"timestamp": 1782878400000, "open": 74.2, "high": 75.100, "low": 73.430, "close": 74.8},
+        ]
+
+        event = evaluate_trade_candles(trade, candles, "15m", same_candle_priority="TP")
+
+        self.assertEqual(event, "TARGET_1")
+        self.assertEqual(trade["result"], "TP1")
+        self.assertTrue(trade["target_1_hit"])
+        self.assertFalse(trade["stop_loss_hit"])
 
     def test_price_format_keeps_at_least_three_decimals(self):
         self.assertEqual(format_price(1.204), "1.204")
@@ -96,6 +109,25 @@ class TradeEvaluationTest(unittest.TestCase):
         signal_id = generate_signal_id("UNI/USD", "LONG", datetime(2026, 6, 29, 15, 15, tzinfo=timezone.utc))
 
         self.assertEqual(signal_id, "SIG-20260629-1515-UNIUSD-LONG")
+
+    def test_trade_metrics_include_costs_and_net_rr(self):
+        metrics = calculate_trade_metrics(
+            direction="LONG",
+            entry=100.0,
+            stop_loss=98.0,
+            target_1=104.0,
+            target_2=108.0,
+            capital=100.0,
+            buy_fee_percent=0.10,
+            sell_fee_percent=0.10,
+            spread_percent=0.05,
+            slippage_percent=0.0,
+        )
+
+        self.assertGreater(metrics["net_profit_target_1"], 0)
+        self.assertLess(metrics["net_loss_stop"], 0)
+        self.assertGreater(metrics["net_rr_target_1"], 1.0)
+        self.assertGreater(metrics["estimated_buy_fee"], 0)
 
 
 if __name__ == "__main__":
