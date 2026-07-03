@@ -448,6 +448,22 @@ Il report viene inviato una sola volta al giorno: lo stato dell'ultimo invio vie
 
 Nota Railway: questa è una prima versione senza database. I file JSON locali possono essere persi o resettati quando il servizio viene ricreato, redeployato o spostato su un nuovo container. Per uno storico affidabile nel lungo periodo sarà meglio usare in futuro PostgreSQL, Redis o uno storage esterno.
 
+## ID segnale e collegamento esiti
+
+Ogni segnale Telegram include un identificativo leggibile nel formato:
+
+```text
+SIG-YYYYMMDD-HHMM-SYMBOL-DIRECTION
+```
+
+Esempio:
+
+```text
+SIG-20260629-1515-UNIUSD-LONG
+```
+
+Lo stesso `signal_id` viene salvato nello storico segnali e nel trade teorico, insieme al `telegram_message_id` restituito da Telegram quando disponibile. Quando un trade raggiunge TP1, TP2, Stop Loss o viene marcato come ambiguo, il bot invia l'aggiornamento come risposta al messaggio originale usando `reply_to_message_id`, così il risultato resta collegato visivamente al segnale iniziale.
+
 ## Precisione prezzi e controllo Stop/Target
 
 I messaggi Telegram e i report usano una formattazione centralizzata dei prezzi con almeno 3 decimali, così valori come `Entry: 1.204` e `Stop Loss: 1.198` non vengono più appiattiti a `1.20`.

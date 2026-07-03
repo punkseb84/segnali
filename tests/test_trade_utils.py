@@ -1,6 +1,8 @@
 import unittest
 
-from trade_utils import evaluate_trade_candles, format_price
+from datetime import datetime, timezone
+
+from trade_utils import evaluate_trade_candles, format_price, generate_signal_id
 
 
 def make_trade(**overrides):
@@ -89,6 +91,11 @@ class TradeEvaluationTest(unittest.TestCase):
         self.assertIsNone(event)
         self.assertEqual(trade["status"], "open")
         self.assertEqual(trade["analyzed_candles"], 1)
+
+    def test_signal_id_format_is_readable_and_searchable(self):
+        signal_id = generate_signal_id("UNI/USD", "LONG", datetime(2026, 6, 29, 15, 15, tzinfo=timezone.utc))
+
+        self.assertEqual(signal_id, "SIG-20260629-1515-UNIUSD-LONG")
 
 
 if __name__ == "__main__":

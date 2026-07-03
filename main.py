@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
 from ta.volatility import AverageTrueRange
-from trade_utils import evaluate_trade_candles, format_price
+from trade_utils import evaluate_trade_candles, format_price, generate_signal_id
 
 load_dotenv()
 
@@ -155,7 +155,9 @@ def append_signal_history(history: list[dict[str, Any]], signal: dict[str, Any])
     """Append a sent signal to local history for reporting."""
     history.append(
         {
-            "sent_at": utc_now_iso(),
+            "signal_id": signal["signal_id"],
+            "telegram_message_id": signal.get("telegram_message_id"),
+            "sent_at": signal["sent_at"],
             "symbol": signal["symbol"],
             "direction": signal["direction"],
             "entry": signal["entry"],
@@ -212,14 +214,16 @@ def get_report_timezone() -> ZoneInfo:
         return ZoneInfo("Europe/Rome")
 
 
-def send_telegram_message(message: str) -> bool:
+def send_telegram_message(message: str, reply_to_message_id: int | None = None) -> dict[str, Any] | None:
     """Send a Telegram message using the Bot API."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning("Telegram variables are missing; message not sent")
-        return False
+        return None
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    if reply_to_message_id is not None:
+        payload["reply_to_message_id"] = reply_to_message_id
 
     try:
         response = requests.post(url, json=payload, timeout=20)
@@ -229,14 +233,16 @@ def send_telegram_message(message: str) -> bool:
                 response.status_code,
                 response.text[:500],
             )
-            return False
+            return None
 
-        logger.info("Telegram message sent")
-        return True
+        data = response.json()
+        message_id = data.get("result", {}).get("message_id")
+        logger.info("Telegram message sent%s", f" with message_id={message_id}" if message_id else "")
+        return {"message_id": int(message_id)} if message_id is not None else {"message_id": None}
     except requests.RequestException as exc:
         safe_error = redact_secret(str(exc), TELEGRAM_BOT_TOKEN)
         logger.error("Telegram send failed before response: %s", safe_error)
-        return False
+        return None
 
 
 def fetch_ohlcv(exchange: ccxt.kraken, symbol: str, timeframe: str) -> pd.DataFrame | None:
@@ -354,6 +360,7 @@ def format_signal_message(signal: dict[str, Any]) -> str:
 
     return (
         f"{icon} {signal['direction']} {signal['symbol']}\n"
+        f"ID Segnale: {signal['signal_id']}\n\n"
         f"Entry: {format_price(signal['entry'])}\n"
         f"Stop Loss: {format_price(signal['stop_loss'])}\n"
         f"Target 1: {format_price(signal['target_1'])}\n"
@@ -372,7 +379,10 @@ def format_signal_message(signal: dict[str, Any]) -> str:
 def create_trade(signal: dict[str, Any]) -> dict[str, Any]:
     """Create a theoretical trade from a sent signal."""
     return {
-        "id": f"{signal['symbol']}:{signal['direction']}:{signal['candle_timestamp']}",
+        "id": signal["signal_id"],
+        "signal_id": signal["signal_id"],
+        "telegram_message_id": signal.get("telegram_message_id"),
+        "signal_time": signal["sent_at"],
         "symbol": signal["symbol"],
         "direction": signal["direction"],
         "entry": signal["entry"],
@@ -406,8 +416,8 @@ def format_trade_update_message(trade: dict[str, Any], event: str) -> str:
     """Format Telegram update when a theoretical trade reaches target/stop."""
     icon = "✅" if event.startswith("TARGET") else "🛑"
     status_text = {
-        "TARGET_1": "Target 1 raggiunto",
-        "TARGET_2": "Target 2 raggiunto",
+        "TARGET_1": "TP1 raggiunto",
+        "TARGET_2": "TP2 raggiunto",
         "STOP_LOSS": "Stop Loss raggiunto",
         "AMBIGUOUS": "Candela ambigua: Stop Loss e Target raggiunti nella stessa candela",
     }[event]
@@ -415,6 +425,7 @@ def format_trade_update_message(trade: dict[str, Any], event: str) -> str:
     result_line = f"\nRisultato teorico: {result:.2f}R" if isinstance(result, (int, float)) else ""
     return (
         f"{icon} {status_text}\n"
+        f"ID Segnale: {trade.get('signal_id', trade.get('id'))}\n\n"
         f"{trade['direction']} {trade['symbol']}\n"
         f"Entry: {format_price(trade['entry'])}\n"
         f"Stop Loss: {format_price(trade['stop_loss'])}\n"
@@ -454,7 +465,12 @@ def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list
             continue
 
         changed = True
-        if send_telegram_message(format_trade_update_message(trade, event)):
+        telegram_result = send_telegram_message(
+            format_trade_update_message(trade, event),
+            reply_to_message_id=trade.get("telegram_message_id"),
+        )
+        if telegram_result:
+            trade["last_update_message_id"] = telegram_result.get("message_id")
             logger.info("Trade update sent for %s %s: %s", trade["symbol"], trade["direction"], event)
 
     if changed:
@@ -527,7 +543,7 @@ def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, An
         lines.append("\nUltimi segnali:")
         for signal in recent_signals[-10:]:
             icon = "🟢" if signal.get("direction") == "LONG" else "🔴"
-            lines.append(f"- {icon} {signal.get('direction')} {signal.get('symbol')} @ {format_price(signal.get('entry', 0))}")
+            lines.append(f"- {signal.get('signal_id', 'NO-ID')} | {icon} {signal.get('direction')} {signal.get('symbol')} @ {format_price(signal.get('entry', 0))}")
 
     lines.append("\nDebug trade controllati:")
     for trade in trades[-10:]:
@@ -544,7 +560,7 @@ def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, An
         result = trade.get("result") or ("OPEN" if trade.get("status") == "open" else "UNKNOWN")
         lines.extend(
             [
-                f"- {trade.get('symbol')} {trade.get('direction')} | risultato: {result}",
+                f"- {trade.get('signal_id', trade.get('id', 'NO-ID'))} | {trade.get('symbol')} {trade.get('direction')} | risultato: {result}",
                 f"  Entry {format_price(trade.get('entry', 0))} | SL {format_price(trade.get('stop_loss', 0))} | T1 {format_price(trade.get('target_1', 0))} | T2 {format_price(trade.get('target_2', 0))}",
                 f"  Segnale: {trade.get('opened_at')} | Exchange: {trade.get('exchange', 'Kraken')} | TF: {trade.get('timeframe', MAIN_TIMEFRAME)}",
                 f"  Candele analizzate: {trade.get('analyzed_candles', 0)} | Min: {format_price(trade.get('min_after_entry') or 0)} | Max: {format_price(trade.get('max_after_entry') or 0)}",
@@ -619,18 +635,24 @@ def process_symbol(
         logger.warning("Invalid signal for %s: formatted entry and stop loss are equal", symbol)
         return
 
+    signal_sent_at = utc_now()
+    signal["sent_at"] = signal_sent_at.isoformat()
+    signal["signal_id"] = generate_signal_id(symbol, signal["direction"], signal_sent_at)
+
     state_key = f"{symbol}:{signal['direction']}"
     if signal_state.get(state_key) == signal["candle_timestamp"]:
         logger.info("Duplicate %s signal for %s on candle %s; skipping", signal["direction"], symbol, signal["candle_timestamp"])
         return
 
-    if send_telegram_message(format_signal_message(signal)):
+    telegram_result = send_telegram_message(format_signal_message(signal))
+    if telegram_result:
+        signal["telegram_message_id"] = telegram_result.get("message_id")
         signal_state[state_key] = signal["candle_timestamp"]
         save_signal_state(signal_state)
         append_signal_history(signal_history, signal)
         trades.append(create_trade(signal))
         save_trades(trades)
-        logger.info("Stored %s signal state/history/trade for %s", signal["direction"], symbol)
+        logger.info("Stored %s signal state/history/trade for %s with signal_id=%s", signal["direction"], symbol, signal["signal_id"])
 
 
 def run_worker() -> None:

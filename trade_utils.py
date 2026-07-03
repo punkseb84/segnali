@@ -18,6 +18,16 @@ def format_price(price: float | int | str, min_decimals: int = 3) -> str:
     return f"{value:.{decimals}f}"
 
 
+def generate_signal_id(symbol: str, direction: str, when: datetime) -> str:
+    """Create a readable unique signal id: SIG-YYYYMMDD-HHMM-SYMBOL-DIRECTION."""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    when = when.astimezone(timezone.utc)
+    clean_symbol = "".join(character for character in symbol.upper() if character.isalnum())
+    clean_direction = direction.upper().strip()
+    return f"SIG-{when:%Y%m%d}-{when:%H%M}-{clean_symbol}-{clean_direction}"
+
+
 def parse_iso_datetime(value: str) -> datetime | None:
     """Parse an ISO datetime and return an aware UTC datetime when possible."""
     try:
