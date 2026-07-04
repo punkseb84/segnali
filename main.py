@@ -24,6 +24,7 @@ from config import (
     EQUITY_STATE_FILE,
     INITIAL_CAPITAL,
     MIN_NET_RR,
+    NET_RR_MODE,
     SAME_CANDLE_PRIORITY,
     SELL_FEE_PERCENT,
     SLIPPAGE_PERCENT,
@@ -460,7 +461,9 @@ def format_signal_message(signal: dict[str, Any]) -> str:
         f"- Slippage stimato: {SLIPPAGE_PERCENT:.2f}%\n"
         "Analisi operazione:\n"
         f"- RR teorico: {signal['cost_metrics']['theoretical_rr_target_1']:.2f}\n"
-        f"- RR netto: {signal['cost_metrics']['net_rr_target_1']:.2f}\n"
+        f"- RR netto T1: {signal['cost_metrics']['net_rr_target_1']:.2f}\n"
+        f"- RR netto piano 50% T1 / 50% T2: {signal['cost_metrics']['net_rr_blended']:.2f}\n"
+        f"- Filtro RR usato: {NET_RR_MODE} >= {MIN_NET_RR:.2f}\n"
         f"- Profitto netto stimato T1: €{format_price(signal['cost_metrics']['net_profit_target_1'])}\n"
         f"- Perdita netta stimata SL: €{format_price(abs(signal['cost_metrics']['net_loss_stop']))}\n"
 
@@ -769,12 +772,20 @@ def process_symbol(
         SLIPPAGE_PERCENT,
     )
     signal["cost_metrics"] = cost_metrics
-    if cost_metrics["net_rr_target_1"] < MIN_NET_RR:
+    rr_metric_by_mode = {
+        "T1": "net_rr_target_1",
+        "T2": "net_rr_target_2",
+        "BLENDED": "net_rr_blended",
+    }
+    rr_metric_key = rr_metric_by_mode.get(NET_RR_MODE, "net_rr_blended")
+    rr_for_filter = cost_metrics[rr_metric_key]
+    if rr_for_filter < MIN_NET_RR:
         logger.info(
-            "Skipping %s %s signal: net RR %.2f is below MIN_NET_RR %.2f",
+            "Skipping %s %s signal: %s %.2f is below MIN_NET_RR %.2f",
             signal["direction"],
             symbol,
-            cost_metrics["net_rr_target_1"],
+            rr_metric_key,
+            rr_for_filter,
             MIN_NET_RR,
         )
         return

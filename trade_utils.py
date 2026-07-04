@@ -247,8 +247,11 @@ def calculate_trade_metrics(
     theoretical_profit_1 = abs(target_1 - entry)
     theoretical_profit_2 = abs(target_2 - entry)
     loss_abs = abs(stop["net_pnl"])
+    blended_net_profit = 0.5 * t1["net_pnl"] + 0.5 * t2["net_pnl"]
+    blended_gross_profit = 0.5 * t1["gross_pnl"] + 0.5 * t2["gross_pnl"]
     net_rr_1 = t1["net_pnl"] / loss_abs if loss_abs else 0.0
     net_rr_2 = t2["net_pnl"] / loss_abs if loss_abs else 0.0
+    net_rr_blended = blended_net_profit / loss_abs if loss_abs else 0.0
 
     return {
         "capital_at_entry": capital,
@@ -259,11 +262,14 @@ def calculate_trade_metrics(
         "theoretical_rr_target_2": theoretical_profit_2 / theoretical_risk if theoretical_risk else 0.0,
         "net_profit_target_1": t1["net_pnl"],
         "net_profit_target_2": t2["net_pnl"],
+        "net_profit_blended": blended_net_profit,
         "net_loss_stop": stop["net_pnl"],
         "net_rr_target_1": net_rr_1,
         "net_rr_target_2": net_rr_2,
+        "net_rr_blended": net_rr_blended,
         "gross_profit_target_1": t1["gross_pnl"],
         "gross_profit_target_2": t2["gross_pnl"],
+        "gross_profit_blended": blended_gross_profit,
         "gross_loss_stop": stop["gross_pnl"],
         "estimated_buy_fee": t1["buy_fee"],
         "estimated_sell_fee_target_1": t1["sell_fee"],

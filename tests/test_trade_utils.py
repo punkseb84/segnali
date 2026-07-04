@@ -127,6 +127,7 @@ class TradeEvaluationTest(unittest.TestCase):
         self.assertGreater(metrics["net_profit_target_1"], 0)
         self.assertLess(metrics["net_loss_stop"], 0)
         self.assertGreater(metrics["net_rr_target_1"], 1.0)
+        self.assertGreater(metrics["net_rr_blended"], metrics["net_rr_target_1"])
         self.assertGreater(metrics["estimated_buy_fee"], 0)
 
 

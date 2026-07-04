@@ -450,7 +450,7 @@ Nota Railway: questa è una prima versione senza database. I file JSON locali po
 
 ## Simulazione capitale e costi operativi
 
-Il bot mantiene invariata la logica di generazione dei segnali, ma applica un filtro qualità dopo la generazione: il segnale viene inviato solo se il rapporto rischio/rendimento netto stimato su Target 1 è almeno `MIN_NET_RR`.
+Il bot mantiene invariata la logica di generazione dei segnali, ma applica un filtro qualità dopo la generazione. Per non bloccare troppi segnali, il filtro usa di default il RR netto del piano completo 50% su Target 1 e 50% su Target 2 (`NET_RR_MODE=BLENDED`) invece del solo Target 1.
 
 Configurazione default:
 
@@ -460,10 +460,18 @@ BUY_FEE_PERCENT=0.10
 SELL_FEE_PERCENT=0.10
 SPREAD_PERCENT=0.00
 SLIPPAGE_PERCENT=0.00
-MIN_NET_RR=1.30
+MIN_NET_RR=1.05
+NET_RR_MODE=BLENDED
 SAME_CANDLE_PRIORITY=SL
 EQUITY_STATE_FILE=equity_state.json
 ```
+
+
+`NET_RR_MODE` può essere:
+
+- `BLENDED`: usa il piano 50% Target 1 e 50% Target 2, consigliato;
+- `T1`: usa solo Target 1, molto più restrittivo;
+- `T2`: usa solo Target 2, più permissivo ma meno prudente.
 
 La simulazione usa il 100% del capitale disponibile per ogni operazione teorica, senza leva. Alla chiusura di un trade aggiorna il capitale composto e salva lo stato in `equity_state.json`. Le metriche includono capitale iniziale, capitale attuale, massimo capitale, drawdown massimo, profitto netto, profitto lordo, commissioni, spread, slippage, win rate, profit factor e RR medio netto.
 
