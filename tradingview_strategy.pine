@@ -1,0 +1,61 @@
+//@version=6
+strategy(
+     title="Kraken Crypto Signal Bot - LONG Backtest",
+     shorttitle="Kraken Signal LONG",
+     overlay=true,
+     initial_capital=10000,
+     currency=currency.USD,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     pyramiding=0,
+     commission_type=strategy.commission.percent,
+     commission_value=0.1,
+     process_orders_on_close=true)
+
+// This Pine strategy mirrors only the LONG/BUY rules from the Python worker.
+// Use it on a 15-minute chart for the closest match with the bot.
+
+trendTimeframe = input.timeframe("60", "Trend confirmation timeframe")
+showSignals = input.bool(true, "Show signal labels")
+showRiskLevels = input.bool(true, "Show stop/target levels")
+
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+rsi14 = ta.rsi(close, 14)
+[macdLine, signalLine, macdHist] = ta.macd(close, 12, 26, 9)
+atr14 = ta.atr(14)
+volumeAvg20 = ta.sma(volume, 20)
+
+trendClose = request.security(syminfo.tickerid, trendTimeframe, close, barmerge.gaps_off, barmerge.lookahead_off)
+trendEma200 = request.security(syminfo.tickerid, trendTimeframe, ta.ema(close, 200), barmerge.gaps_off, barmerge.lookahead_off)
+
+bullishTrend1h = trendClose > trendEma200
+bullishEmaStack = ema20 > ema50 and ema50 > ema200
+rsiLongZone = rsi14 >= 50 and rsi14 <= 70
+macdCrossUp = macdHist[1] < 0 and macdHist > 0
+volumeConfirmed = volume > volumeAvg20
+
+longSignal = bullishTrend1h and bullishEmaStack and rsiLongZone and macdCrossUp and volumeConfirmed
+
+longRisk = 1.5 * atr14
+longStop = close - longRisk
+longTarget1 = close + 1.5 * longRisk
+longTarget2 = close + 3.0 * longRisk
+
+if longSignal and strategy.position_size <= 0
+    strategy.entry("LONG", strategy.long)
+    strategy.exit("LONG T1", from_entry="LONG", limit=longTarget1, stop=longStop, qty_percent=50)
+    strategy.exit("LONG T2", from_entry="LONG", limit=longTarget2, stop=longStop, qty_percent=50)
+
+plot(ema20, title="EMA 20", color=color.new(color.teal, 0))
+plot(ema50, title="EMA 50", color=color.new(color.orange, 0))
+plot(ema200, title="EMA 200", color=color.new(color.purple, 0))
+
+plotshape(showSignals and longSignal, title="BUY/LONG signal", style=shape.labelup, text="BUY", color=color.new(color.green, 0), textcolor=color.white, location=location.belowbar, size=size.small)
+
+plot(showRiskLevels and longSignal ? longStop : na, title="LONG Stop Loss", color=color.new(color.red, 0), style=plot.style_linebr)
+plot(showRiskLevels and longSignal ? longTarget1 : na, title="LONG Target 1", color=color.new(color.green, 0), style=plot.style_linebr)
+plot(showRiskLevels and longSignal ? longTarget2 : na, title="LONG Target 2", color=color.new(color.green, 40), style=plot.style_linebr)
+
+alertcondition(longSignal, title="BUY/LONG alert", message="BUY/LONG {{ticker}} | Entry: {{close}} | Timeframe: 15m | Confirm: 1h bullish trend")
