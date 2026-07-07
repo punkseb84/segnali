@@ -448,6 +448,25 @@ Il report viene inviato una sola volta al giorno: lo stato dell'ultimo invio vie
 
 Nota Railway: questa è una prima versione senza database. I file JSON locali possono essere persi o resettati quando il servizio viene ricreato, redeployato o spostato su un nuovo container. Per uno storico affidabile nel lungo periodo sarà meglio usare in futuro PostgreSQL, Redis o uno storage esterno.
 
+## Score qualità e audit segnali
+
+Ogni segnale generato viene salvato in `signal_audit.json`, anche quando viene scartato. L'audit include ID segnale, timestamp, exchange, pair, direzione, entry, stop, target, rischio percentuale, RR teorico, prezzo/trend BTC, EMA 15m/1h/4h, RSI, MACD histogram, volume, volume medio, volume ratio, ATR, ADX, distanza dalle EMA, supporto/resistenza, ora, giorno, motivi, score e stato `OPEN` o `REJECTED`.
+
+Configurazione:
+
+```env
+SIGNAL_AUDIT_FILE=signal_audit.json
+MIN_SIGNAL_SCORE=85
+ENABLE_REJECTED_SIGNALS_LOG=true
+USE_BTC_TREND_FILTER=true
+AMBIGUOUS_CANDLE_POLICY=STOP_FIRST
+MIN_DECIMALS=3
+```
+
+Il bot invia Telegram solo se `quality_score >= MIN_SIGNAL_SCORE`. I segnali sotto soglia vengono salvati come `REJECTED` con i motivi dello scarto, ma non vengono inviati.
+
+Il report giornaliero include anche segnali generati, inviati, scartati e suggerimenti automatici basati sullo storico, senza modificare automaticamente i filtri.
+
 ## Simulazione capitale e costi operativi
 
 Il bot mantiene invariata la logica di generazione dei segnali, ma applica un filtro qualità dopo la generazione. Per non bloccare troppi segnali, il filtro usa di default il RR netto del piano completo 50% su Target 1 e 50% su Target 2 (`NET_RR_MODE=BLENDED`) invece del solo Target 1.

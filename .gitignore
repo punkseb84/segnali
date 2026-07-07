@@ -8,3 +8,4 @@ signal_history.json
 trades.json
 report_state.json
 equity_state.json
+signal_audit.json

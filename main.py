@@ -20,12 +20,18 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import ccxt
 import pandas as pd
 from config import (
+    AMBIGUOUS_CANDLE_POLICY,
     BUY_FEE_PERCENT,
+    DAILY_REPORT_HOUR,
     EQUITY_STATE_FILE,
     INITIAL_CAPITAL,
+    ENABLE_REJECTED_SIGNALS_LOG,
+    MIN_DECIMALS,
     MIN_NET_RR,
+    MIN_SIGNAL_SCORE,
     NET_RR_MODE,
     SAME_CANDLE_PRIORITY,
+    USE_BTC_TREND_FILTER,
     SELL_FEE_PERCENT,
     SLIPPAGE_PERCENT,
     SPREAD_PERCENT,
@@ -34,11 +40,25 @@ import requests
 from ccxt.base.errors import BadSymbol, DDoSProtection, ExchangeError, NetworkError, RateLimitExceeded
 from dotenv import load_dotenv
 from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator, MACD
+from ta.trend import ADXIndicator, EMAIndicator, MACD
 from ta.volatility import AverageTrueRange
-from trade_utils import calculate_trade_metrics, evaluate_trade_candles, format_price, generate_signal_id, pnl_for_outcome
+from trade_utils import calculate_trade_metrics, evaluate_trade_candles, format_price as base_format_price, generate_signal_id, pnl_for_outcome
 
 load_dotenv()
+
+
+def format_price(price: float | int | str, min_decimals: int = MIN_DECIMALS) -> str:
+    """Format displayed prices using the configured minimum precision."""
+    return base_format_price(price, min_decimals)
+
+
+def get_same_candle_priority() -> str:
+    """Map the public ambiguous-candle policy to trade evaluation priority."""
+    if AMBIGUOUS_CANDLE_POLICY in {"STOP_FIRST", "SL", "STOP"}:
+        return "SL"
+    if AMBIGUOUS_CANDLE_POLICY in {"TAKE_PROFIT_FIRST", "TP_FIRST", "TP", "TARGET_FIRST"}:
+        return "TP"
+    return SAME_CANDLE_PRIORITY
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -73,7 +93,8 @@ SIGNAL_STATE_FILE = Path(os.getenv("SIGNAL_STATE_FILE", "last_signals.json"))
 SIGNAL_HISTORY_FILE = Path(os.getenv("SIGNAL_HISTORY_FILE", "signal_history.json"))
 TRADE_STATE_FILE = Path(os.getenv("TRADE_STATE_FILE", "trades.json"))
 REPORT_STATE_FILE = Path(os.getenv("REPORT_STATE_FILE", "report_state.json"))
-DAILY_REPORT_TIME = os.getenv("DAILY_REPORT_TIME", "09:00").strip()
+SIGNAL_AUDIT_FILE = Path(os.getenv("SIGNAL_AUDIT_FILE", "signal_audit.json"))
+DAILY_REPORT_TIME = os.getenv("DAILY_REPORT_TIME", f"{int(DAILY_REPORT_HOUR):02d}:00").strip()
 REPORT_TIMEZONE = os.getenv("REPORT_TIMEZONE", "Europe/Rome").strip()
 
 logging.basicConfig(
@@ -182,6 +203,25 @@ def append_signal_history(history: list[dict[str, Any]], signal: dict[str, Any])
         }
     )
     save_signal_history(history)
+
+
+
+
+def load_signal_audit() -> list[dict[str, Any]]:
+    """Load all generated signal audit records, including rejected ones."""
+    data = load_json_file(SIGNAL_AUDIT_FILE, [])
+    return data if isinstance(data, list) else []
+
+
+def save_signal_audit(records: list[dict[str, Any]]) -> None:
+    """Save generated signal audit records."""
+    save_json_file(SIGNAL_AUDIT_FILE, records)
+
+
+def append_signal_audit(records: list[dict[str, Any]], record: dict[str, Any]) -> None:
+    """Append one generated signal audit record to persistent JSON state."""
+    records.append(record)
+    save_signal_audit(records)
 
 
 def load_trades() -> list[dict[str, Any]]:
@@ -374,13 +414,15 @@ def add_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
     atr = AverageTrueRange(data["high"], data["low"], data["close"], window=14)
     data["atr14"] = atr.average_true_range()
+    adx = ADXIndicator(data["high"], data["low"], data["close"], window=14)
+    data["adx14"] = adx.adx()
     data["volume_avg20"] = data["volume"].rolling(window=20).mean()
     return data
 
 
 def enough_indicator_data(main_data: pd.DataFrame, trend_data: pd.DataFrame) -> bool:
     """Ensure latest rows contain all indicators needed by the strategy."""
-    required_main = ["ema20", "ema50", "ema200", "rsi14", "macd_hist", "atr14", "volume_avg20"]
+    required_main = ["ema20", "ema50", "ema200", "rsi14", "macd_hist", "atr14", "adx14", "volume_avg20"]
     required_trend = ["ema200"]
     return not main_data[required_main].tail(2).isna().any().any() and not trend_data[required_trend].tail(1).isna().any().any()
 
@@ -477,6 +519,272 @@ def format_signal_message(signal: dict[str, Any]) -> str:
     )
 
 
+
+def percent_distance(price: float, reference: float) -> float:
+    """Return percentage distance from a reference price."""
+    if reference == 0:
+        return 0.0
+    return (price - reference) / reference * 100
+
+
+def nearest_support_resistance(data: pd.DataFrame, lookback: int = 20) -> tuple[float, float]:
+    """Return nearest support/resistance from recent closed candles."""
+    recent = data.tail(lookback)
+    support = float(recent["low"].min())
+    resistance = float(recent["high"].max())
+    return support, resistance
+
+
+def btc_trend_is_favorable(direction: str, btc_data: pd.DataFrame | None) -> tuple[bool, float | None, str]:
+    """Return BTC trend confirmation for the signal direction."""
+    if btc_data is None or btc_data.empty or "ema200" not in btc_data:
+        return True, None, "BTC trend non disponibile"
+    latest = btc_data.iloc[-1]
+    btc_price = float(latest["close"])
+    bullish = latest["close"] > latest["ema200"]
+    favorable = bullish if direction == "LONG" else not bullish
+    return favorable, btc_price, "rialzista" if bullish else "ribassista"
+
+
+def calculate_signal_quality(
+    signal: dict[str, Any],
+    main_data: pd.DataFrame,
+    trend_1h_data: pd.DataFrame,
+    trend_4h_data: pd.DataFrame | None,
+    btc_data: pd.DataFrame | None,
+) -> dict[str, Any]:
+    """Calculate a 0-100 quality score and detailed audit data for a generated signal."""
+    latest = main_data.iloc[-1]
+    previous = main_data.iloc[-2]
+    trend_1h = trend_1h_data.iloc[-1]
+    trend_4h = trend_4h_data.iloc[-1] if trend_4h_data is not None and not trend_4h_data.empty else None
+    direction = signal["direction"]
+    is_long = direction == "LONG"
+    entry = float(signal["entry"])
+    support, resistance = nearest_support_resistance(main_data)
+    volume_ratio = float(latest["volume"] / latest["volume_avg20"]) if latest["volume_avg20"] else 0.0
+    btc_favorable, btc_price, btc_trend = btc_trend_is_favorable(direction, btc_data)
+
+    score = 0
+    reasons: list[str] = []
+    reject_reasons: list[str] = []
+
+    trend_1h_ok = trend_1h["close"] > trend_1h["ema200"] if is_long else trend_1h["close"] < trend_1h["ema200"]
+    if trend_1h_ok:
+        score += 20
+        reasons.append("Trend 1h favorevole")
+
+    trend_4h_ok = True
+    if trend_4h is not None:
+        trend_4h_ok = trend_4h["close"] > trend_4h["ema200"] if is_long else trend_4h["close"] < trend_4h["ema200"]
+        if trend_4h_ok:
+            score += 20
+            reasons.append("Trend 4h favorevole")
+        else:
+            reject_reasons.append("Trend 4h non favorevole")
+
+    price_vs_ema200_ok = latest["close"] > latest["ema200"] if is_long else latest["close"] < latest["ema200"]
+    if price_vs_ema200_ok:
+        score += 10
+        reasons.append("Prezzo coerente con EMA200")
+
+    ema_stack_ok = latest["ema20"] > latest["ema50"] > latest["ema200"] if is_long else latest["ema20"] < latest["ema50"] < latest["ema200"]
+    if ema_stack_ok:
+        score += 10
+        reasons.append("Stack EMA favorevole")
+
+    rsi = float(latest["rsi14"])
+    if (is_long and 50 <= rsi <= 65) or ((not is_long) and 35 <= rsi <= 50):
+        score += 10
+        reasons.append("RSI in zona sana")
+    if rsi > 70:
+        score -= 15
+        reject_reasons.append("RSI troppo alto")
+
+    macd_improving = latest["macd_hist"] > previous["macd_hist"] if is_long else latest["macd_hist"] < previous["macd_hist"]
+    macd_ok = latest["macd_hist"] > 0 if is_long else latest["macd_hist"] < 0
+    if macd_ok or macd_improving:
+        score += 10
+        reasons.append("MACD favorevole o in miglioramento")
+
+    if volume_ratio >= 1.0:
+        score += 10
+        reasons.append("Volume relativo >= 1")
+
+    distance_to_resistance = percent_distance(resistance, entry)
+    distance_to_support = percent_distance(entry, support)
+    target_1_distance = abs(float(signal["target_1"]) - entry) / entry * 100 if entry else 0
+    if is_long and distance_to_resistance >= target_1_distance:
+        score += 10
+        reasons.append("Resistenza abbastanza distante per Target 1")
+    elif (not is_long) and distance_to_support >= target_1_distance:
+        score += 10
+        reasons.append("Supporto abbastanza distante per Target 1")
+
+    if USE_BTC_TREND_FILTER and btc_favorable:
+        score += 10
+        reasons.append("Trend BTC favorevole")
+    elif USE_BTC_TREND_FILTER:
+        reject_reasons.append("Trend BTC non favorevole")
+
+    distance_ema20 = abs(percent_distance(entry, float(latest["ema20"])))
+    if distance_ema20 > 2.0:
+        score -= 10
+        reject_reasons.append("Prezzo troppo distante da EMA20")
+
+    resistance_too_close = is_long and distance_to_resistance < target_1_distance
+    support_too_close = (not is_long) and distance_to_support < target_1_distance
+    if resistance_too_close or support_too_close:
+        score -= 20
+        reject_reasons.append("Supporto/resistenza troppo vicino a Target 1")
+
+    atr_percent = float(latest["atr14"] / latest["close"] * 100) if latest["close"] else 0.0
+    if atr_percent > 5.0:
+        score -= 10
+        reject_reasons.append("ATR troppo alto")
+
+    score = max(0, min(100, int(score)))
+    signal_time = parse_iso_datetime(signal.get("sent_at", utc_now_iso())) or utc_now()
+    return {
+        "score": score,
+        "reasons": reasons,
+        "reject_reasons": reject_reasons,
+        "btc_price": btc_price,
+        "btc_trend": btc_trend,
+        "trend_4h_ok": trend_4h_ok,
+        "ema20": float(latest["ema20"]),
+        "ema50": float(latest["ema50"]),
+        "ema200": float(latest["ema200"]),
+        "ema20_1h": float(trend_1h["ema20"]),
+        "ema50_1h": float(trend_1h["ema50"]),
+        "ema200_1h": float(trend_1h["ema200"]),
+        "ema20_4h": float(trend_4h["ema20"]) if trend_4h is not None else None,
+        "ema50_4h": float(trend_4h["ema50"]) if trend_4h is not None else None,
+        "ema200_4h": float(trend_4h["ema200"]) if trend_4h is not None else None,
+        "rsi": rsi,
+        "macd_hist": float(latest["macd_hist"]),
+        "volume": float(latest["volume"]),
+        "volume_avg20": float(latest["volume_avg20"]),
+        "volume_ratio": volume_ratio,
+        "atr": float(latest["atr14"]),
+        "adx": float(latest["adx14"]),
+        "distance_ema20_pct": distance_ema20,
+        "distance_ema50_pct": abs(percent_distance(entry, float(latest["ema50"]))),
+        "distance_ema200_pct": abs(percent_distance(entry, float(latest["ema200"]))),
+        "support": support,
+        "resistance": resistance,
+        "distance_support_pct": distance_to_support,
+        "distance_resistance_pct": distance_to_resistance,
+        "hour_of_day": signal_time.hour,
+        "day_of_week": signal_time.strftime("%A"),
+    }
+
+
+def build_signal_audit_record(signal: dict[str, Any], quality: dict[str, Any], status: str) -> dict[str, Any]:
+    """Build a complete persistent audit record for generated signals."""
+    risk_pct = abs(float(signal["entry"]) - float(signal["stop_loss"])) / float(signal["entry"]) * 100
+    return {
+        "signal_id": signal["signal_id"],
+        "sent_at": signal["sent_at"],
+        "exchange": "Kraken",
+        "pair": signal["symbol"],
+        "direction": signal["direction"],
+        "timeframe": MAIN_TIMEFRAME,
+        "entry": signal["entry"],
+        "stop_loss": signal["stop_loss"],
+        "target_1": signal["target_1"],
+        "target_2": signal["target_2"],
+        "risk_percent": risk_pct,
+        "theoretical_rr": signal["cost_metrics"].get("theoretical_rr_target_1"),
+        "btc_price": quality["btc_price"],
+        "btc_trend": quality["btc_trend"],
+        "ema20": quality["ema20"],
+        "ema50": quality["ema50"],
+        "ema200": quality["ema200"],
+        "ema20_1h": quality["ema20_1h"],
+        "ema50_1h": quality["ema50_1h"],
+        "ema200_1h": quality["ema200_1h"],
+        "ema20_4h": quality["ema20_4h"],
+        "ema50_4h": quality["ema50_4h"],
+        "ema200_4h": quality["ema200_4h"],
+        "rsi": quality["rsi"],
+        "macd_hist": quality["macd_hist"],
+        "volume": quality["volume"],
+        "volume_avg20": quality["volume_avg20"],
+        "volume_ratio": quality["volume_ratio"],
+        "atr": quality["atr"],
+        "adx": quality["adx"],
+        "distance_ema20_pct": quality["distance_ema20_pct"],
+        "distance_ema50_pct": quality["distance_ema50_pct"],
+        "distance_ema200_pct": quality["distance_ema200_pct"],
+        "support": quality["support"],
+        "resistance": quality["resistance"],
+        "distance_support_pct": quality["distance_support_pct"],
+        "distance_resistance_pct": quality["distance_resistance_pct"],
+        "hour_of_day": quality["hour_of_day"],
+        "day_of_week": quality["day_of_week"],
+        "signal_reason": quality["reasons"],
+        "reject_reasons": quality["reject_reasons"],
+        "quality_score": quality["score"],
+        "status": status,
+    }
+
+
+
+
+def profit_factor_for(items: list[dict[str, Any]]) -> float:
+    """Calculate profit factor from trade net PnL values."""
+    wins = sum(float(item.get("net_pnl") or 0) for item in items if float(item.get("net_pnl") or 0) > 0)
+    losses = abs(sum(float(item.get("net_pnl") or 0) for item in items if float(item.get("net_pnl") or 0) < 0))
+    return wins / losses if losses else (wins if wins else 0.0)
+
+
+def grouped_profit_factors(trades: list[dict[str, Any]], key: str) -> list[tuple[str, float]]:
+    """Return profit factors grouped by symbol or hour."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for trade in trades:
+        if trade.get("status") != "closed":
+            continue
+        if key == "hour":
+            parsed = parse_iso_datetime(str(trade.get("opened_at", "")))
+            group_key = f"{parsed.hour:02d}:00" if parsed else "unknown"
+        else:
+            group_key = str(trade.get(key, "unknown"))
+        groups.setdefault(group_key, []).append(trade)
+    return sorted(((group_key, profit_factor_for(items)) for group_key, items in groups.items()), key=lambda item: item[1], reverse=True)
+
+
+def analyze_trade_history(trades: list[dict[str, Any]], audit_records: list[dict[str, Any]]) -> list[str]:
+    """Find simple recurring negative patterns without changing filters automatically."""
+    suggestions: list[str] = []
+    closed = [trade for trade in trades if trade.get("status") == "closed"]
+    if not closed:
+        return ["Storico chiuso ancora insufficiente per suggerire filtri automatici."]
+
+    stops_by_symbol: dict[str, int] = {}
+    totals_by_symbol: dict[str, int] = {}
+    for trade in closed:
+        symbol = str(trade.get("symbol"))
+        totals_by_symbol[symbol] = totals_by_symbol.get(symbol, 0) + 1
+        if trade.get("stop_loss_hit"):
+            stops_by_symbol[symbol] = stops_by_symbol.get(symbol, 0) + 1
+
+    for symbol, total in totals_by_symbol.items():
+        stops = stops_by_symbol.get(symbol, 0)
+        if total >= 3 and stops / total >= 0.6:
+            suggestions.append(f"{symbol} ha Stop Loss frequenti ({stops}/{total}); valutare filtro coppia o score più alto.")
+
+    high_rsi = [record for record in audit_records if float(record.get("rsi") or 0) > 68]
+    if len(high_rsi) >= 3:
+        suggestions.append("Diversi segnali hanno RSI > 68; valutare penalità RSI più severa.")
+
+    far_ema20 = [record for record in audit_records if float(record.get("distance_ema20_pct") or 0) > 2]
+    if len(far_ema20) >= 3:
+        suggestions.append("Molti segnali sono lontani da EMA20; valutare filtro distanza EMA20.")
+
+    return suggestions or ["Nessuna condizione negativa ricorrente evidente nello storico attuale."]
+
+
 def create_trade(signal: dict[str, Any]) -> dict[str, Any]:
     """Create a theoretical trade from a sent signal."""
     return {
@@ -563,7 +871,7 @@ def update_open_trades_for_symbol(symbol: str, frame: pd.DataFrame, trades: list
         if trade.get("symbol") != symbol or trade.get("status") != "open":
             continue
 
-        event = evaluate_trade_candles(trade, candles, MAIN_TIMEFRAME, SAME_CANDLE_PRIORITY)
+        event = evaluate_trade_candles(trade, candles, MAIN_TIMEFRAME, get_same_candle_priority())
         if event is None:
             continue
 
@@ -606,10 +914,11 @@ def get_recent_closed_trades(trades: list[dict[str, Any]], now_utc: datetime, ho
     return recent
 
 
-def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], equity_state: dict[str, Any], now_local: datetime) -> str:
+def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], signal_audit: list[dict[str, Any]], equity_state: dict[str, Any], now_local: datetime) -> str:
     """Build the daily Telegram report message."""
     now_utc = now_local.astimezone(timezone.utc)
     recent_signals = get_recent_signals(history, now_utc)
+    recent_audit = get_recent_signals(signal_audit, now_utc)
     recent_closed_trades = get_recent_closed_trades(trades, now_utc)
     open_trades = [trade for trade in trades if trade.get("status") == "open"]
 
@@ -630,7 +939,9 @@ def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, An
         "📊 Report giornaliero segnali",
         f"Ora report: {now_local.strftime('%Y-%m-%d %H:%M %Z')}",
         "Periodo: ultime 24 ore",
-        f"Segnali: {len(recent_signals)}",
+        f"Segnali generati: {len(recent_audit)}",
+        f"Segnali inviati: {sum(1 for item in recent_audit if item.get('status') == 'OPEN')}",
+        f"Segnali scartati: {sum(1 for item in recent_audit if item.get('status') == 'REJECTED')}",
         f"LONG: {long_count}",
         f"SHORT: {short_count}",
         f"Trade aperti: {len(open_trades)}",
@@ -667,6 +978,27 @@ def format_daily_report(history: list[dict[str, Any]], trades: list[dict[str, An
         for signal in recent_signals[-10:]:
             icon = "🟢" if signal.get("direction") == "LONG" else "🔴"
             lines.append(f"- {signal.get('signal_id', 'NO-ID')} | {icon} {signal.get('direction')} {signal.get('symbol')} @ {format_price(signal.get('entry', 0))}")
+
+    pair_pf = grouped_profit_factors(trades, "symbol")
+    hour_pf = grouped_profit_factors(trades, "hour")
+    if pair_pf:
+        lines.append("\nMigliori coppie per Profit Factor:")
+        for symbol, pf in pair_pf[:3]:
+            lines.append(f"- {symbol}: {pf:.2f}")
+        lines.append("Peggiori coppie per Profit Factor:")
+        for symbol, pf in pair_pf[-3:]:
+            lines.append(f"- {symbol}: {pf:.2f}")
+    if hour_pf:
+        lines.append("\nMigliori fasce orarie:")
+        for hour, pf in hour_pf[:3]:
+            lines.append(f"- {hour}: {pf:.2f}")
+        lines.append("Peggiori fasce orarie:")
+        for hour, pf in hour_pf[-3:]:
+            lines.append(f"- {hour}: {pf:.2f}")
+
+    lines.append("\nAnalisi automatica storico:")
+    for suggestion in analyze_trade_history(trades, signal_audit):
+        lines.append(f"- {suggestion}")
 
     lines.append("\nDebug trade controllati:")
     for trade in trades[-10:]:
@@ -711,7 +1043,7 @@ def should_send_daily_report(now_local: datetime, report_state: dict[str, Any]) 
     return True
 
 
-def maybe_send_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], equity_state: dict[str, Any], report_state: dict[str, Any]) -> None:
+def maybe_send_daily_report(history: list[dict[str, Any]], trades: list[dict[str, Any]], signal_audit: list[dict[str, Any]], equity_state: dict[str, Any], report_state: dict[str, Any]) -> None:
     """Send the daily Telegram report once per local day when due."""
     timezone_info = get_report_timezone()
     now_local = utc_now().astimezone(timezone_info)
@@ -720,7 +1052,7 @@ def maybe_send_daily_report(history: list[dict[str, Any]], trades: list[dict[str
     if not should_send_daily_report(now_local, report_state):
         return
 
-    message = format_daily_report(history, trades, equity_state, now_local)
+    message = format_daily_report(history, trades, signal_audit, equity_state, now_local)
     if send_telegram_message(message):
         report_state["last_report_date"] = now_local.date().isoformat()
         report_state["last_report_sent_at"] = utc_now_iso()
@@ -734,18 +1066,26 @@ def process_symbol(
     signal_state: dict[str, str],
     signal_history: list[dict[str, Any]],
     trades: list[dict[str, Any]],
+    signal_audit: list[dict[str, Any]],
     equity_state: dict[str, Any],
 ) -> None:
     """Fetch data, update trades, evaluate strategy, and send a Telegram signal if needed."""
     logger.info("Checking %s", symbol)
     main_frame = fetch_ohlcv(exchange, symbol, MAIN_TIMEFRAME)
     trend_frame = fetch_ohlcv(exchange, symbol, TREND_TIMEFRAME)
+    trend_4h_frame = fetch_ohlcv(exchange, symbol, "4h")
+    btc_frame = fetch_ohlcv(exchange, "BTC/USD", TREND_TIMEFRAME) if USE_BTC_TREND_FILTER else None
     if main_frame is None or trend_frame is None:
         return
 
     update_open_trades_for_symbol(symbol, main_frame, trades, equity_state)
 
-    signal = calculate_signal(symbol, add_indicators(main_frame), add_indicators(trend_frame))
+    main_data = add_indicators(main_frame)
+    trend_data = add_indicators(trend_frame)
+    trend_4h_data = add_indicators(trend_4h_frame) if trend_4h_frame is not None else None
+    btc_data = add_indicators(btc_frame) if btc_frame is not None else None
+
+    signal = calculate_signal(symbol, main_data, trend_data)
     if signal is None:
         return
 
@@ -772,6 +1112,12 @@ def process_symbol(
         SLIPPAGE_PERCENT,
     )
     signal["cost_metrics"] = cost_metrics
+    signal_sent_at = utc_now()
+    signal["sent_at"] = signal_sent_at.isoformat()
+    signal["signal_id"] = generate_signal_id(symbol, signal["direction"], signal_sent_at)
+    quality = calculate_signal_quality(signal, main_data, trend_data, trend_4h_data, btc_data)
+    signal["quality_score"] = quality["score"]
+
     rr_metric_by_mode = {
         "T1": "net_rr_target_1",
         "T2": "net_rr_target_2",
@@ -780,19 +1126,33 @@ def process_symbol(
     rr_metric_key = rr_metric_by_mode.get(NET_RR_MODE, "net_rr_blended")
     rr_for_filter = cost_metrics[rr_metric_key]
     if rr_for_filter < MIN_NET_RR:
+        quality["reject_reasons"].append(f"{rr_metric_key} {rr_for_filter:.2f} sotto MIN_NET_RR {MIN_NET_RR:.2f}")
+        if ENABLE_REJECTED_SIGNALS_LOG:
+            append_signal_audit(signal_audit, build_signal_audit_record(signal, quality, "REJECTED"))
         logger.info(
-            "Skipping %s %s signal: %s %.2f is below MIN_NET_RR %.2f",
+            "Skipping %s %s signal_id=%s: %s %.2f is below MIN_NET_RR %.2f",
             signal["direction"],
             symbol,
+            signal["signal_id"],
             rr_metric_key,
             rr_for_filter,
             MIN_NET_RR,
         )
         return
 
-    signal_sent_at = utc_now()
-    signal["sent_at"] = signal_sent_at.isoformat()
-    signal["signal_id"] = generate_signal_id(symbol, signal["direction"], signal_sent_at)
+    if quality["score"] < MIN_SIGNAL_SCORE:
+        if ENABLE_REJECTED_SIGNALS_LOG:
+            append_signal_audit(signal_audit, build_signal_audit_record(signal, quality, "REJECTED"))
+        logger.info(
+            "Rejecting %s %s signal_id=%s: score %s below MIN_SIGNAL_SCORE %.0f reasons=%s",
+            signal["direction"],
+            symbol,
+            signal["signal_id"],
+            quality["score"],
+            MIN_SIGNAL_SCORE,
+            quality["reject_reasons"],
+        )
+        return
 
     state_key = f"{symbol}:{signal['direction']}"
     if signal_state.get(state_key) == signal["candle_timestamp"]:
@@ -805,6 +1165,7 @@ def process_symbol(
         signal_state[state_key] = signal["candle_timestamp"]
         save_signal_state(signal_state)
         append_signal_history(signal_history, signal)
+        append_signal_audit(signal_audit, build_signal_audit_record(signal, quality, "OPEN"))
         trades.append(create_trade(signal))
         save_trades(trades)
         logger.info("Stored %s signal state/history/trade for %s with signal_id=%s", signal["direction"], symbol, signal["signal_id"])
@@ -817,6 +1178,7 @@ def run_worker() -> None:
     signal_state = load_signal_state()
     signal_history = load_signal_history()
     trades = load_trades()
+    signal_audit = load_signal_audit()
     report_state = load_report_state()
     equity_state = load_equity_state()
 
@@ -832,12 +1194,12 @@ def run_worker() -> None:
         logger.info("Starting scan cycle")
         for symbol in SYMBOLS:
             try:
-                process_symbol(exchange, symbol, signal_state, signal_history, trades, equity_state)
+                process_symbol(exchange, symbol, signal_state, signal_history, trades, signal_audit, equity_state)
             except Exception as exc:  # Defensive guard so one symbol never kills the worker.
                 logger.exception("Unexpected error while processing %s: %s", symbol, exc)
 
         try:
-            maybe_send_daily_report(signal_history, trades, equity_state, report_state)
+            maybe_send_daily_report(signal_history, trades, signal_audit, equity_state, report_state)
         except Exception as exc:  # Defensive guard so reporting never kills the worker.
             logger.exception("Unexpected error while sending daily report: %s", exc)
 

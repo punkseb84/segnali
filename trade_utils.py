@@ -133,6 +133,7 @@ def evaluate_trade_candles(trade: dict[str, Any], candles: Iterable[dict[str, An
             target_2_hit = low <= float(trade["target_2"])
 
         if stop_hit and (target_1_hit or target_2_hit):
+            trade["ambiguous_candle"] = True
             priority = same_candle_priority.upper().strip()
             if priority == "TP":
                 if target_2_hit:
