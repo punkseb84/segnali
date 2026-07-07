@@ -1,40 +1,89 @@
-"""Runtime configuration for the crypto signal worker."""
-
+"""Configuration for the Railway crypto signal worker."""
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
-def get_float_env(name: str, default: float) -> float:
-    """Read a float environment variable with a safe fallback."""
+def _float_env(name: str, default: float) -> float:
     try:
-        return float(os.getenv(name, str(default)))
+        return float(os.getenv(name, default))
     except (TypeError, ValueError):
         return default
 
 
-def get_bool_env(name: str, default: bool) -> bool:
-    """Read a boolean environment variable with a safe fallback."""
-    value = os.getenv(name)
-    if value is None:
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
         return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-INITIAL_CAPITAL = get_float_env("INITIAL_CAPITAL", 100.0)
-BUY_FEE_PERCENT = get_float_env("BUY_FEE_PERCENT", 0.10)
-SELL_FEE_PERCENT = get_float_env("SELL_FEE_PERCENT", 0.10)
-SPREAD_PERCENT = get_float_env("SPREAD_PERCENT", 0.0)
-SLIPPAGE_PERCENT = get_float_env("SLIPPAGE_PERCENT", 0.0)
-MIN_NET_RR = get_float_env("MIN_NET_RR", 1.05)
-SAME_CANDLE_PRIORITY = os.getenv("SAME_CANDLE_PRIORITY", "SL").strip().upper()
-NET_RR_MODE = os.getenv("NET_RR_MODE", "BLENDED").strip().upper()
-EQUITY_STATE_FILE = Path(os.getenv("EQUITY_STATE_FILE", "equity_state.json"))
+def _list_env(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    return [item.strip().upper() for item in raw.split(",") if item.strip()]
 
-MIN_SIGNAL_SCORE = get_float_env("MIN_SIGNAL_SCORE", 85.0)
-ENABLE_REJECTED_SIGNALS_LOG = get_bool_env("ENABLE_REJECTED_SIGNALS_LOG", True)
-DAILY_REPORT_HOUR = get_float_env("DAILY_REPORT_HOUR", 9.0)
-USE_BTC_TREND_FILTER = get_bool_env("USE_BTC_TREND_FILTER", True)
-AMBIGUOUS_CANDLE_POLICY = os.getenv("AMBIGUOUS_CANDLE_POLICY", "STOP_FIRST").strip().upper()
-MIN_DECIMALS = int(get_float_env("MIN_DECIMALS", 3))
+
+TELEGRAM_BOT_TOKEN: Final[str] = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID: Final[str] = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+SUPPORTED_MODES: Final[tuple[str, ...]] = ("CONSERVATIVE", "SCALPING_FAST")
+MODE: Final[str] = os.getenv("MODE", "SCALPING_FAST").strip().upper()
+ACTIVE_MODE: Final[str] = MODE if MODE in SUPPORTED_MODES else "SCALPING_FAST"
+
+TRADE_AMOUNT_EUR: Final[float] = _float_env("TRADE_AMOUNT_EUR", 10.0)
+FEE_BUY_PERCENT: Final[float] = _float_env("FEE_BUY_PERCENT", 0.10)
+FEE_SELL_PERCENT: Final[float] = _float_env("FEE_SELL_PERCENT", 0.10)
+SLIPPAGE_PERCENT: Final[float] = _float_env("SLIPPAGE_PERCENT", 0.00)
+SPREAD_PERCENT: Final[float] = _float_env("SPREAD_PERCENT", 0.00)
+MIN_NET_RR: Final[float] = _float_env("MIN_NET_RR", 1.05)
+
+MIN_SIGNAL_SCORE_CONSERVATIVE: Final[int] = _int_env("MIN_SIGNAL_SCORE_CONSERVATIVE", 85)
+MIN_WATCHLIST_SCORE_CONSERVATIVE: Final[int] = _int_env("MIN_WATCHLIST_SCORE_CONSERVATIVE", 70)
+MIN_SIGNAL_SCORE_SCALPING: Final[int] = _int_env("MIN_SIGNAL_SCORE_SCALPING", 68)
+MIN_WATCHLIST_SCORE_SCALPING: Final[int] = _int_env("MIN_WATCHLIST_SCORE_SCALPING", 60)
+
+DAILY_REPORT_HOUR: Final[int] = _int_env("DAILY_REPORT_HOUR", 9)
+LOOP_SLEEP_SECONDS: Final[int] = _int_env("LOOP_SLEEP_SECONDS", 300)
+OHLC_LIMIT: Final[int] = _int_env("OHLC_LIMIT", 300)
+DATABASE_PATH: Final[Path] = Path(os.getenv("DATABASE_PATH", "signals.db"))
+
+PAIRS: Final[list[str]] = _list_env(
+    "PAIRS",
+    [
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+        "LINK/USD",
+        "UNI/USD",
+        "AAVE/USD",
+        "LTC/USD",
+        "BCH/USD",
+        "AVAX/USD",
+        "TAO/USD",
+        "XRP/USD",
+        "ADA/USD",
+        "DOGE/USD",
+    ],
+)
+
+TIMEFRAMES: Final[dict[str, dict[str, str]]] = {
+    "SCALPING_FAST": {"main": "5m", "confirm_1": "15m", "confirm_2": "1h"},
+    "CONSERVATIVE": {"main": "15m", "confirm_1": "1h", "confirm_2": "4h"},
+}
+
+MAX_SIGNALS_PER_DAY: Final[int] = _int_env("MAX_SIGNALS_PER_DAY", 30)
+MAX_SIGNALS_PER_PAIR_PER_DAY: Final[int] = _int_env("MAX_SIGNALS_PER_PAIR_PER_DAY", 3)
+DUPLICATE_MINUTES: Final[int] = _int_env("DUPLICATE_MINUTES", 60)
+
+KRAKEN_API_BASE: Final[str] = "https://api.kraken.com/0/public"
+EXCHANGE_NAME: Final[str] = "Kraken"
+DIRECTION: Final[str] = "LONG"

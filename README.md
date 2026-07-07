@@ -1,556 +1,246 @@
-# Kraken Crypto Signal Bot
+# Crypto Kraken Telegram Bot
 
-Worker Python pronto per Railway che monitora coppie crypto su Kraken, calcola indicatori tecnici e invia segnali automatici LONG/SHORT su Telegram.
+Bot Python pronto per Railway che analizza OHLC Kraken, genera segnali **LONG spot**, invia messaggi Telegram, monitora **Target 1 / Stop Loss**, salva tutto in SQLite e produce report giornalieri.
 
-> Questo progetto usa solo dati pubblici OHLCV di Kraken tramite `ccxt`: non servono API key dell'exchange. Non usa Binance.
-
-## Funzionalità
-
-- Worker continuo, senza web server.
-- Scan ogni 5 minuti.
-- Exchange: Kraken.
-- Timeframe principale: 15m.
-- Conferma trend: 1h.
-- Indicatori:
-  - EMA 20
-  - EMA 50
-  - EMA 200
-  - RSI 14
-  - MACD 12/26/9
-  - ATR 14
-  - Volume medio 20 periodi
-- Risk management automatico:
-  - Entry sull'ultima chiusura.
-  - Stop Loss basato su 1.5 ATR.
-  - Target 1 e Target 2 basati sul rischio.
-- Invio alert Telegram.
-- Messaggio Telegram di avvio.
-- Anti-duplicazione dei segnali tramite file JSON locale.
-- Logging leggibile per Railway.
-
-## Coppie monitorate
-
-Le coppie predefinite sono definite in `main.py`:
-
-```python
-SYMBOLS = [
-    "BTC/USD",
-    "ETH/USD",
-    "SOL/USD",
-    "XRP/USD",
-    "BNB/USD",
-    "DOGE/USD",
-    "ADA/USD",
-    "AVAX/USD",
-    "DOT/USD",
-    "LINK/USD",
-    "LTC/USD",
-    "BCH/USD",
-    "XLM/USD",
-    "TRX/USD",
-    "UNI/USD",
-    "AAVE/USD",
-    "ATOM/USD",
-    "NEAR/USD",
-    "FIL/USD",
-    "ETC/USD",
-]
-```
-
-Se Kraken non rende disponibile una coppia, il bot la salta e scrive un warning nei log.
-
-## Strategia
-
-### Condizioni LONG
-
-1. Su timeframe 1h il prezzo è sopra EMA 200.
-2. Su timeframe 15m EMA 20 > EMA 50 > EMA 200.
-3. RSI 15m compreso tra 50 e 70.
-4. MACD histogram passa da negativo a positivo.
-5. Volume ultima candela > media volume ultime 20 candele.
-
-### Condizioni SHORT
-
-1. Su timeframe 1h il prezzo è sotto EMA 200.
-2. Su timeframe 15m EMA 20 < EMA 50 < EMA 200.
-3. RSI 15m compreso tra 30 e 50.
-4. MACD histogram passa da positivo a negativo.
-5. Volume ultima candela > media volume ultime 20 candele.
+> Nota: il bot non usa TP2 e non mostra risultati in R. Tutti i risultati operativi sono in euro.
 
 ## File del progetto
 
-- `main.py` - worker principale.
-- `requirements.txt` - dipendenze Python.
-- `Procfile` - comando worker Railway.
-- `.env.example` - esempio variabili ambiente.
-- `README.md` - documentazione.
+- `app.py` — entrypoint Railway (`python app.py`) e loop worker.
+- `config.py` — configurazione da variabili ambiente.
+- `exchange.py` — client Kraken OHLC pubblico con retry/rate limit.
+- `indicators.py` — EMA, RSI, MACD, ATR, ADX, volumi, supporti/resistenze e regime mercato.
+- `strategy.py` — logica LONG per `CONSERVATIVE` e `SCALPING_FAST`.
+- `risk.py` — TP1/SL dinamici e calcoli netti in euro.
+- `scoring.py` — score 0-100 e decisione `OPERATIVE`, `WATCHLIST`, `REJECTED`.
+- `trade_store.py` — database SQLite `signals.db` e tabella `signals`.
+- `monitor.py` — controllo trade aperti con OHLC reali Kraken.
+- `reporter.py` — report giornaliero e analisi automatica storico.
+- `backtest.py` — backtest leggero, senza invio segnali reali.
+- `telegram_bot.py` — invio messaggi Telegram.
+- `requirements.txt` — dipendenze Python.
+- `Procfile` — Railway worker.
 
-## Esecuzione locale
+## Modalità
 
-1. Crea un ambiente virtuale:
+### SCALPING_FAST
+
+- Timeframe principale: `5m`
+- Conferma 1: `15m`
+- Conferma 2: `1h`
+- Score operativo minimo: `68`
+- Watchlist: `60`
+- Limiti: max 30 segnali/giorno, max 3 per coppia/giorno, no duplicati entro 60 minuti.
+
+### CONSERVATIVE
+
+- Timeframe principale: `15m`
+- Conferma 1: `1h`
+- Conferma 2: `4h`
+- Score operativo minimo: `85`
+- Watchlist: `70`
+
+## Variabili ambiente Railway
+
+Imposta queste variabili nella sezione **Variables** del servizio Railway:
+
+```env
+TELEGRAM_BOT_TOKEN=123456789:token_del_bot
+TELEGRAM_CHAT_ID=123456789
+MODE=SCALPING_FAST
+TRADE_AMOUNT_EUR=10.0
+FEE_BUY_PERCENT=0.10
+FEE_SELL_PERCENT=0.10
+SLIPPAGE_PERCENT=0.00
+SPREAD_PERCENT=0.00
+MIN_SIGNAL_SCORE_CONSERVATIVE=85
+MIN_WATCHLIST_SCORE_CONSERVATIVE=70
+MIN_SIGNAL_SCORE_SCALPING=68
+MIN_WATCHLIST_SCORE_SCALPING=60
+MIN_NET_RR=1.05
+DAILY_REPORT_HOUR=9
+LOOP_SLEEP_SECONDS=300
+OHLC_LIMIT=300
+DATABASE_PATH=signals.db
+PAIRS=BTC/USD,ETH/USD,SOL/USD,LINK/USD,UNI/USD,AAVE/USD,LTC/USD,BCH/USD,AVAX/USD,TAO/USD,XRP/USD,ADA/USD,DOGE/USD
+MAX_SIGNALS_PER_DAY=30
+MAX_SIGNALS_PER_PAIR_PER_DAY=3
+DUPLICATE_MINUTES=60
+```
+
+## Avvio locale
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-```
-
-2. Installa le dipendenze:
-
-```bash
 pip install -r requirements.txt
-```
-
-3. Crea il file `.env` partendo dall'esempio:
-
-```bash
 cp .env.example .env
+python app.py
 ```
 
-4. Inserisci nel file `.env` i tuoi valori reali:
-
-```env
-TELEGRAM_BOT_TOKEN=123456789:token_reale
-TELEGRAM_CHAT_ID=123456789
-SIGNAL_HISTORY_FILE=signal_history.json
-TRADE_STATE_FILE=trades.json
-REPORT_STATE_FILE=report_state.json
-DAILY_REPORT_TIME=09:00
-REPORT_TIMEZONE=Europe/Rome
-```
-
-5. Avvia il worker:
+Su Railway il comando è già nel `Procfile`:
 
 ```bash
-python main.py
+worker: python app.py
 ```
 
-## Variabili ambiente
+## Test Telegram
 
-| Variabile | Obbligatoria | Descrizione |
-| --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | Sì | Token del bot Telegram creato con BotFather. |
-| `TELEGRAM_CHAT_ID` | Sì | ID della chat, gruppo o canale dove inviare i segnali. |
-| `LOG_LEVEL` | No | Livello log, default `INFO`. |
-| `SIGNAL_STATE_FILE` | No | Percorso file JSON anti-duplicazione, default `last_signals.json`. |
-| `SIGNAL_HISTORY_FILE` | No | Percorso storico segnali inviati, default `signal_history.json`. |
-| `TRADE_STATE_FILE` | No | Percorso tracking teorico trade, default `trades.json`. |
-| `REPORT_STATE_FILE` | No | Percorso stato ultimo report giornaliero, default `report_state.json`. |
-| `DAILY_REPORT_TIME` | No | Orario report giornaliero in formato `HH:MM`, default `09:00`. |
-| `REPORT_TIMEZONE` | No | Timezone report giornaliero, default `Europe/Rome`. |
-
-## Deploy su Railway
-
-Railway usa il comando worker `python main.py`. Il progetto include sia il `Procfile` sia `railpack.json` per forzare il comando di avvio corretto anche quando Railway/Railpack propone un default errato come `python app.py`:
-
-```Procfile
-worker: python main.py
-```
-
-```json
-{
-  "deploy": {
-    "startCommand": "python main.py"
-  }
-}
-```
-
-Il file `.python-version` e `railpack.json` richiedono Python 3.12 per evitare incompatibilità con pacchetti scientifici su versioni Python troppo nuove.
-
-Non devi esporre porte HTTP perché questa app è un worker continuo.
-
-## Configurazione passo per passo
-
-### 1. Come creare un bot Telegram con BotFather
-
-1. Apri Telegram.
-2. Cerca `@BotFather`.
-3. Avvia la chat con `/start`.
-4. Invia il comando `/newbot`.
-5. Scegli un nome visibile per il bot, ad esempio `Crypto Signal Bot`.
-6. Scegli uno username che termini con `bot`, ad esempio `mio_crypto_signal_bot`.
-
-### 2. Come ottenere TELEGRAM_BOT_TOKEN
-
-Dopo la creazione del bot, BotFather ti invia un token simile a:
-
-```text
-123456789:ABCDEF_token_di_esempio
-```
-
-Questo valore va inserito nella variabile ambiente:
-
-```env
-TELEGRAM_BOT_TOKEN=123456789:ABCDEF_token_di_esempio
-```
-
-Non pubblicare mai il token nel repository GitHub.
-
-### 3. Come ottenere TELEGRAM_CHAT_ID
-
-Metodo semplice per una chat privata:
-
-1. Apri Telegram e scrivi un messaggio al bot appena creato, ad esempio `ciao`.
-2. Apri nel browser questo URL, sostituendo il token:
-
-```text
-https://api.telegram.org/botTELEGRAM_BOT_TOKEN/getUpdates
-```
-
-3. Cerca nel JSON il campo `chat` e poi `id`.
-4. Usa quel valore come `TELEGRAM_CHAT_ID`.
-
-Per gruppi o canali:
-
-1. Aggiungi il bot al gruppo o al canale.
-2. Invia un messaggio nel gruppo o canale.
-3. Usa lo stesso endpoint `getUpdates`.
-4. Copia l'ID della chat. Nei gruppi spesso è un numero negativo.
-
-### 4. Come creare il repository GitHub
-
-1. Accedi a GitHub.
-2. Clicca su **New repository**.
-3. Dai un nome al repository, ad esempio `kraken-crypto-signal-bot`.
-4. Scegli se renderlo pubblico o privato.
-5. Non inserire token o file `.env` nel repository.
-6. Crea il repository.
-
-### 5. Quali file caricare nel repository
-
-Carica questi file:
-
-- `main.py`
-- `requirements.txt`
-- `Procfile`
-- `README.md`
-- `.env.example`
-
-Non caricare:
-
-- `.env`
-- `last_signals.json`
-- cartelle virtualenv come `.venv/`
-- file temporanei o cache Python
-
-### 6. Come collegare GitHub a Railway
-
-1. Accedi a Railway.
-2. Vai nella dashboard.
-3. Collega il tuo account GitHub dalle impostazioni o durante la creazione del progetto.
-4. Autorizza Railway a leggere il repository del bot.
-
-### 7. Come creare un nuovo progetto Railway
-
-1. Clicca su **New Project**.
-2. Seleziona **Deploy from GitHub repo**.
-3. Scegli il repository del bot.
-4. Railway rileverà il progetto Python e installerà le dipendenze da `requirements.txt`.
-
-### 8. Come impostare le variabili ambiente su Railway
-
-1. Apri il progetto Railway.
-2. Seleziona il servizio del bot.
-3. Vai su **Variables**.
-4. Aggiungi:
-
-```env
-TELEGRAM_BOT_TOKEN=il_token_del_tuo_bot
-TELEGRAM_CHAT_ID=il_tuo_chat_id
-```
-
-Opzionale:
-
-```env
-LOG_LEVEL=INFO
-```
-
-### 9. Come avviare il worker su Railway
-
-Il file `Procfile` contiene già:
-
-```Procfile
-worker: python main.py
-```
-
-In più, `railpack.json` forza esplicitamente il comando:
-
-```text
-python main.py
-```
-
-Se nei log di build o deploy vedi ancora `python app.py`, vai in Railway nel servizio del bot e controlla **Settings → Deploy → Custom Start Command**. Deve essere vuoto oppure impostato a:
-
-```text
-python main.py
-```
-
-Dopo il deploy, Railway avvia il processo come worker. Non serve una porta pubblica perché non è una web app.
-
-### 10. Come verificare dai log che il bot stia funzionando
-
-Apri la sezione **Logs** del servizio Railway e cerca messaggi simili a:
-
-```text
-Starting Kraken crypto signal worker
-Starting scan cycle
-Checking BTC/USD
-No signal for BTC/USD
-Scan cycle finished
-```
-
-All'avvio dovresti anche ricevere su Telegram:
-
-```text
-🤖 Crypto signal bot avviato. Monitoraggio Kraken attivo.
-```
-
-### 11. Come modificare in futuro le coppie da monitorare
-
-Apri `main.py` e modifica la lista:
-
-```python
-SYMBOLS = [
-    "BTC/USD",
-    "ETH/USD",
-    "SOL/USD",
-    "XRP/USD",
-    "BNB/USD",
-    "DOGE/USD",
-    "ADA/USD",
-    "AVAX/USD",
-    "DOT/USD",
-    "LINK/USD",
-    "LTC/USD",
-    "BCH/USD",
-    "XLM/USD",
-    "TRX/USD",
-    "UNI/USD",
-    "AAVE/USD",
-    "ATOM/USD",
-    "NEAR/USD",
-    "FIL/USD",
-    "ETC/USD",
-]
-```
-
-Esempio:
-
-```python
-SYMBOLS = ["BTC/USD", "ETH/USD", "ADA/USD"]
-```
-
-Poi fai commit, push su GitHub e Railway redeployerà il worker.
-
-### 12. Come modificare il messaggio Telegram
-
-Apri `main.py` e modifica la funzione:
-
-```python
-def format_signal_message(signal):
-```
-
-Puoi cambiare testi, emoji, ordine dei campi o aggiungere nuovi dettagli calcolati dalla strategia.
-
-### 13. Come fare troubleshooting se Telegram non riceve messaggi
-
-Controlla questi punti:
-
-1. `TELEGRAM_BOT_TOKEN` è corretto e senza spazi.
-2. `TELEGRAM_CHAT_ID` è corretto.
-3. Hai scritto almeno un messaggio al bot prima di usare `getUpdates`.
-4. Se usi un gruppo, il bot è stato aggiunto al gruppo.
-5. Nei log Railway non ci sono errori `Telegram send failed`.
-6. Il token non è stato rigenerato da BotFather.
-7. Il bot non è stato bloccato dalla chat destinataria.
-
-Per testare manualmente, apri nel browser:
-
-```text
-https://api.telegram.org/botTELEGRAM_BOT_TOKEN/sendMessage?chat_id=TELEGRAM_CHAT_ID&text=test
-```
-
-sostituendo i valori reali.
-
-### 14. Come fare troubleshooting se Kraken non restituisce dati
-
-Controlla questi punti:
-
-1. Verifica nei log eventuali warning su simboli non disponibili.
-2. Alcune coppie possono avere simboli diversi o liquidità diversa su Kraken.
-3. Controlla che Railway abbia accesso a Internet.
-4. Verifica che Kraken non stia applicando rate limit temporanei.
-5. Riprova dopo qualche minuto se vedi errori di rete o rate limit.
-6. Se vuoi rimuovere una coppia problematica, modifica `SYMBOLS` in `main.py`.
-
-### 15. Come aggiornare il codice e redeployare su Railway
-
-1. Modifica i file localmente.
-2. Testa con:
+Puoi testare Telegram con:
 
 ```bash
-python main.py
+python - <<'PY'
+from telegram_bot import test_telegram
+print(test_telegram())
+PY
 ```
 
-3. Esegui commit:
+Se ricevi `False`, controlla:
+
+1. `TELEGRAM_BOT_TOKEN` corretto.
+2. `TELEGRAM_CHAT_ID` corretto.
+3. Hai scritto almeno un messaggio al bot prima di farlo inviare.
+4. Se usi gruppo/canale, il bot deve essere aggiunto alla chat.
+
+## Come leggere il database SQLite
+
+Il database predefinito è `signals.db`.
+
+Apri una shell locale e usa:
 
 ```bash
-git add .
-git commit -m "Update crypto signal bot"
+sqlite3 signals.db
+.tables
+.schema signals
+SELECT signal_id, timestamp, mode, pair, status, net_rr, realized_result_eur FROM signals ORDER BY id DESC LIMIT 20;
 ```
 
-4. Fai push su GitHub:
+Per contare gli esiti:
+
+```sql
+SELECT mode, status, COUNT(*) FROM signals GROUP BY mode, status;
+```
+
+## Messaggi Telegram
+
+### Segnale operativo
+
+```text
+🟢 LONG SOL/USD
+Modalità: SCALPING_FAST
+Rischio: ALTO
+Importo: €10.00
+
+Entry: 74.120
+Stop Loss: 73.830
+Target 1: 74.520
+
+Profitto netto stimato TP1: +€0.034
+Perdita netta stimata SL: -€0.039
+RR netto: 1.08
+Score: 72/100
+
+Regime mercato: TREND_STRONG
+
+Motivi:
+- EMA20 > EMA50
+- RSI valido
+- MACD positivo
+- Volume sufficiente
+- BTC non ribassista
+```
+
+### Watchlist
+
+```text
+👀 WATCHLIST
+SOL/USD
+Direzione: LONG
+Entry teorica: 74.120
+Score: 64/100
+Motivi:
+- EMA20 > EMA50
+- RSI valido
+Perché non operativo:
+- sotto soglia operativa
+```
+
+### Target 1
+
+```text
+✅ Target 1 raggiunto
+LONG SOL/USD
+Entry: 74.120
+Target 1: 74.520
+Risultato netto: +€0.034
+```
+
+### Stop Loss
+
+```text
+🛑 Stop Loss raggiunto
+LONG SOL/USD
+Entry: 74.120
+Stop Loss: 73.830
+Risultato netto: -€0.039
+```
+
+## Esempio report giornaliero
+
+```text
+📊 Report giornaliero crypto
+Periodo: ultime 24 ore
+
+Modalità: CONSERVATIVE
+Segnali operativi: 1
+Watchlist: 2
+Scartati: 5
+Trade chiusi: 1
+Trade aperti: 0
+TP1: 1
+SL: 0
+Win rate TP1: 100.00%
+Profit factor: 0.04
+Profitto totale: €0.034
+Perdita totale: €0.000
+Saldo netto: €0.034
+Capitale iniziale: €10.00
+Capitale attuale teorico: €10.034
+Migliori coppie: [('SOL/USD', 0.034)]
+Peggiori coppie: [('SOL/USD', 0.034)]
+Migliori orari: [('8', 0.034)]
+Peggiori orari: [('8', 0.034)]
+Motivi principali di scarto: []
+
+Modalità: SCALPING_FAST
+...
+
+Analisi automatica:
+- Storico ancora limitato: attendere più trade prima di ottimizzare i filtri.
+```
+
+## Backtest
+
+Il backtest non invia segnali reali:
 
 ```bash
-git push
+python backtest.py
 ```
 
-5. Railway rileverà il push e avvierà un nuovo deploy.
-6. Controlla i log Railway per verificare che il worker sia partito correttamente.
+Metriche incluse: numero trade, win rate, profit factor, expectancy, max drawdown, sharpe ratio, profitto netto €, guadagno medio €, perdita media €, migliori/peggiori coppie.
 
-## Report giornaliero Telegram
+## Deploy Railway
 
-Il worker salva ogni segnale Telegram inviato in `signal_history.json` e crea un trade teorico in `trades.json`. A ogni ciclo controlla i trade aperti usando le ultime candele chiuse e invia un aggiornamento Telegram quando un trade raggiunge Target 1, Target 2 o Stop Loss.
+1. Carica i file su GitHub.
+2. Crea un progetto Railway da GitHub.
+3. Seleziona il repo.
+4. Railway rileverà Python e userà il `Procfile`.
+5. Inserisci le variabili ambiente.
+6. Avvia il deploy.
+7. Nei log dovresti vedere righe tipo `PAIR=SOL/USD MODE=SCALPING_FAST ...`.
 
-Ogni giorno viene inviato un report Telegram con:
+## Note operative
 
-- segnali delle ultime 24 ore;
-- numero di LONG e SHORT;
-- trade aperti;
-- trade chiusi nelle ultime 24 ore;
-- Target 1 raggiunti;
-- Target 2 raggiunti;
-- Stop Loss raggiunti;
-- risultato teorico in R.
-
-Configurazione default:
-
-```env
-SIGNAL_HISTORY_FILE=signal_history.json
-TRADE_STATE_FILE=trades.json
-REPORT_STATE_FILE=report_state.json
-DAILY_REPORT_TIME=09:00
-REPORT_TIMEZONE=Europe/Rome
-```
-
-Per cambiare orario del report su Railway, modifica `DAILY_REPORT_TIME`, ad esempio:
-
-```env
-DAILY_REPORT_TIME=08:30
-```
-
-Per cambiare timezone, modifica `REPORT_TIMEZONE`, ad esempio:
-
-```env
-REPORT_TIMEZONE=Europe/Rome
-```
-
-Il report viene inviato una sola volta al giorno: lo stato dell'ultimo invio viene salvato in `report_state.json`.
-
-Nota Railway: questa è una prima versione senza database. I file JSON locali possono essere persi o resettati quando il servizio viene ricreato, redeployato o spostato su un nuovo container. Per uno storico affidabile nel lungo periodo sarà meglio usare in futuro PostgreSQL, Redis o uno storage esterno.
-
-## Score qualità e audit segnali
-
-Ogni segnale generato viene salvato in `signal_audit.json`, anche quando viene scartato. L'audit include ID segnale, timestamp, exchange, pair, direzione, entry, stop, target, rischio percentuale, RR teorico, prezzo/trend BTC, EMA 15m/1h/4h, RSI, MACD histogram, volume, volume medio, volume ratio, ATR, ADX, distanza dalle EMA, supporto/resistenza, ora, giorno, motivi, score e stato `OPEN` o `REJECTED`.
-
-Configurazione:
-
-```env
-SIGNAL_AUDIT_FILE=signal_audit.json
-MIN_SIGNAL_SCORE=85
-ENABLE_REJECTED_SIGNALS_LOG=true
-USE_BTC_TREND_FILTER=true
-AMBIGUOUS_CANDLE_POLICY=STOP_FIRST
-MIN_DECIMALS=3
-```
-
-Il bot invia Telegram solo se `quality_score >= MIN_SIGNAL_SCORE`. I segnali sotto soglia vengono salvati come `REJECTED` con i motivi dello scarto, ma non vengono inviati.
-
-Il report giornaliero include anche segnali generati, inviati, scartati e suggerimenti automatici basati sullo storico, senza modificare automaticamente i filtri.
-
-## Simulazione capitale e costi operativi
-
-Il bot mantiene invariata la logica di generazione dei segnali, ma applica un filtro qualità dopo la generazione. Per non bloccare troppi segnali, il filtro usa di default il RR netto del piano completo 50% su Target 1 e 50% su Target 2 (`NET_RR_MODE=BLENDED`) invece del solo Target 1.
-
-Configurazione default:
-
-```env
-INITIAL_CAPITAL=100.00
-BUY_FEE_PERCENT=0.10
-SELL_FEE_PERCENT=0.10
-SPREAD_PERCENT=0.00
-SLIPPAGE_PERCENT=0.00
-MIN_NET_RR=1.05
-NET_RR_MODE=BLENDED
-SAME_CANDLE_PRIORITY=SL
-EQUITY_STATE_FILE=equity_state.json
-```
-
-
-`NET_RR_MODE` può essere:
-
-- `BLENDED`: usa il piano 50% Target 1 e 50% Target 2, consigliato;
-- `T1`: usa solo Target 1, molto più restrittivo;
-- `T2`: usa solo Target 2, più permissivo ma meno prudente.
-
-La simulazione usa il 100% del capitale disponibile per ogni operazione teorica, senza leva. Alla chiusura di un trade aggiorna il capitale composto e salva lo stato in `equity_state.json`. Le metriche includono capitale iniziale, capitale attuale, massimo capitale, drawdown massimo, profitto netto, profitto lordo, commissioni, spread, slippage, win rate, profit factor e RR medio netto.
-
-`SAME_CANDLE_PRIORITY` decide cosa fare se nella stessa candela vengono toccati sia Stop Loss sia Target:
-
-- `SL` considera prima lo Stop Loss;
-- `TP` considera prima il Target.
-
-## ID segnale e collegamento esiti
-
-Ogni segnale Telegram include un identificativo leggibile nel formato:
-
-```text
-SIG-YYYYMMDD-HHMM-SYMBOL-DIRECTION
-```
-
-Esempio:
-
-```text
-SIG-20260629-1515-UNIUSD-LONG
-```
-
-Lo stesso `signal_id` viene salvato nello storico segnali e nel trade teorico, insieme al `telegram_message_id` restituito da Telegram quando disponibile. Quando un trade raggiunge TP1, TP2, Stop Loss o viene marcato come ambiguo, il bot invia l'aggiornamento come risposta al messaggio originale usando `reply_to_message_id`, così il risultato resta collegato visivamente al segnale iniziale.
-
-## Precisione prezzi e controllo Stop/Target
-
-I messaggi Telegram e i report usano una formattazione centralizzata dei prezzi con almeno 3 decimali, così valori come `Entry: 1.204` e `Stop Loss: 1.198` non vengono più appiattiti a `1.20`.
-
-Il tracking teorico dei trade usa esclusivamente candele OHLC chiuse:
-
-- LONG Stop Loss: raggiunto solo se `low <= stop_loss`;
-- LONG Target: raggiunto solo se `high >= target`;
-- SHORT Stop Loss: raggiunto solo se `high >= stop_loss`;
-- SHORT Target: raggiunto solo se `low <= target`.
-
-Il controllo parte dalla prima candela successiva all'orario di invio del segnale. Se un segnale arriva alle 03:46 su timeframe 15m, la verifica inizia dalla candela delle 04:00, non dalla candela già aperta alle 03:45.
-
-Se nella stessa candela vengono raggiunti sia Stop Loss sia Target, il trade viene marcato come `AMBIGUO` e non viene forzato automaticamente a SL o TP.
-
-## Backtest su TradingView
-
-Il file `tradingview_strategy.pine` contiene una strategia Pine Script v6 che replica solo le regole BUY/LONG del worker Python per fare backtest su TradingView.
-
-Uso consigliato:
-
-1. Apri TradingView.
-2. Apri il grafico della coppia da testare.
-3. Imposta il timeframe del grafico a 15 minuti.
-4. Apri **Pine Editor**.
-5. Copia il contenuto di `tradingview_strategy.pine`.
-6. Clicca **Add to chart**.
-7. Apri **Strategy Tester** per vedere risultati, drawdown e trade.
-
-Note:
-
-- La conferma trend usa il timeframe 1h tramite `request.security`.
-- La strategia TradingView mostra e testa solo ingressi BUY/LONG, con stop loss e due target come il bot Python.
-- Per ottenere risultati confrontabili, usa simboli Kraken su TradingView quando disponibili, ad esempio `KRAKEN:BTCUSD`.
-- I risultati del backtest possono differire dai segnali reali per spread, slippage, dati del broker/exchange e regole di esecuzione TradingView.
-
-## Avvertenza
-
-Questo bot genera segnali tecnici automatici e non costituisce consulenza finanziaria. Testa sempre la strategia prima di usarla con capitale reale.
+- Il bot usa solo dati pubblici Kraken: non servono API key exchange.
+- Se una pair non è disponibile su Kraken, nei log vedrai un warning e la scansione continuerà.
+- SQLite su Railway è adatto a una prima versione, ma può essere resettato con redeploy/container nuovi; per storico permanente valuta un volume persistente o PostgreSQL.
