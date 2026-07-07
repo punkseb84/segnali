@@ -48,6 +48,8 @@ Imposta queste variabili nella sezione **Variables** del servizio Railway:
 ```env
 TELEGRAM_BOT_TOKEN=123456789:token_del_bot
 TELEGRAM_CHAT_ID=123456789
+# Opzionale: username gruppo/canale pubblico senza @ per link cliccabili
+TELEGRAM_CHAT_USERNAME=
 MODE=SCALPING_FAST
 TRADE_AMOUNT_EUR=100.0
 FEE_BUY_PERCENT=0.10
@@ -115,7 +117,7 @@ Apri una shell locale e usa:
 sqlite3 signals.db
 .tables
 .schema signals
-SELECT signal_id, timestamp, mode, pair, status, net_rr, realized_result_eur FROM signals ORDER BY id DESC LIMIT 20;
+SELECT signal_id, signal_telegram_message_id, outcome_telegram_message_id, timestamp, mode, pair, status, net_rr, realized_result_eur FROM signals ORDER BY id DESC LIMIT 20;
 ```
 
 Per contare gli esiti:
@@ -130,6 +132,7 @@ SELECT mode, status, COUNT(*) FROM signals GROUP BY mode, status;
 
 ```text
 🟢 LONG SOL/USD
+ID Segnale: SIG-20260707-2015-SOLUSD-SCALPING_FAST-LONG
 Modalità: SCALPING_FAST
 Rischio: ALTO
 Importo: €100.00
@@ -192,21 +195,38 @@ Perché non operativo:
 
 ```text
 ✅ Target 1 raggiunto
+ID Segnale: SIG-20260707-2015-SOLUSD-SCALPING_FAST-LONG
 LONG SOL/USD
 Entry: 74.1200
 Target 1: 74.5200
 Risultato netto: +€0.3400
+Collegamento: risposta al segnale originale
 ```
 
 ### Stop Loss
 
 ```text
 🛑 Stop Loss raggiunto
+ID Segnale: SIG-20260707-2015-SOLUSD-SCALPING_FAST-LONG
 LONG SOL/USD
 Entry: 74.1200
 Stop Loss: 73.8300
 Risultato netto: -€0.3900
+Collegamento: risposta al segnale originale
 ```
+
+
+## Collegamento TP1/SL al segnale originale
+
+Ogni segnale operativo contiene un `ID Segnale` e, quando Telegram restituisce il `message_id`, il bot lo salva nel database SQLite. Quando arriva un messaggio TP1 o SL, il bot usa quel `message_id` come `reply_to_message_id`: su Telegram vedrai quindi l'esito come risposta diretta al segnale originale.
+
+Se usi un gruppo o canale pubblico e imposti `TELEGRAM_CHAT_USERNAME`, il messaggio TP1/SL include anche un link cliccabile `Apri segnale originale`. Nelle chat private Telegram non espone un link pubblico stabile, quindi il collegamento avviene tramite reply e tramite lo stesso `ID Segnale`.
+
+Nel database i campi sono:
+
+- `signal_telegram_message_id`: ID Telegram del messaggio operativo originale;
+- `outcome_telegram_message_id`: ID Telegram del messaggio TP1/SL;
+- `signal_id`: ID leggibile usato sia nel segnale sia nell'esito.
 
 ## Esempio report giornaliero
 

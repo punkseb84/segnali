@@ -13,7 +13,7 @@ from monitor import monitor_open_trades
 from reporter import maybe_send_daily_report
 from strategy import build_signal
 from telegram_bot import send_message
-from trade_store import init_db, insert_signal, signals_since
+from trade_store import init_db, insert_signal, signals_since, update_signal_telegram_message_id
 from risk import format_price
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", stream=sys.stdout)
@@ -39,6 +39,7 @@ def operative_message(record: dict) -> str:
     reasons = "\n".join(f"- {reason}" for reason in record["reasons"])
     return (
         f"🟢 LONG {record['pair']}\n"
+        f"ID Segnale: {record['signal_id']}\n"
         f"Modalità: {record['mode']}\n"
         f"Rischio: {risk}\n"
         f"Importo: €{record['trade_amount_eur']:.2f}\n\n"
@@ -58,7 +59,7 @@ def watchlist_message(record: dict) -> str:
     reasons = "\n".join(f"- {reason}" for reason in record["reasons"])
     penalties = "\n".join(f"- {penalty}" for penalty in record["penalties"])
     return (
-        f"👀 WATCHLIST\n{record['pair']}\nDirezione: LONG\n"
+        f"👀 WATCHLIST\n{record['pair']}\nID Segnale: {record['signal_id']}\nDirezione: LONG\n"
         f"Entry teorica: {format_price(record['entry'])}\n"
         f"Score: {record['score']}/100\n"
         f"Motivi:\n{reasons}\n"
@@ -97,7 +98,9 @@ def scan_pair(pair: str) -> None:
         record["net_rr"],
     )
     if record["status"] == "OPEN":
-        send_message(operative_message(record))
+        telegram_result = send_message(operative_message(record))
+        if telegram_result:
+            update_signal_telegram_message_id(record["signal_id"], telegram_result.get("message_id"))
     elif record["status"] == "WATCHLIST":
         if ENABLE_WATCHLIST_ALERTS:
             send_message(watchlist_message(record))

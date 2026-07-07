@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS signals (
     reasons TEXT,
     penalties TEXT,
     ambiguous_candle INTEGER DEFAULT 0,
+    signal_telegram_message_id INTEGER,
+    outcome_telegram_message_id INTEGER,
     created_at TEXT,
     closed_at TEXT
 );
@@ -70,7 +72,8 @@ COLUMNS = [
     "trade_amount_eur", "quantity", "net_profit_tp1_eur", "net_loss_sl_eur", "realized_result_eur", "fees_total_eur", "net_rr",
     "score", "status", "outcome", "market_regime", "btc_trend", "ema20", "ema50", "ema200", "rsi", "macd_hist", "atr", "adx",
     "volume", "avg_volume_20", "relative_volume", "support", "resistance", "swing_high", "swing_low", "distance_ema20_pct",
-    "distance_resistance_pct", "hour", "weekday", "reasons", "penalties", "ambiguous_candle", "created_at", "closed_at"
+    "distance_resistance_pct", "hour", "weekday", "reasons", "penalties", "ambiguous_candle", "signal_telegram_message_id",
+    "outcome_telegram_message_id", "created_at", "closed_at"
 ]
 
 
@@ -92,6 +95,10 @@ def init_db() -> None:
         if "target_2" in cols:
             # Legacy TP2 data can remain in old DB files; the new code never writes it.
             pass
+        if "signal_telegram_message_id" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN signal_telegram_message_id INTEGER")
+        if "outcome_telegram_message_id" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN outcome_telegram_message_id INTEGER")
 
 
 def encode(value: Any) -> Any:
@@ -107,15 +114,40 @@ def insert_signal(record: dict[str, Any]) -> None:
         conn.execute(f"INSERT OR IGNORE INTO signals ({','.join(COLUMNS)}) VALUES ({placeholders})", values)
 
 
-def update_outcome(signal_id: str, status: str, outcome: str, realized_result_eur: float, ambiguous_candle: bool = False) -> None:
+def update_signal_telegram_message_id(signal_id: str, message_id: int | None) -> None:
+    if message_id is None:
+        return
+    with connect() as conn:
+        conn.execute(
+            "UPDATE signals SET signal_telegram_message_id=? WHERE signal_id=?",
+            (message_id, signal_id),
+        )
+
+
+def update_outcome(
+    signal_id: str,
+    status: str,
+    outcome: str,
+    realized_result_eur: float,
+    ambiguous_candle: bool = False,
+    outcome_telegram_message_id: int | None = None,
+) -> None:
     with connect() as conn:
         conn.execute(
             """
             UPDATE signals
-            SET status=?, outcome=?, realized_result_eur=?, ambiguous_candle=?, closed_at=?
+            SET status=?, outcome=?, realized_result_eur=?, ambiguous_candle=?, outcome_telegram_message_id=?, closed_at=?
             WHERE signal_id=?
             """,
-            (status, outcome, realized_result_eur, int(ambiguous_candle), datetime.now(timezone.utc).isoformat(), signal_id),
+            (
+                status,
+                outcome,
+                realized_result_eur,
+                int(ambiguous_candle),
+                outcome_telegram_message_id,
+                datetime.now(timezone.utc).isoformat(),
+                signal_id,
+            ),
         )
 
 

@@ -41,6 +41,7 @@ def _list_env(name: str, default: list[str]) -> list[str]:
 
 TELEGRAM_BOT_TOKEN: Final[str] = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID: Final[str] = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_CHAT_USERNAME: Final[str] = os.getenv("TELEGRAM_CHAT_USERNAME", "").strip().lstrip("@")
 
 SUPPORTED_MODES: Final[tuple[str, ...]] = ("CONSERVATIVE", "SCALPING_FAST")
 MODE: Final[str] = os.getenv("MODE", "SCALPING_FAST").strip().upper()

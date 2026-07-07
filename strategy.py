@@ -103,6 +103,8 @@ def build_signal(pair: str, main: pd.DataFrame, confirm_1: pd.DataFrame, confirm
         "reasons": score.reasons,
         "penalties": score.penalties,
         "ambiguous_candle": 0,
+        "signal_telegram_message_id": None,
+        "outcome_telegram_message_id": None,
         "created_at": when.isoformat(),
         "closed_at": None,
     }
