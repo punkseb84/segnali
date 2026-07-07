@@ -108,33 +108,47 @@ def build_signal(pair: str, main: pd.DataFrame, confirm_1: pd.DataFrame, confirm
     }
 
     if mode == "CONSERVATIVE":
-        hard_ok = (
-            confirm_1.iloc[-1]["close"] > confirm_1.iloc[-1]["ema200"]
-            and confirm_2.iloc[-1]["close"] > confirm_2.iloc[-1]["ema200"]
-            and latest["close"] > latest["ema200"]
-            and latest["ema20"] > latest["ema50"] > latest["ema200"]
-            and 50 <= latest["rsi14"] <= 65
-            and latest["macd_hist"] > 0
-            and latest["relative_volume"] >= 1.0
-            and record["btc_trend"] != "STRONG_BEARISH"
-            and record["distance_resistance_pct"] > 0.15
-        )
-        if not hard_ok and record["status"] == "OPEN":
+        hard_penalties: list[str] = []
+        if confirm_1.iloc[-1]["close"] <= confirm_1.iloc[-1]["ema200"]:
+            hard_penalties.append("trend 1h non sopra EMA200")
+        if confirm_2.iloc[-1]["close"] <= confirm_2.iloc[-1]["ema200"]:
+            hard_penalties.append("trend 4h non sopra EMA200")
+        if latest["close"] <= latest["ema200"]:
+            hard_penalties.append("prezzo non sopra EMA200")
+        if not (latest["ema20"] > latest["ema50"] > latest["ema200"]):
+            hard_penalties.append("EMA20 > EMA50 > EMA200 non confermato")
+        if not (50 <= latest["rsi14"] <= 65):
+            hard_penalties.append("RSI fuori range 50-65")
+        if latest["macd_hist"] <= 0:
+            hard_penalties.append("MACD histogram non positivo")
+        if latest["relative_volume"] < 1.0:
+            hard_penalties.append("relative volume sotto 1.0")
+        if record["btc_trend"] == "STRONG_BEARISH":
+            hard_penalties.append("BTC in forte trend ribassista")
+        if record["distance_resistance_pct"] <= 0.15:
+            hard_penalties.append("spazio verso resistenza insufficiente")
+        if hard_penalties and record["status"] == "OPEN":
             record["status"] = "WATCHLIST"
-            record["penalties"].append("setup conservative non completo")
+            record["penalties"].extend(hard_penalties)
     else:
-        hard_ok = (
-            (confirm_1.iloc[-1]["close"] > confirm_1.iloc[-1]["ema200"] or latest["close"] > latest["ema200"])
-            and latest["ema20"] > latest["ema50"]
-            and 48 <= latest["rsi14"] <= 68
-            and (latest["macd_hist"] > 0 or latest["macd_hist"] > previous["macd_hist"])
-            and latest["relative_volume"] >= 0.8
-            and record["distance_resistance_pct"] > 0.15
-            and record["btc_trend"] != "STRONG_BEARISH"
-        )
-        if not hard_ok and record["status"] == "OPEN":
+        hard_penalties = []
+        if not (confirm_1.iloc[-1]["close"] > confirm_1.iloc[-1]["ema200"] or latest["close"] > latest["ema200"]):
+            hard_penalties.append("trend 15m non favorevole e prezzo 5m non sopra EMA200")
+        if latest["ema20"] <= latest["ema50"]:
+            hard_penalties.append("EMA20 <= EMA50 sul 5m")
+        if not (48 <= latest["rsi14"] <= 68):
+            hard_penalties.append("RSI 5m fuori range 48-68")
+        if not (latest["macd_hist"] > 0 or latest["macd_hist"] > previous["macd_hist"]):
+            hard_penalties.append("MACD histogram non positivo né crescente")
+        if latest["relative_volume"] < 0.8:
+            hard_penalties.append("volume sotto 0.8 della media 20")
+        if record["distance_resistance_pct"] <= 0.15:
+            hard_penalties.append("spazio verso resistenza insufficiente per TP1")
+        if record["btc_trend"] == "STRONG_BEARISH":
+            hard_penalties.append("BTC in forte trend ribassista")
+        if hard_penalties and record["status"] == "OPEN":
             record["status"] = "WATCHLIST"
-            record["penalties"].append("setup scalping non completo")
+            record["penalties"].extend(hard_penalties)
 
     if plan is None:
         record["status"] = "REJECTED"

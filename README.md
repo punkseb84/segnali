@@ -58,6 +58,7 @@ MIN_WATCHLIST_SCORE_CONSERVATIVE=70
 MIN_SIGNAL_SCORE_SCALPING=68
 MIN_WATCHLIST_SCORE_SCALPING=60
 MIN_NET_RR=1.05
+ENABLE_WATCHLIST_ALERTS=false
 DAILY_REPORT_HOUR=9
 LOOP_SLEEP_SECONDS=300
 OHLC_LIMIT=300
@@ -152,6 +153,26 @@ Motivi:
 
 ### Watchlist
 
+Per impostazione predefinita, le notifiche Telegram della watchlist sono disattivate:
+
+```env
+ENABLE_WATCHLIST_ALERTS=false
+```
+
+Quindi una decisione `WATCHLIST` viene salvata nel database e mostrata nei log/report, ma **non** invia notifiche Telegram e **non** viene monitorata per TP1/SL. Riceverai notifiche Telegram solo per:
+
+- segnali operativi `OPEN`;
+- esiti `TP1` o `SL` dei trade operativi;
+- report giornaliero.
+
+Se in futuro vuoi riattivare le notifiche watchlist, imposta:
+
+```env
+ENABLE_WATCHLIST_ALERTS=true
+```
+
+Esempio messaggio watchlist quando abilitata:
+
 ```text
 👀 WATCHLIST
 SOL/USD
@@ -244,3 +265,4 @@ Metriche incluse: numero trade, win rate, profit factor, expectancy, max drawdow
 - Il bot usa solo dati pubblici Kraken: non servono API key exchange.
 - Se una pair non è disponibile su Kraken, nei log vedrai un warning e la scansione continuerà.
 - SQLite su Railway è adatto a una prima versione, ma può essere resettato con redeploy/container nuovi; per storico permanente valuta un volume persistente o PostgreSQL.
+- Con `ENABLE_WATCHLIST_ALERTS=false` il bot non manda notifiche watchlist: Telegram resta pulito e ricevi solo operativi, esiti e report.

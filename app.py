@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from datetime import datetime
 
-from config import ACTIVE_MODE, DUPLICATE_MINUTES, LOOP_SLEEP_SECONDS, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_LIMIT, PAIRS, TIMEFRAMES
+from config import ACTIVE_MODE, DUPLICATE_MINUTES, ENABLE_WATCHLIST_ALERTS, LOOP_SLEEP_SECONDS, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_LIMIT, PAIRS, TIMEFRAMES
 from exchange import fetch_ohlc
 from indicators import add_indicators, classify_market_regime
 from monitor import monitor_open_trades
@@ -15,7 +16,7 @@ from telegram_bot import send_message
 from trade_store import init_db, insert_signal, signals_since
 from risk import format_price
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", stream=sys.stdout)
 logger = logging.getLogger("crypto-bot")
 
 
@@ -98,7 +99,13 @@ def scan_pair(pair: str) -> None:
     if record["status"] == "OPEN":
         send_message(operative_message(record))
     elif record["status"] == "WATCHLIST":
-        send_message(watchlist_message(record))
+        if ENABLE_WATCHLIST_ALERTS:
+            send_message(watchlist_message(record))
+        else:
+            logger.info(
+                "Watchlist Telegram disabled; saved %s as WATCHLIST only",
+                record["signal_id"],
+            )
 
 
 def main() -> None:
