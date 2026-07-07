@@ -86,9 +86,9 @@ class TradeEvaluationTest(unittest.TestCase):
         self.assertTrue(trade["target_1_hit"])
         self.assertFalse(trade["stop_loss_hit"])
 
-    def test_price_format_keeps_at_least_three_decimals(self):
-        self.assertEqual(format_price(1.204), "1.204")
-        self.assertEqual(format_price(1.198), "1.198")
+    def test_price_format_keeps_at_least_four_decimals(self):
+        self.assertEqual(format_price(1.204), "1.2040")
+        self.assertEqual(format_price(1.198), "1.1980")
         self.assertNotEqual(format_price(1.204), "1.20")
         self.assertNotEqual(format_price(1.198), "1.20")
 

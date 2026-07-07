@@ -31,6 +31,7 @@ Bot Python pronto per Railway che analizza OHLC Kraken, genera segnali **LONG sp
 - Score operativo minimo: `68`
 - Watchlist: `60`
 - Limiti: max 30 segnali/giorno, max 3 per coppia/giorno, no duplicati entro 60 minuti.
+- Con `ENFORCE_SETUP_RULES=false`, un setup con score operativo e piano RR valido resta operativo anche se manca una regola secondaria; le regole mancanti rimangono nei log come penalità.
 
 ### CONSERVATIVE
 
@@ -48,7 +49,7 @@ Imposta queste variabili nella sezione **Variables** del servizio Railway:
 TELEGRAM_BOT_TOKEN=123456789:token_del_bot
 TELEGRAM_CHAT_ID=123456789
 MODE=SCALPING_FAST
-TRADE_AMOUNT_EUR=10.0
+TRADE_AMOUNT_EUR=100.0
 FEE_BUY_PERCENT=0.10
 FEE_SELL_PERCENT=0.10
 SLIPPAGE_PERCENT=0.00
@@ -59,11 +60,12 @@ MIN_SIGNAL_SCORE_SCALPING=68
 MIN_WATCHLIST_SCORE_SCALPING=60
 MIN_NET_RR=1.05
 ENABLE_WATCHLIST_ALERTS=false
+ENFORCE_SETUP_RULES=false
 DAILY_REPORT_HOUR=9
 LOOP_SLEEP_SECONDS=300
 OHLC_LIMIT=300
 DATABASE_PATH=signals.db
-PAIRS=BTC/USD,ETH/USD,SOL/USD,LINK/USD,UNI/USD,AAVE/USD,LTC/USD,BCH/USD,AVAX/USD,TAO/USD,XRP/USD,ADA/USD,DOGE/USD
+PAIRS=BTC/USD,ETH/USD,SOL/USD,LINK/USD,UNI/USD,AAVE/USD,LTC/USD,BCH/USD,AVAX/USD,TAO/USD,XRP/USD,ADA/USD,DOGE/USD,DOT/USD,XLM/USD,TRX/USD,ATOM/USD,ETC/USD,FIL/USD,NEAR/USD
 MAX_SIGNALS_PER_DAY=30
 MAX_SIGNALS_PER_PAIR_PER_DAY=3
 DUPLICATE_MINUTES=60
@@ -130,14 +132,14 @@ SELECT mode, status, COUNT(*) FROM signals GROUP BY mode, status;
 🟢 LONG SOL/USD
 Modalità: SCALPING_FAST
 Rischio: ALTO
-Importo: €10.00
+Importo: €100.00
 
-Entry: 74.120
-Stop Loss: 73.830
-Target 1: 74.520
+Entry: 74.1200
+Stop Loss: 73.8300
+Target 1: 74.5200
 
-Profitto netto stimato TP1: +€0.034
-Perdita netta stimata SL: -€0.039
+Profitto netto stimato TP1: +€0.3400
+Perdita netta stimata SL: -€0.3900
 RR netto: 1.08
 Score: 72/100
 
@@ -177,7 +179,7 @@ Esempio messaggio watchlist quando abilitata:
 👀 WATCHLIST
 SOL/USD
 Direzione: LONG
-Entry teorica: 74.120
+Entry teorica: 74.1200
 Score: 64/100
 Motivi:
 - EMA20 > EMA50
@@ -191,9 +193,9 @@ Perché non operativo:
 ```text
 ✅ Target 1 raggiunto
 LONG SOL/USD
-Entry: 74.120
-Target 1: 74.520
-Risultato netto: +€0.034
+Entry: 74.1200
+Target 1: 74.5200
+Risultato netto: +€0.3400
 ```
 
 ### Stop Loss
@@ -201,9 +203,9 @@ Risultato netto: +€0.034
 ```text
 🛑 Stop Loss raggiunto
 LONG SOL/USD
-Entry: 74.120
-Stop Loss: 73.830
-Risultato netto: -€0.039
+Entry: 74.1200
+Stop Loss: 73.8300
+Risultato netto: -€0.3900
 ```
 
 ## Esempio report giornaliero
@@ -222,15 +224,15 @@ TP1: 1
 SL: 0
 Win rate TP1: 100.00%
 Profit factor: 0.04
-Profitto totale: €0.034
-Perdita totale: €0.000
-Saldo netto: €0.034
-Capitale iniziale: €10.00
-Capitale attuale teorico: €10.034
-Migliori coppie: [('SOL/USD', 0.034)]
-Peggiori coppie: [('SOL/USD', 0.034)]
-Migliori orari: [('8', 0.034)]
-Peggiori orari: [('8', 0.034)]
+Profitto totale: €0.3400
+Perdita totale: €0.0000
+Saldo netto: €0.3400
+Capitale iniziale: €100.00
+Capitale attuale teorico: €100.340
+Migliori coppie: [('SOL/USD', 0.3400)]
+Peggiori coppie: [('SOL/USD', 0.3400)]
+Migliori orari: [('8', 0.3400)]
+Peggiori orari: [('8', 0.3400)]
 Motivi principali di scarto: []
 
 Modalità: SCALPING_FAST
@@ -266,3 +268,5 @@ Metriche incluse: numero trade, win rate, profit factor, expectancy, max drawdow
 - Se una pair non è disponibile su Kraken, nei log vedrai un warning e la scansione continuerà.
 - SQLite su Railway è adatto a una prima versione, ma può essere resettato con redeploy/container nuovi; per storico permanente valuta un volume persistente o PostgreSQL.
 - Con `ENABLE_WATCHLIST_ALERTS=false` il bot non manda notifiche watchlist: Telegram resta pulito e ricevi solo operativi, esiti e report.
+- Con `ENFORCE_SETUP_RULES=false` il bot è meno restrittivo: i setup con score operativo e piano RR valido diventano operativi anche se hanno penalità secondarie. Per tornare a una modalità più rigida, imposta `ENFORCE_SETUP_RULES=true`.
+- I prezzi nei messaggi sono formattati con almeno 4 decimali, e 6 decimali per crypto sotto 1 euro/dollaro.

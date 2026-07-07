@@ -25,8 +25,8 @@ class TradePlan:
     net_rr: float
 
 
-def format_price(value: float, min_decimals: int = 3) -> str:
-    decimals = max(min_decimals, 6 if abs(value) < 1 else 3)
+def format_price(value: float, min_decimals: int = 4) -> str:
+    decimals = max(min_decimals, 6 if abs(value) < 1 else 4)
     return f"{value:.{decimals}f}"
 
 

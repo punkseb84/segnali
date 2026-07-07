@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from config import ACTIVE_MODE, DIRECTION, EXCHANGE_NAME, MIN_NET_RR, TRADE_AMOUNT_EUR
+from config import ACTIVE_MODE, DIRECTION, ENFORCE_SETUP_RULES, EXCHANGE_NAME, MIN_NET_RR, TRADE_AMOUNT_EUR
 from indicators import classify_market_regime
 from risk import TradePlan, best_trade_plan
 from scoring import ScoreResult, score_long
@@ -127,9 +127,10 @@ def build_signal(pair: str, main: pd.DataFrame, confirm_1: pd.DataFrame, confirm
             hard_penalties.append("BTC in forte trend ribassista")
         if record["distance_resistance_pct"] <= 0.15:
             hard_penalties.append("spazio verso resistenza insufficiente")
-        if hard_penalties and record["status"] == "OPEN":
-            record["status"] = "WATCHLIST"
+        if hard_penalties:
             record["penalties"].extend(hard_penalties)
+            if ENFORCE_SETUP_RULES and record["status"] == "OPEN":
+                record["status"] = "WATCHLIST"
     else:
         hard_penalties = []
         if not (confirm_1.iloc[-1]["close"] > confirm_1.iloc[-1]["ema200"] or latest["close"] > latest["ema200"]):
@@ -146,9 +147,10 @@ def build_signal(pair: str, main: pd.DataFrame, confirm_1: pd.DataFrame, confirm
             hard_penalties.append("spazio verso resistenza insufficiente per TP1")
         if record["btc_trend"] == "STRONG_BEARISH":
             hard_penalties.append("BTC in forte trend ribassista")
-        if hard_penalties and record["status"] == "OPEN":
-            record["status"] = "WATCHLIST"
+        if hard_penalties:
             record["penalties"].extend(hard_penalties)
+            if ENFORCE_SETUP_RULES and record["status"] == "OPEN":
+                record["status"] = "WATCHLIST"
 
     if plan is None:
         record["status"] = "REJECTED"

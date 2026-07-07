@@ -46,13 +46,14 @@ SUPPORTED_MODES: Final[tuple[str, ...]] = ("CONSERVATIVE", "SCALPING_FAST")
 MODE: Final[str] = os.getenv("MODE", "SCALPING_FAST").strip().upper()
 ACTIVE_MODE: Final[str] = MODE if MODE in SUPPORTED_MODES else "SCALPING_FAST"
 
-TRADE_AMOUNT_EUR: Final[float] = _float_env("TRADE_AMOUNT_EUR", 10.0)
+TRADE_AMOUNT_EUR: Final[float] = _float_env("TRADE_AMOUNT_EUR", 100.0)
 FEE_BUY_PERCENT: Final[float] = _float_env("FEE_BUY_PERCENT", 0.10)
 FEE_SELL_PERCENT: Final[float] = _float_env("FEE_SELL_PERCENT", 0.10)
 SLIPPAGE_PERCENT: Final[float] = _float_env("SLIPPAGE_PERCENT", 0.00)
 SPREAD_PERCENT: Final[float] = _float_env("SPREAD_PERCENT", 0.00)
 MIN_NET_RR: Final[float] = _float_env("MIN_NET_RR", 1.05)
 ENABLE_WATCHLIST_ALERTS: Final[bool] = _bool_env("ENABLE_WATCHLIST_ALERTS", False)
+ENFORCE_SETUP_RULES: Final[bool] = _bool_env("ENFORCE_SETUP_RULES", False)
 
 MIN_SIGNAL_SCORE_CONSERVATIVE: Final[int] = _int_env("MIN_SIGNAL_SCORE_CONSERVATIVE", 85)
 MIN_WATCHLIST_SCORE_CONSERVATIVE: Final[int] = _int_env("MIN_WATCHLIST_SCORE_CONSERVATIVE", 70)
@@ -80,6 +81,13 @@ PAIRS: Final[list[str]] = _list_env(
         "XRP/USD",
         "ADA/USD",
         "DOGE/USD",
+        "DOT/USD",
+        "XLM/USD",
+        "TRX/USD",
+        "ATOM/USD",
+        "ETC/USD",
+        "FIL/USD",
+        "NEAR/USD",
     ],
 )
 

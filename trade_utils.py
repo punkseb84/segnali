@@ -6,15 +6,15 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 
-def format_price(price: float | int | str, min_decimals: int = 3) -> str:
-    """Format a crypto price with at least three decimals.
+def format_price(price: float | int | str, min_decimals: int = 4) -> str:
+    """Format a crypto price with at least four decimals.
 
     Uses more precision for sub-unit prices while never showing fewer than
     ``min_decimals`` decimals. This avoids messages such as Entry 1.20 and
     Stop Loss 1.20 when the real prices differ.
     """
     value = float(price)
-    decimals = max(min_decimals, 6 if abs(value) < 1 else 3)
+    decimals = max(min_decimals, 6 if abs(value) < 1 else 4)
     return f"{value:.{decimals}f}"
 
 
