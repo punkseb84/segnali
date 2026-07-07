@@ -4,16 +4,16 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from config import ACTIVE_MODE, DUPLICATE_MINUTES, ENABLE_WATCHLIST_ALERTS, LOOP_SLEEP_SECONDS, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_LIMIT, PAIRS, TIMEFRAMES
+from config import ACTIVE_MODE, DUPLICATE_MINUTES, ENABLE_WATCHLIST_ALERTS, LOOP_SLEEP_SECONDS, MAX_CONSECUTIVE_STOP_LOSSES, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_LIMIT, PAIRS, STOP_LOSS_PAUSE_HOURS, TIMEFRAMES
 from exchange import fetch_ohlc
 from indicators import add_indicators, classify_market_regime
 from monitor import monitor_open_trades
 from reporter import maybe_send_daily_report
 from strategy import build_signal
 from telegram_bot import send_message
-from trade_store import init_db, insert_signal, signals_since, update_signal_telegram_message_id
+from trade_store import all_closed, init_db, insert_signal, signals_since, update_signal_telegram_message_id
 from risk import format_price
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", stream=sys.stdout)
@@ -32,6 +32,32 @@ def daily_limits_ok(pair: str) -> bool:
         if (datetime.utcnow() - last.replace(tzinfo=None)).total_seconds() < DUPLICATE_MINUTES * 60:
             return False
     return True
+
+
+def stop_loss_circuit_breaker_active() -> bool:
+    """Pause new operative signals after too many consecutive stop losses."""
+    closed = sorted(
+        all_closed(),
+        key=lambda row: row.get("closed_at") or row.get("timestamp") or "",
+        reverse=True,
+    )
+    if not closed:
+        return False
+
+    consecutive_sl = 0
+    latest_sl_time: datetime | None = None
+    for row in closed:
+        if row.get("status") != "SL":
+            break
+        consecutive_sl += 1
+        if latest_sl_time is None:
+            raw_time = row.get("closed_at") or row.get("timestamp")
+            if raw_time:
+                latest_sl_time = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00")).replace(tzinfo=None)
+
+    if consecutive_sl < MAX_CONSECUTIVE_STOP_LOSSES or latest_sl_time is None:
+        return False
+    return datetime.utcnow() - latest_sl_time < timedelta(hours=STOP_LOSS_PAUSE_HOURS)
 
 
 def operative_message(record: dict) -> str:
@@ -77,6 +103,11 @@ def scan_pair(pair: str) -> None:
     if record is None:
         logger.info("PAIR=%s MODE=%s DECISION=NO_DATA", pair, ACTIVE_MODE)
         return
+    if record["status"] == "OPEN" and stop_loss_circuit_breaker_active():
+        record["status"] = "REJECTED"
+        record["penalties"].append(
+            f"pausa automatica: {MAX_CONSECUTIVE_STOP_LOSSES} stop loss consecutivi nelle ultime {STOP_LOSS_PAUSE_HOURS}h"
+        )
     if record["status"] == "OPEN" and not daily_limits_ok(pair):
         record["status"] = "REJECTED"
         record["penalties"].append("limite giornaliero o duplicato entro 60 minuti")

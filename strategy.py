@@ -2,17 +2,41 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
 
-from config import ACTIVE_MODE, DIRECTION, ENFORCE_SETUP_RULES, EXCHANGE_NAME, MIN_NET_RR, TRADE_AMOUNT_EUR
+from config import ACTIVE_MODE, DIRECTION, ENFORCE_SETUP_RULES, EXCHANGE_NAME, MIN_NET_RR, TIMEFRAMES, TRADE_AMOUNT_EUR
 from indicators import classify_market_regime
 from risk import TradePlan, best_trade_plan
 from scoring import ScoreResult, score_long
 
 logger = logging.getLogger("crypto-bot.strategy")
+
+
+def timeframe_delta(timeframe: str) -> timedelta:
+    unit = timeframe[-1]
+    amount = int(timeframe[:-1])
+    if unit == "m":
+        return timedelta(minutes=amount)
+    if unit == "h":
+        return timedelta(hours=amount)
+    if unit == "d":
+        return timedelta(days=amount)
+    raise ValueError(f"Unsupported timeframe: {timeframe}")
+
+
+def closed_candles(data: pd.DataFrame, timeframe: str, now: datetime | None = None) -> pd.DataFrame:
+    """Return only candles that are fully closed for the given timeframe."""
+    if data.empty or "timestamp" not in data.columns:
+        return data
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    cutoff = now - timeframe_delta(timeframe)
+    timestamps = pd.to_datetime(data["timestamp"], utc=True)
+    return data[timestamps <= cutoff].copy()
 
 
 def signal_id(pair: str, when: datetime, mode: str) -> str:
@@ -37,6 +61,11 @@ def _btc_trend(btc_data: pd.DataFrame | None) -> str:
 
 def build_signal(pair: str, main: pd.DataFrame, confirm_1: pd.DataFrame, confirm_2: pd.DataFrame, btc: pd.DataFrame | None, mode: str = ACTIVE_MODE) -> dict[str, Any] | None:
     """Build an OPERATIVE/WATCHLIST/REJECTED signal record, or None for unusable data."""
+    timeframes = TIMEFRAMES[mode]
+    main = closed_candles(main, timeframes["main"])
+    confirm_1 = closed_candles(confirm_1, timeframes["confirm_1"])
+    confirm_2 = closed_candles(confirm_2, timeframes["confirm_2"])
+    btc = closed_candles(btc, timeframes["confirm_1"]) if btc is not None else None
     if min(len(main), len(confirm_1), len(confirm_2)) < 220:
         return None
     latest = main.iloc[-1]
@@ -111,10 +140,11 @@ def build_signal(pair: str, main: pd.DataFrame, confirm_1: pd.DataFrame, confirm
 
     if mode == "CONSERVATIVE":
         hard_penalties: list[str] = []
+        critical_penalties: list[str] = []
         if confirm_1.iloc[-1]["close"] <= confirm_1.iloc[-1]["ema200"]:
-            hard_penalties.append("trend 1h non sopra EMA200")
+            critical_penalties.append("trend 1h non sopra EMA200")
         if confirm_2.iloc[-1]["close"] <= confirm_2.iloc[-1]["ema200"]:
-            hard_penalties.append("trend 4h non sopra EMA200")
+            critical_penalties.append("trend 4h non sopra EMA200")
         if latest["close"] <= latest["ema200"]:
             hard_penalties.append("prezzo non sopra EMA200")
         if not (latest["ema20"] > latest["ema50"] > latest["ema200"]):
@@ -126,29 +156,38 @@ def build_signal(pair: str, main: pd.DataFrame, confirm_1: pd.DataFrame, confirm
         if latest["relative_volume"] < 1.0:
             hard_penalties.append("relative volume sotto 1.0")
         if record["btc_trend"] == "STRONG_BEARISH":
-            hard_penalties.append("BTC in forte trend ribassista")
+            critical_penalties.append("BTC in forte trend ribassista")
         if record["distance_resistance_pct"] <= 0.15:
-            hard_penalties.append("spazio verso resistenza insufficiente")
+            critical_penalties.append("spazio verso resistenza insufficiente")
+        if critical_penalties:
+            record["penalties"].extend(critical_penalties)
+            if record["status"] == "OPEN":
+                record["status"] = "WATCHLIST"
         if hard_penalties:
             record["penalties"].extend(hard_penalties)
             if ENFORCE_SETUP_RULES and record["status"] == "OPEN":
                 record["status"] = "WATCHLIST"
     else:
         hard_penalties = []
+        critical_penalties = []
         if not (confirm_1.iloc[-1]["close"] > confirm_1.iloc[-1]["ema200"] or latest["close"] > latest["ema200"]):
-            hard_penalties.append("trend 15m non favorevole e prezzo 5m non sopra EMA200")
+            critical_penalties.append("trend 15m non favorevole e prezzo 5m non sopra EMA200")
         if latest["ema20"] <= latest["ema50"]:
             hard_penalties.append("EMA20 <= EMA50 sul 5m")
         if not (48 <= latest["rsi14"] <= 68):
-            hard_penalties.append("RSI 5m fuori range 48-68")
+            critical_penalties.append("RSI 5m fuori range 48-68")
         if not (latest["macd_hist"] > 0 or latest["macd_hist"] > previous["macd_hist"]):
             hard_penalties.append("MACD histogram non positivo né crescente")
         if latest["relative_volume"] < 0.8:
             hard_penalties.append("volume sotto 0.8 della media 20")
         if record["distance_resistance_pct"] <= 0.15:
-            hard_penalties.append("spazio verso resistenza insufficiente per TP1")
+            critical_penalties.append("spazio verso resistenza insufficiente per TP1")
         if record["btc_trend"] == "STRONG_BEARISH":
-            hard_penalties.append("BTC in forte trend ribassista")
+            critical_penalties.append("BTC in forte trend ribassista")
+        if critical_penalties:
+            record["penalties"].extend(critical_penalties)
+            if record["status"] == "OPEN":
+                record["status"] = "WATCHLIST"
         if hard_penalties:
             record["penalties"].extend(hard_penalties)
             if ENFORCE_SETUP_RULES and record["status"] == "OPEN":

@@ -71,6 +71,8 @@ PAIRS=BTC/USD,ETH/USD,SOL/USD,LINK/USD,UNI/USD,AAVE/USD,LTC/USD,BCH/USD,AVAX/USD
 MAX_SIGNALS_PER_DAY=30
 MAX_SIGNALS_PER_PAIR_PER_DAY=3
 DUPLICATE_MINUTES=60
+MAX_CONSECUTIVE_STOP_LOSSES=3
+STOP_LOSS_PAUSE_HOURS=12
 ```
 
 ## Avvio locale
@@ -216,6 +218,27 @@ Collegamento: risposta al segnale originale
 ```
 
 
+
+
+## Entry e candele chiuse
+
+Il bot non usa più l'ultima candela se è ancora in formazione. Prima di calcolare il segnale, filtra i dati e considera solo candele completamente chiuse per ogni timeframe (`5m`, `15m`, `1h` o `4h`). In modalità `SCALPING_FAST`, quindi, l'entry teorica deriva dalla chiusura dell'ultima candela 5m chiusa, mentre le conferme usano solo candele 15m e 1h già chiuse.
+
+Questo evita segnali falsati da high/low/close provvisori della candela corrente.
+
+## Protezione dopo troppi Stop Loss
+
+Per evitare di continuare a inviare operativi in una fase negativa, il bot ora ha una pausa automatica configurabile. Se gli ultimi trade chiusi sono tutti Stop Loss e raggiungono la soglia `MAX_CONSECUTIVE_STOP_LOSSES`, i nuovi setup operativi vengono salvati come `REJECTED` per `STOP_LOSS_PAUSE_HOURS` ore.
+
+Default consigliato:
+
+```env
+MAX_CONSECUTIVE_STOP_LOSSES=3
+STOP_LOSS_PAUSE_HOURS=12
+```
+
+Inoltre, anche con `ENFORCE_SETUP_RULES=false`, alcune condizioni critiche continuano a bloccare il passaggio a operativo, per esempio trend non favorevole, RSI fuori range, BTC in forte trend ribassista o spazio insufficiente verso TP1. Le regole secondarie restano invece penalità informative.
+
 ## Collegamento TP1/SL al segnale originale
 
 Ogni segnale operativo contiene un `ID Segnale` e, quando Telegram restituisce il `message_id`, il bot lo salva nel database SQLite. Quando arriva un messaggio TP1 o SL, il bot usa quel `message_id` come `reply_to_message_id`: su Telegram vedrai quindi l'esito come risposta diretta al segnale originale.
@@ -288,5 +311,5 @@ Metriche incluse: numero trade, win rate, profit factor, expectancy, max drawdow
 - Se una pair non è disponibile su Kraken, nei log vedrai un warning e la scansione continuerà.
 - SQLite su Railway è adatto a una prima versione, ma può essere resettato con redeploy/container nuovi; per storico permanente valuta un volume persistente o PostgreSQL.
 - Con `ENABLE_WATCHLIST_ALERTS=false` il bot non manda notifiche watchlist: Telegram resta pulito e ricevi solo operativi, esiti e report.
-- Con `ENFORCE_SETUP_RULES=false` il bot è meno restrittivo: i setup con score operativo e piano RR valido diventano operativi anche se hanno penalità secondarie. Per tornare a una modalità più rigida, imposta `ENFORCE_SETUP_RULES=true`.
+- Con `ENFORCE_SETUP_RULES=false` il bot è meno restrittivo sulle penalità secondarie, ma le condizioni critiche continuano a bloccare i segnali più deboli. Per tornare a una modalità ancora più rigida, imposta `ENFORCE_SETUP_RULES=true`.
 - I prezzi nei messaggi sono formattati con almeno 4 decimali, e 6 decimali per crypto sotto 1 euro/dollaro.

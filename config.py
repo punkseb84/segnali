@@ -100,6 +100,8 @@ TIMEFRAMES: Final[dict[str, dict[str, str]]] = {
 MAX_SIGNALS_PER_DAY: Final[int] = _int_env("MAX_SIGNALS_PER_DAY", 30)
 MAX_SIGNALS_PER_PAIR_PER_DAY: Final[int] = _int_env("MAX_SIGNALS_PER_PAIR_PER_DAY", 3)
 DUPLICATE_MINUTES: Final[int] = _int_env("DUPLICATE_MINUTES", 60)
+MAX_CONSECUTIVE_STOP_LOSSES: Final[int] = _int_env("MAX_CONSECUTIVE_STOP_LOSSES", 3)
+STOP_LOSS_PAUSE_HOURS: Final[int] = _int_env("STOP_LOSS_PAUSE_HOURS", 12)
 
 KRAKEN_API_BASE: Final[str] = "https://api.kraken.com/0/public"
 EXCHANGE_NAME: Final[str] = "Kraken"
