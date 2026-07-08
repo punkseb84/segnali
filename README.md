@@ -22,9 +22,49 @@ Bot Python pronto per Railway che analizza OHLC Kraken, genera segnali **LONG sp
 - `Procfile` — Railway worker.
 
 
+
+## Project Alpha
+
+Project Alpha è la nuova modalità di ricerca basata su price action, market structure e liquidità. Quando `PROJECT_ALPHA_RESEARCH_MODE=true`, il bot **non invia segnali live** e genera soltanto file di ricerca:
+
+- `alpha_research_report.csv`;
+- `alpha_research_summary.txt`.
+
+Strategie testate in `research_alpha.py`:
+
+1. Liquidity Sweep Long;
+2. Breakout Retest Long;
+3. Pullback Trend Long;
+4. Range Reversal Long.
+
+Il modulo costruisce una market map con swing high/low, supporti, resistenze, liquidity pool, range, volatilità ATR e volume relativo. Gli indicatori non sono usati come trigger principali: ATR, ADX, volume relativo ed EMA servono solo come filtri/contesto.
+
+Criteri di validazione Project Alpha:
+
+- almeno 100 trade nel training;
+- profit factor training > 1.20;
+- win rate training > 52%;
+- expectancy training positiva;
+- validation profittevole;
+- profit factor validation > 1.10.
+
+Se nessuna strategia supera questi criteri, il summary scrive:
+
+```text
+NESSUN EDGE VALIDATO
+```
+
+Comando manuale per eseguire solo la ricerca Alpha:
+
+```bash
+python research_alpha.py
+```
+
+Per sicurezza, `ENABLE_LIVE_SIGNALS=false` impedisce la riattivazione accidentale dei segnali operativi.
+
 ## Research Mode
 
-Per impostazione predefinita il bot parte in `RESEARCH_MODE=true`. In questa modalità il worker **non invia segnali operativi live**: scarica dati OHLC Kraken, testa strategie storiche, separa i risultati in 70% training e 30% validation e genera un report di ricerca.
+La vecchia modalità `RESEARCH_MODE` rimane disponibile ma non è più la modalità principale: Project Alpha usa `PROJECT_ALPHA_RESEARCH_MODE=true` e `RESEARCH_MODE=false`. Se in futuro vuoi eseguire la ricerca precedente basata su combinazioni più classiche, puoi impostare `PROJECT_ALPHA_RESEARCH_MODE=false` e `RESEARCH_MODE=true`.
 
 Criteri minimi per dichiarare edge statistico:
 
@@ -52,14 +92,20 @@ Strategie testate:
 Variabili principali:
 
 ```env
-RESEARCH_MODE=true
+PROJECT_ALPHA_RESEARCH_MODE=true
+ENABLE_LIVE_SIGNALS=false
+RESEARCH_MODE=false
 RESEARCH_OHLC_LIMIT=720
 RESEARCH_MIN_TRADES=200
 RESEARCH_TIMEFRAMES=5m,15m,1h
 RESEARCH_INTERVAL_SECONDS=86400
+ALPHA_PAIRS=BTC/USD,ETH/USD,SOL/USD,LINK/USD,UNI/USD,AAVE/USD,AVAX/USD,XRP/USD
+ALPHA_TIMEFRAMES=5m,15m,1h
+ALPHA_REPORT_CSV=alpha_research_report.csv
+ALPHA_REPORT_SUMMARY=alpha_research_summary.txt
 ```
 
-Per riattivare i segnali live in futuro, imposta `RESEARCH_MODE=false`, ma solo dopo aver validato una strategia con edge statistico.
+Per riattivare i segnali live in futuro servono entrambe le condizioni: `PROJECT_ALPHA_RESEARCH_MODE=false` e `ENABLE_LIVE_SIGNALS=true`, ma solo dopo aver validato una strategia con edge statistico.
 
 ## Modalità
 
@@ -92,11 +138,17 @@ TELEGRAM_BOT_TOKEN=123456789:token_del_bot
 TELEGRAM_CHAT_ID=123456789
 # Opzionale: username gruppo/canale pubblico senza @ per link cliccabili
 TELEGRAM_CHAT_USERNAME=
-RESEARCH_MODE=true
+PROJECT_ALPHA_RESEARCH_MODE=true
+ENABLE_LIVE_SIGNALS=false
+RESEARCH_MODE=false
 RESEARCH_OHLC_LIMIT=720
 RESEARCH_MIN_TRADES=200
 RESEARCH_TIMEFRAMES=5m,15m,1h
 RESEARCH_INTERVAL_SECONDS=86400
+ALPHA_PAIRS=BTC/USD,ETH/USD,SOL/USD,LINK/USD,UNI/USD,AAVE/USD,AVAX/USD,XRP/USD
+ALPHA_TIMEFRAMES=5m,15m,1h
+ALPHA_REPORT_CSV=alpha_research_report.csv
+ALPHA_REPORT_SUMMARY=alpha_research_summary.txt
 MODE=CONSERVATIVE
 TRADE_AMOUNT_EUR=100.0
 FEE_BUY_PERCENT=0.10

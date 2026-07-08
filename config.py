@@ -50,6 +50,8 @@ TELEGRAM_BOT_TOKEN: Final[str] = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID: Final[str] = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_CHAT_USERNAME: Final[str] = os.getenv("TELEGRAM_CHAT_USERNAME", "").strip().lstrip("@")
 RESEARCH_MODE: Final[bool] = _bool_env("RESEARCH_MODE", True)
+PROJECT_ALPHA_RESEARCH_MODE: Final[bool] = _bool_env("PROJECT_ALPHA_RESEARCH_MODE", True)
+ENABLE_LIVE_SIGNALS: Final[bool] = _bool_env("ENABLE_LIVE_SIGNALS", False)
 
 SUPPORTED_MODES: Final[tuple[str, ...]] = ("CONSERVATIVE", "SCALPING_FAST")
 MODE: Final[str] = os.getenv("MODE", "CONSERVATIVE").strip().upper()
@@ -115,6 +117,10 @@ MAX_CONSECUTIVE_STOP_LOSSES: Final[int] = _int_env("MAX_CONSECUTIVE_STOP_LOSSES"
 STOP_LOSS_PAUSE_HOURS: Final[int] = _int_env("STOP_LOSS_PAUSE_HOURS", 12)
 
 RESEARCH_TIMEFRAMES: Final[list[str]] = _timeframe_list_env("RESEARCH_TIMEFRAMES", ["5m", "15m", "1h"])
+ALPHA_PAIRS: Final[list[str]] = _list_env("ALPHA_PAIRS", ["BTC/USD", "ETH/USD", "SOL/USD", "LINK/USD", "UNI/USD", "AAVE/USD", "AVAX/USD", "XRP/USD"])
+ALPHA_TIMEFRAMES: Final[list[str]] = _timeframe_list_env("ALPHA_TIMEFRAMES", ["5m", "15m", "1h"])
+ALPHA_REPORT_CSV: Final[str] = os.getenv("ALPHA_REPORT_CSV", "alpha_research_report.csv").strip()
+ALPHA_REPORT_SUMMARY: Final[str] = os.getenv("ALPHA_REPORT_SUMMARY", "alpha_research_summary.txt").strip()
 
 KRAKEN_API_BASE: Final[str] = "https://api.kraken.com/0/public"
 EXCHANGE_NAME: Final[str] = "Kraken"
