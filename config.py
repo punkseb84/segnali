@@ -44,8 +44,8 @@ TELEGRAM_CHAT_ID: Final[str] = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_CHAT_USERNAME: Final[str] = os.getenv("TELEGRAM_CHAT_USERNAME", "").strip().lstrip("@")
 
 SUPPORTED_MODES: Final[tuple[str, ...]] = ("CONSERVATIVE", "SCALPING_FAST")
-MODE: Final[str] = os.getenv("MODE", "SCALPING_FAST").strip().upper()
-ACTIVE_MODE: Final[str] = MODE if MODE in SUPPORTED_MODES else "SCALPING_FAST"
+MODE: Final[str] = os.getenv("MODE", "CONSERVATIVE").strip().upper()
+ACTIVE_MODE: Final[str] = MODE if MODE in SUPPORTED_MODES else "CONSERVATIVE"
 
 TRADE_AMOUNT_EUR: Final[float] = _float_env("TRADE_AMOUNT_EUR", 100.0)
 FEE_BUY_PERCENT: Final[float] = _float_env("FEE_BUY_PERCENT", 0.10)

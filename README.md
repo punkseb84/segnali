@@ -23,6 +23,8 @@ Bot Python pronto per Railway che analizza OHLC Kraken, genera segnali **LONG sp
 
 ## Modalità
 
+La modalità predefinita è `CONSERVATIVE`. Per tornare allo scalping veloce, imposta `MODE=SCALPING_FAST` su Railway.
+
 ### SCALPING_FAST
 
 - Timeframe principale: `5m`
@@ -50,7 +52,7 @@ TELEGRAM_BOT_TOKEN=123456789:token_del_bot
 TELEGRAM_CHAT_ID=123456789
 # Opzionale: username gruppo/canale pubblico senza @ per link cliccabili
 TELEGRAM_CHAT_USERNAME=
-MODE=SCALPING_FAST
+MODE=CONSERVATIVE
 TRADE_AMOUNT_EUR=100.0
 FEE_BUY_PERCENT=0.10
 FEE_SELL_PERCENT=0.10
@@ -303,7 +305,7 @@ Metriche incluse: numero trade, win rate, profit factor, expectancy, max drawdow
 4. Railway rileverà Python e userà il `Procfile`.
 5. Inserisci le variabili ambiente.
 6. Avvia il deploy.
-7. Nei log dovresti vedere righe tipo `PAIR=SOL/USD MODE=SCALPING_FAST ...`.
+7. Nei log dovresti vedere righe tipo `PAIR=SOL/USD MODE=CONSERVATIVE ...`.
 
 ## Note operative
 
