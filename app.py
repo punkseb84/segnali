@@ -6,11 +6,12 @@ import sys
 import time
 from datetime import datetime, timedelta
 
-from config import ACTIVE_MODE, DUPLICATE_MINUTES, ENABLE_WATCHLIST_ALERTS, LOOP_SLEEP_SECONDS, MAX_CONSECUTIVE_STOP_LOSSES, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_LIMIT, PAIRS, STOP_LOSS_PAUSE_HOURS, TIMEFRAMES
+from config import ACTIVE_MODE, DUPLICATE_MINUTES, ENABLE_WATCHLIST_ALERTS, LOOP_SLEEP_SECONDS, MAX_CONSECUTIVE_STOP_LOSSES, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_LIMIT, PAIRS, RESEARCH_INTERVAL_SECONDS, RESEARCH_MODE, STOP_LOSS_PAUSE_HOURS, TIMEFRAMES
 from exchange import fetch_ohlc
 from indicators import add_indicators, classify_market_regime
 from monitor import monitor_open_trades
 from reporter import maybe_send_daily_report
+from research import run_research
 from strategy import build_signal
 from telegram_bot import send_message
 from trade_store import all_closed, init_db, insert_signal, signals_since, update_signal_telegram_message_id
@@ -142,7 +143,21 @@ def scan_pair(pair: str) -> None:
             )
 
 
+
+def run_research_worker() -> None:
+    init_db()
+    logger.info("RESEARCH_MODE enabled: live operative signals are disabled")
+    while True:
+        report = run_research()
+        logger.info("Research report generated:\n%s", report)
+        send_message(report)
+        time.sleep(RESEARCH_INTERVAL_SECONDS)
+
+
 def main() -> None:
+    if RESEARCH_MODE:
+        run_research_worker()
+        return
     init_db()
     send_message(f"🤖 Crypto bot avviato su Kraken. Modalità: {ACTIVE_MODE}")
     while True:

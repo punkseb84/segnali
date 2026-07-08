@@ -32,6 +32,13 @@ def _bool_env(name: str, default: bool) -> bool:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
+
+def _timeframe_list_env(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    return [item.strip().lower() for item in raw.split(",") if item.strip()]
+
 def _list_env(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name)
     if not raw:
@@ -42,6 +49,7 @@ def _list_env(name: str, default: list[str]) -> list[str]:
 TELEGRAM_BOT_TOKEN: Final[str] = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID: Final[str] = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_CHAT_USERNAME: Final[str] = os.getenv("TELEGRAM_CHAT_USERNAME", "").strip().lstrip("@")
+RESEARCH_MODE: Final[bool] = _bool_env("RESEARCH_MODE", True)
 
 SUPPORTED_MODES: Final[tuple[str, ...]] = ("CONSERVATIVE", "SCALPING_FAST")
 MODE: Final[str] = os.getenv("MODE", "CONSERVATIVE").strip().upper()
@@ -64,6 +72,9 @@ MIN_WATCHLIST_SCORE_SCALPING: Final[int] = _int_env("MIN_WATCHLIST_SCORE_SCALPIN
 DAILY_REPORT_HOUR: Final[int] = _int_env("DAILY_REPORT_HOUR", 9)
 LOOP_SLEEP_SECONDS: Final[int] = _int_env("LOOP_SLEEP_SECONDS", 300)
 OHLC_LIMIT: Final[int] = _int_env("OHLC_LIMIT", 300)
+RESEARCH_OHLC_LIMIT: Final[int] = _int_env("RESEARCH_OHLC_LIMIT", 720)
+RESEARCH_MIN_TRADES: Final[int] = _int_env("RESEARCH_MIN_TRADES", 200)
+RESEARCH_INTERVAL_SECONDS: Final[int] = _int_env("RESEARCH_INTERVAL_SECONDS", 86400)
 DATABASE_PATH: Final[Path] = Path(os.getenv("DATABASE_PATH", "signals.db"))
 
 PAIRS: Final[list[str]] = _list_env(
@@ -102,6 +113,8 @@ MAX_SIGNALS_PER_PAIR_PER_DAY: Final[int] = _int_env("MAX_SIGNALS_PER_PAIR_PER_DA
 DUPLICATE_MINUTES: Final[int] = _int_env("DUPLICATE_MINUTES", 60)
 MAX_CONSECUTIVE_STOP_LOSSES: Final[int] = _int_env("MAX_CONSECUTIVE_STOP_LOSSES", 3)
 STOP_LOSS_PAUSE_HOURS: Final[int] = _int_env("STOP_LOSS_PAUSE_HOURS", 12)
+
+RESEARCH_TIMEFRAMES: Final[list[str]] = _timeframe_list_env("RESEARCH_TIMEFRAMES", ["5m", "15m", "1h"])
 
 KRAKEN_API_BASE: Final[str] = "https://api.kraken.com/0/public"
 EXCHANGE_NAME: Final[str] = "Kraken"

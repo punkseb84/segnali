@@ -21,6 +21,46 @@ Bot Python pronto per Railway che analizza OHLC Kraken, genera segnali **LONG sp
 - `requirements.txt` — dipendenze Python.
 - `Procfile` — Railway worker.
 
+
+## Research Mode
+
+Per impostazione predefinita il bot parte in `RESEARCH_MODE=true`. In questa modalità il worker **non invia segnali operativi live**: scarica dati OHLC Kraken, testa strategie storiche, separa i risultati in 70% training e 30% validation e genera un report di ricerca.
+
+Criteri minimi per dichiarare edge statistico:
+
+- almeno `RESEARCH_MIN_TRADES`, default 200 trade;
+- win rate TP1 > 55%;
+- profit factor > 1.25;
+- expectancy positiva;
+- validation set ancora profittevole.
+
+Se nessuna configurazione supera i criteri, il report scrive chiaramente:
+
+```text
+NESSUN EDGE STATISTICO TROVATO
+```
+
+Strategie testate:
+
+1. Breakout trend-following;
+2. Pullback su EMA20/EMA50;
+3. Mean reversion in mercato laterale;
+4. Momentum dopo volume spike;
+5. Continuation dopo candela forte;
+6. Momentum filtrato per evitare trade contro trend BTC.
+
+Variabili principali:
+
+```env
+RESEARCH_MODE=true
+RESEARCH_OHLC_LIMIT=720
+RESEARCH_MIN_TRADES=200
+RESEARCH_TIMEFRAMES=5m,15m,1h
+RESEARCH_INTERVAL_SECONDS=86400
+```
+
+Per riattivare i segnali live in futuro, imposta `RESEARCH_MODE=false`, ma solo dopo aver validato una strategia con edge statistico.
+
 ## Modalità
 
 La modalità predefinita è `CONSERVATIVE`. Per tornare allo scalping veloce, imposta `MODE=SCALPING_FAST` su Railway.
@@ -52,6 +92,11 @@ TELEGRAM_BOT_TOKEN=123456789:token_del_bot
 TELEGRAM_CHAT_ID=123456789
 # Opzionale: username gruppo/canale pubblico senza @ per link cliccabili
 TELEGRAM_CHAT_USERNAME=
+RESEARCH_MODE=true
+RESEARCH_OHLC_LIMIT=720
+RESEARCH_MIN_TRADES=200
+RESEARCH_TIMEFRAMES=5m,15m,1h
+RESEARCH_INTERVAL_SECONDS=86400
 MODE=CONSERVATIVE
 TRADE_AMOUNT_EUR=100.0
 FEE_BUY_PERCENT=0.10
