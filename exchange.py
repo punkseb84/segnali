@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 import requests
 
-from config import KRAKEN_API_BASE
+from config import KRAKEN_API_BASE, KRAKEN_API_SLEEP_SECONDS, KRAKEN_MAX_RETRIES, KRAKEN_TIMEOUT_SECONDS
 
 logger = logging.getLogger("crypto-bot.exchange")
 
@@ -27,8 +27,10 @@ def kraken_pair(pair: str) -> str:
     return pair.replace("/", "")
 
 
-def fetch_ohlc(pair: str, timeframe: str, limit: int = 300, retries: int = 3, timeout: int = 20) -> pd.DataFrame:
+def fetch_ohlc(pair: str, timeframe: str, limit: int = 300, retries: int | None = None, timeout: int | None = None) -> pd.DataFrame:
     """Fetch Kraken OHLC candles and return timestamp/open/high/low/close/volume."""
+    retries = KRAKEN_MAX_RETRIES if retries is None else retries
+    timeout = KRAKEN_TIMEOUT_SECONDS if timeout is None else timeout
     interval = _TIMEFRAME_TO_MINUTES.get(timeframe)
     if interval is None:
         raise ValueError(f"Unsupported timeframe: {timeframe}")
@@ -59,10 +61,11 @@ def fetch_ohlc(pair: str, timeframe: str, limit: int = 300, retries: int = 3, ti
             frame["timestamp"] = pd.to_datetime(frame["timestamp"].astype(int), unit="s", utc=True)
             for column in ["open", "high", "low", "close", "volume"]:
                 frame[column] = frame[column].astype(float)
+            time.sleep(KRAKEN_API_SLEEP_SECONDS)
             return frame.reset_index(drop=True)
         except (requests.RequestException, ValueError) as exc:
             last_error = exc
             logger.warning("Kraken fetch failed for %s %s attempt %s/%s: %s", pair, timeframe, attempt, retries, exc)
-            time.sleep(attempt * 2)
+            time.sleep(KRAKEN_API_SLEEP_SECONDS + attempt * 2)
     logger.error("Kraken fetch failed permanently for %s %s: %s", pair, timeframe, last_error)
     return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])

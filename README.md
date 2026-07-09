@@ -412,3 +412,126 @@ Metriche incluse: numero trade, win rate, profit factor, expectancy, max drawdow
 - Con `ENABLE_WATCHLIST_ALERTS=false` il bot non manda notifiche watchlist: Telegram resta pulito e ricevi solo operativi, esiti e report.
 - Con `ENFORCE_SETUP_RULES=false` il bot è meno restrittivo sulle penalità secondarie, ma le condizioni critiche continuano a bloccare i segnali più deboli. Per tornare a una modalità ancora più rigida, imposta `ENFORCE_SETUP_RULES=true`.
 - I prezzi nei messaggi sono formattati con almeno 4 decimali, e 6 decimali per crypto sotto 1 euro/dollaro.
+
+## Quant Research Engine e Railway Volume
+
+Il progetto ora nasce come **Quant Research Engine**: non si limita più a generare segnali o a scrivere `NESSUN EDGE VALIDATO`, ma esegue una ricerca massiva su strategie, pair, timeframe, regimi di mercato e parametri tecnici per individuare combinazioni quasi profittevoli e aree da approfondire.
+
+### Modalità operative
+
+Configura `RUN_MODE`:
+
+```env
+RUN_MODE=RESEARCH
+ENABLE_LIVE_SIGNALS=false
+```
+
+Valori disponibili:
+
+- `RESEARCH` — sincronizza i dati OHLC mancanti, esegue la ricerca quantitativa in batch, salva tutti i risultati e produce report/CSV.
+- `SYNC_DATA` — aggiorna solo il database OHLC locale, senza backtest e senza inviare segnali.
+- `LIVE` — usa la parte live del bot; invia segnali solo se `ENABLE_LIVE_SIGNALS=True`.
+
+Di default il progetto usa `RUN_MODE=RESEARCH` e `ENABLE_LIVE_SIGNALS=false`.
+
+### Persistenza SQLite su Railway
+
+Railway può perdere i file locali quando il container viene ricreato. Per conservare database e report:
+
+1. Crea un **Railway Volume**.
+2. Montalo sul path `/data`.
+3. Imposta la variabile:
+
+```env
+DATA_DIR=/data
+```
+
+4. Per ricerca quantitativa:
+
+```env
+RUN_MODE=RESEARCH
+```
+
+5. Per aggiornare solo i dati storici:
+
+```env
+RUN_MODE=SYNC_DATA
+```
+
+6. Per modalità live:
+
+```env
+RUN_MODE=LIVE
+ENABLE_LIVE_SIGNALS=True
+```
+
+Se il volume non è montato, il bot usa automaticamente `./data` come fallback e scrive nei log:
+
+```text
+WARNING: persistent volume not detected, data may be lost on redeploy
+```
+
+I percorsi usati sono configurati in `config.py`:
+
+```python
+DATA_DIR = os.getenv("DATA_DIR", "/data")
+OHLC_DB_PATH = os.path.join(DATA_DIR, "ohlc_cache.sqlite")
+RESEARCH_DB_PATH = os.path.join(DATA_DIR, "research_database.sqlite")
+EXPORT_DIR = os.path.join(DATA_DIR, "exports")
+```
+
+### Database OHLC locale
+
+Il motore usa `ohlc_cache.sqlite` per non scaricare continuamente le stesse candele da Kraken. La tabella `ohlc_data` salva:
+
+- exchange;
+- pair;
+- timeframe;
+- timestamp;
+- open/high/low/close;
+- volume;
+- created_at.
+
+È presente un indice unico su `exchange + pair + timeframe + timestamp`. Le funzioni principali sono:
+
+- `sync_ohlc_cache(pair, timeframe, start_date, end_date)`;
+- `get_ohlc_from_cache(pair, timeframe, start_date, end_date)`;
+- `update_missing_ohlc(pair, timeframe)`.
+
+Tutti i backtest del Quant Research Engine leggono dal cache SQLite e scaricano da Kraken solo quando mancano dati sufficienti.
+
+### Ricerca massiva in batch
+
+La ricerca combina automaticamente:
+
+- strategie: Breakout Retest, Pullback Trend, Liquidity Sweep, Range Reversal, Momentum Breakout, Compression Breakout, Volatility Expansion, Mean Reversion;
+- timeframe: `5m`, `15m`, `30m`, `1h`, `4h`;
+- pair: BTC, ETH, SOL, LINK, UNI, AAVE, AVAX, TAO, XRP, ADA, DOGE;
+- RSI, ATR, ADX, Relative Volume, Reward/Risk e regime di mercato.
+
+Variabili Railway consigliate:
+
+```env
+RESEARCH_BATCH_SIZE=250
+MAX_RESEARCH_RUNTIME_MINUTES=45
+RESUME_RESEARCH=True
+KRAKEN_API_SLEEP_SECONDS=1.2
+KRAKEN_MAX_RETRIES=3
+KRAKEN_TIMEOUT_SECONDS=20
+```
+
+La tabella `research_progress` salva avanzamento, batch corrente, totale combinazioni, combinazioni processate, ultimo strategy/pair/timeframe e stato. Se Railway interrompe il processo, al riavvio `RESUME_RESEARCH=True` riprende dal batch successivo.
+
+### Output generati
+
+Il motore salva tutto in `research_database.sqlite`, tabella `strategy_results`, senza scartare le strategie non validate. Genera inoltre:
+
+- `top100_profit_factor.csv`;
+- `top100_expectancy.csv`;
+- `top100_winrate.csv`;
+- `top100_sharpe.csv`;
+- `top100_netprofit.csv`;
+- `top100_lowest_drawdown.csv`;
+- `research_summary.txt`.
+
+Il report include TOP strategie, TOP pair, TOP timeframe, TOP strategy, TOP regimi, motivi di mancata validazione e suggerimenti automatici su parametri, pair, timeframe e strategie da approfondire. Il software non modifica automaticamente il bot live.
