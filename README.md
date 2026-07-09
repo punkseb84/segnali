@@ -745,3 +745,24 @@ Questo evita di mantenere milioni di combinazioni in memoria e permette a Railwa
 ### Nota sul warning volume persistente
 
 In `RUN_MODE=RAILWAY_LIGHT` la piattaforma usa PostgreSQL come storage primario e quindi non deve richiedere un volume `/data` per i database principali. Il warning sul volume persistente rimane attivo solo per i run mode legacy/locali che usano SQLite (`RESEARCH` o `SYNC_DATA`).
+
+### Avvio RAILWAY_LIGHT e PostgreSQL obbligatorio
+
+In `RUN_MODE=RAILWAY_LIGHT` PostgreSQL è obbligatorio. All'avvio la piattaforma legge `DATABASE_URL` dalle variabili Railway; se manca, il processo si ferma con errore chiaro:
+
+```text
+DATABASE_URL missing: Railway PostgreSQL is required in RAILWAY_LIGHT mode
+```
+
+I log di startup non mostrano più percorsi SQLite come database principali in `RAILWAY_LIGHT`. Mostrano invece:
+
+```text
+RUN_MODE=RAILWAY_LIGHT
+DATABASE_URL detected: yes/no
+PostgreSQL connection: OK/FAILED
+PostgreSQL host=<host> database=<database>
+Storage backend: PostgreSQL
+SQLite cache: enabled/disabled
+```
+
+La password di `DATABASE_URL` non viene mai stampata. Se la connessione PostgreSQL è valida, le migrazioni creano automaticamente le tabelle mancanti prima di avviare scheduler, Data Collector e Research Engine.

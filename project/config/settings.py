@@ -41,6 +41,7 @@ def _list_env(name: str, default: list[str]) -> list[str]:
 class PlatformSettings:
     run_mode: str = os.getenv("RUN_MODE", "RAILWAY_LIGHT").strip().upper()
     database_url: str = os.getenv("DATABASE_URL", "")
+    sqlite_cache_enabled: bool = _bool_env("SQLITE_CACHE_ENABLED", False)
     exchange_name: str = os.getenv("EXCHANGE_NAME", "Kraken")
     kraken_api_base: str = os.getenv("KRAKEN_API_BASE", "https://api.kraken.com/0/public")
     kraken_api_sleep_seconds: float = _float_env("KRAKEN_API_SLEEP_SECONDS", 1.2)

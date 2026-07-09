@@ -49,6 +49,7 @@ def _list_env(name: str, default: list[str]) -> list[str]:
 TELEGRAM_BOT_TOKEN: Final[str] = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID: Final[str] = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_CHAT_USERNAME: Final[str] = os.getenv("TELEGRAM_CHAT_USERNAME", "").strip().lstrip("@")
+DATABASE_URL: Final[str] = os.getenv("DATABASE_URL", "").strip()
 RESEARCH_MODE: Final[bool] = _bool_env("RESEARCH_MODE", True)
 PROJECT_ALPHA_RESEARCH_MODE: Final[bool] = _bool_env("PROJECT_ALPHA_RESEARCH_MODE", True)
 ENABLE_LIVE_SIGNALS: Final[bool] = _bool_env("ENABLE_LIVE_SIGNALS", False)

@@ -10,7 +10,7 @@ from project.data_collector.kraken_client import KrakenOhlcClient
 from project.data_collector.repository import MarketDataRepository
 from project.data_collector.service import DataCollectorService
 from project.database.migrations import run_migrations
-from project.database.postgres import PostgresClient, PostgresConfig
+from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
 from project.scheduler import PlatformScheduler
@@ -18,10 +18,35 @@ from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 
 
+RAILWAY_LIGHT_MISSING_DATABASE_URL = "DATABASE_URL missing: Railway PostgreSQL is required in RAILWAY_LIGHT mode"
+
+
 def build_postgres(settings: PlatformSettings) -> PostgresClient:
+    if settings.run_mode == "RAILWAY_LIGHT" and not settings.database_url:
+        raise PostgresUnavailableError(RAILWAY_LIGHT_MISSING_DATABASE_URL)
     postgres = PostgresClient(PostgresConfig(settings.database_url))
+    postgres.test_connection()
     run_migrations(postgres)
     return postgres
+
+
+def log_storage_startup(settings: PlatformSettings, logger) -> None:
+    logger.info("RUN_MODE=%s", settings.run_mode)
+    logger.info("DATABASE_URL detected: %s", "yes" if settings.database_url else "no")
+    logger.info("Storage backend: PostgreSQL" if settings.run_mode == "RAILWAY_LIGHT" else "Storage backend: configured by RUN_MODE")
+    if settings.database_url:
+        logger.info("PostgreSQL %s", parse_postgres_connection_info(settings.database_url).display())
+    logger.info("SQLite cache: %s", "enabled" if settings.sqlite_cache_enabled else "disabled")
+
+
+def log_postgres_success(postgres: PostgresClient, logger) -> None:
+    logger.info("PostgreSQL connection: OK")
+    logger.info("PostgreSQL %s", postgres.connection_info.display())
+
+
+def log_postgres_failure(exc: Exception, logger) -> None:
+    logger.error("PostgreSQL connection: FAILED")
+    logger.error("%s", exc)
 
 
 def build_data_collector(settings: PlatformSettings, event_bus: EventBus, postgres: PostgresClient) -> DataCollectorService:
@@ -49,16 +74,24 @@ def main() -> None:
     settings = load_settings()
     logger = get_module_logger("system")
     event_bus = EventBus()
+    log_storage_startup(settings, logger)
     logger.info(
-        "Starting modular quant platform | run_mode=%s collector=%s research=%s decision=%s strategy=%s notification=%s",
-        settings.run_mode,
+        "Starting modular quant platform | collector=%s research=%s decision=%s strategy=%s notification=%s",
         settings.enable_data_collector,
         settings.enable_research_engine,
         settings.enable_decision_engine,
         settings.enable_strategy_engine,
         settings.enable_notification_engine,
     )
-    postgres = build_postgres(settings)
+    try:
+        postgres = build_postgres(settings)
+    except PostgresUnavailableError as exc:
+        log_postgres_failure(exc, logger)
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        log_postgres_failure(exc, logger)
+        raise
+    log_postgres_success(postgres, logger)
     data_collector = build_data_collector(settings, event_bus, postgres) if settings.enable_data_collector else None
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
     scheduler = PlatformScheduler(settings, data_collector, research_engine)
