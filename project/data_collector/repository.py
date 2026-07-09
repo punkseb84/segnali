@@ -61,13 +61,12 @@ class MarketDataRepository:
             (self.exchange, pair, timeframe, row.timestamp.to_pydatetime(), row.open, row.high, row.low, row.close, row.volume)
             for row in frame.itertuples(index=False)
         ]
-        self.client.executemany(
+        return self.client.executemany(
             """INSERT INTO market_data.ohlc(exchange, pair, timeframe, timestamp, open, high, low, close, volume)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(exchange, pair, timeframe, timestamp) DO NOTHING""",
             rows,
         )
-        return len(rows)
 
     def write_sync_log(self, pair: str, timeframe: str, started_at: datetime, status: str, rows_inserted: int, error: str | None = None) -> None:
         self.client.execute(

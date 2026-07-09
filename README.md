@@ -780,3 +780,24 @@ All'avvio `project.main` esegue un bootstrap PostgreSQL prima di continuare con 
 5. log `Database bootstrap SUCCESS`.
 
 Solo dopo il bootstrap vengono eseguite le migrazioni. Al termine vengono stampati `Migration completed` e la lista delle tabelle/schema previsti. Subito dopo viene verificato il Data Collector con una sola candela `BTC/USD` `5m` (`OHLC write OK`, `OHLC read OK`) e viene verificata la persistenza research con un record fittizio in `research.strategy_results` (`Research write OK`, `Research read OK`). Se una qualsiasi operazione fallisce viene stampato traceback completo e il processo termina.
+
+## Avanzamento operativo dopo bootstrap
+
+Dopo la verifica infrastrutturale, `RAILWAY_LIGHT` può ridurre il rumore diagnostico impostando:
+
+```env
+ENABLE_BOOTSTRAP_TEST=false
+```
+
+Con il bootstrap diagnostico disabilitato, la piattaforma continua comunque a testare la connessione PostgreSQL, eseguire le migrazioni e avviare lo scheduler, ma non inserisce più righe diagnostiche in `startup_test`, `market_data.ohlc` e `research.strategy_results` ad ogni avvio.
+
+Il Data Collector ora emette log operativi più chiari:
+
+```text
+DATA COLLECTOR START pair=BTC/USD timeframe=5m
+DATA COLLECTOR latest_timestamp pair=BTC/USD timeframe=5m latest=...
+DATA COLLECTOR OK pair=BTC/USD timeframe=5m downloaded_candles=... inserted_candles=... duplicates_skipped=...
+DATA COLLECTOR SYNC ALL END total=... success=... failed=...
+```
+
+Questi log servono a verificare che `market_data.ohlc` cresca regolarmente senza duplicati prima di ampliare Research, Decision e Strategy Engine.

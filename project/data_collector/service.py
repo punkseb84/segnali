@@ -36,14 +36,17 @@ class DataCollectorService:
     def sync_pair(self, pair: str, timeframe: str) -> SyncResult:
         started_at = datetime.now(timezone.utc)
         try:
+            self.logger.info("DATA COLLECTOR START pair=%s timeframe=%s", pair, timeframe)
             self.repository.upsert_pair(pair)
             self.repository.upsert_timeframe(timeframe)
             latest = self.repository.latest_timestamp(pair, timeframe)
+            self.logger.info("DATA COLLECTOR latest_timestamp pair=%s timeframe=%s latest=%s", pair, timeframe, latest)
             frame = self.client.fetch_ohlc(pair, timeframe, since=latest)
             rows_inserted = self.repository.insert_ohlc(pair, timeframe, frame)
+            duplicates_skipped = max(len(frame) - rows_inserted, 0)
             self.repository.write_sync_log(pair, timeframe, started_at, "SUCCESS", rows_inserted)
             result = SyncResult(pair, timeframe, len(frame), rows_inserted, "SUCCESS")
-            self.logger.info("Synced pair=%s timeframe=%s downloaded=%s inserted=%s", pair, timeframe, len(frame), rows_inserted)
+            self.logger.info("DATA COLLECTOR OK pair=%s timeframe=%s downloaded_candles=%s inserted_candles=%s duplicates_skipped=%s", pair, timeframe, len(frame), rows_inserted, duplicates_skipped)
             self.event_bus.publish(Event(EventType.MARKET_UPDATED, {"pair": pair, "timeframe": timeframe, "rows_inserted": rows_inserted}))
             return result
         except Exception as exc:
@@ -55,10 +58,14 @@ class DataCollectorService:
             return SyncResult(pair, timeframe, 0, 0, "FAILED", str(exc))
 
     def sync_all_pairs(self, pairs: list[str], timeframes: list[str]) -> list[SyncResult]:
+        self.logger.info("DATA COLLECTOR SYNC ALL START pairs=%s timeframes=%s", pairs, timeframes)
         results: list[SyncResult] = []
         for pair in pairs:
             for timeframe in timeframes:
                 results.append(self.sync_pair(pair, timeframe))
+        success = sum(1 for item in results if item.status == "SUCCESS")
+        failed = len(results) - success
+        self.logger.info("DATA COLLECTOR SYNC ALL END total=%s success=%s failed=%s", len(results), success, failed)
         return results
 
     def update_missing_data(self, pair: str, timeframe: str) -> SyncResult:

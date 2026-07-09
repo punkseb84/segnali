@@ -10,6 +10,7 @@ from project.config.settings import PlatformSettings, load_settings
 from project.data_collector.kraken_client import KrakenOhlcClient
 from project.data_collector.repository import MarketDataRepository
 from project.data_collector.service import DataCollectorService
+from project.database.migrations import run_migrations
 from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info, sanitize_postgres_error
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
@@ -72,45 +73,49 @@ def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postg
 def main() -> None:
     settings = load_settings()
     logger = get_module_logger("system")
-    logger.info("BOOTSTRAP TEST STARTED")
+    if settings.enable_bootstrap_test:
+        logger.info("BOOTSTRAP TEST STARTED")
 
-    try:
-        import os
-        import psycopg2
+        try:
+            import os
+            import psycopg2
 
-        database_url = os.getenv("DATABASE_URL")
-        logger.info("BOOTSTRAP DATABASE_URL exists: %s", "yes" if database_url else "no")
+            database_url = os.getenv("DATABASE_URL")
+            logger.info("BOOTSTRAP DATABASE_URL exists: %s", "yes" if database_url else "no")
 
-        conn = psycopg2.connect(database_url)
-        cur = conn.cursor()
+            conn = psycopg2.connect(database_url)
+            cur = conn.cursor()
 
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS startup_test (
-                id SERIAL PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-        """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS startup_test (
+                    id SERIAL PRIMARY KEY,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
 
-        cur.execute("INSERT INTO startup_test DEFAULT VALUES RETURNING id")
-        row_id = cur.fetchone()[0]
+            cur.execute("INSERT INTO startup_test DEFAULT VALUES RETURNING id")
+            row_id = cur.fetchone()[0]
 
-        cur.execute("SELECT id, created_at FROM startup_test WHERE id = %s", (row_id,))
-        row = cur.fetchone()
+            cur.execute("SELECT id, created_at FROM startup_test WHERE id = %s", (row_id,))
+            row = cur.fetchone()
 
-        conn.commit()
-        cur.close()
-        conn.close()
+            conn.commit()
+            cur.close()
+            conn.close()
 
-        logger.info("BOOTSTRAP startup_test created")
-        logger.info("BOOTSTRAP insert OK id=%s", row_id)
-        logger.info("BOOTSTRAP read OK row=%s", row)
-        logger.info("BOOTSTRAP TEST SUCCESS")
+            logger.info("BOOTSTRAP startup_test created")
+            logger.info("BOOTSTRAP insert OK id=%s", row_id)
+            logger.info("BOOTSTRAP read OK row=%s", row)
+            logger.info("BOOTSTRAP TEST SUCCESS")
 
-    except Exception:
-        logger.exception("BOOTSTRAP TEST FAILED")
-        raise
+        except Exception:
+            logger.exception("BOOTSTRAP TEST FAILED")
+            raise
 
-    logger.info("BOOTSTRAP TEST COMPLETED, continuing normal startup")
+        logger.info("BOOTSTRAP TEST COMPLETED, continuing normal startup")
+    else:
+        logger.info("BOOTSTRAP TEST SKIPPED")
+
     logger.info("======================================")
     logger.info("PROJECT MAIN VERSION: 2026-07-09 BUILD 1")
     logger.info("======================================")
@@ -135,7 +140,12 @@ def main() -> None:
         raise SystemExit(1) from exc
     logger.info("Checkpoint B")
     log_postgres_success(postgres, logger)
-    bootstrap_or_exit(postgres, settings, logger)
+    if settings.enable_bootstrap_test:
+        bootstrap_or_exit(postgres, settings, logger)
+    else:
+        run_migrations(postgres)
+        logger.info("Checkpoint C")
+        logger.info("Migration completed")
     logger.info("Database schema ready")
     data_collector = build_data_collector(settings, event_bus, postgres) if settings.enable_data_collector else None
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None

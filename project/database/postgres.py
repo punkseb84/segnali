@@ -90,13 +90,15 @@ class PostgresClient:
                 cur.execute(sql, params or ())
             conn.commit()
 
-    def executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> None:
+    def executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> int:
         if not rows:
-            return
+            return 0
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.executemany(sql, rows)
+                rowcount = max(cur.rowcount, 0)
             conn.commit()
+            return rowcount
 
     def fetch_all(self, sql: str, params: Sequence[Any] | None = None) -> list[tuple[Any, ...]]:
         with self.connect() as conn:
