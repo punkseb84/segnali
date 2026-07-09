@@ -125,3 +125,56 @@ ALPHA_REPORT_SUMMARY: Final[str] = os.getenv("ALPHA_REPORT_SUMMARY", "alpha_rese
 KRAKEN_API_BASE: Final[str] = "https://api.kraken.com/0/public"
 EXCHANGE_NAME: Final[str] = "Kraken"
 DIRECTION: Final[str] = "LONG"
+
+# Quant Research Engine / Railway persistence
+SUPPORTED_RUN_MODES: Final[tuple[str, ...]] = ("RESEARCH", "LIVE", "SYNC_DATA")
+_RUN_MODE_RAW = os.getenv("RUN_MODE", "RESEARCH").strip().upper()
+RUN_MODE: Final[str] = _RUN_MODE_RAW if _RUN_MODE_RAW in SUPPORTED_RUN_MODES else "RESEARCH"
+
+_DATA_DIR_ENV = os.getenv("DATA_DIR", "/data").strip() or "/data"
+_data_dir_candidate = Path(_DATA_DIR_ENV)
+_persistent_volume_detected = _data_dir_candidate.exists() and os.access(_data_dir_candidate, os.W_OK)
+if _persistent_volume_detected:
+    DATA_DIR: Final[str] = str(_data_dir_candidate)
+else:
+    DATA_DIR = str(Path("./data"))
+Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+EXPORT_DIR: Final[str] = os.path.join(DATA_DIR, "exports")
+Path(EXPORT_DIR).mkdir(parents=True, exist_ok=True)
+OHLC_DB_PATH: Final[str] = os.path.join(DATA_DIR, "ohlc_cache.sqlite")
+RESEARCH_DB_PATH: Final[str] = os.path.join(DATA_DIR, "research_database.sqlite")
+PERSISTENT_VOLUME_DETECTED: Final[bool] = _persistent_volume_detected
+
+RESEARCH_BATCH_SIZE: Final[int] = _int_env("RESEARCH_BATCH_SIZE", 100)
+MAX_RESEARCH_RUNTIME_MINUTES: Final[int] = _int_env("MAX_RESEARCH_RUNTIME_MINUTES", 20)
+RESUME_RESEARCH: Final[bool] = _bool_env("RESUME_RESEARCH", True)
+
+KRAKEN_API_SLEEP_SECONDS: Final[float] = _float_env("KRAKEN_API_SLEEP_SECONDS", 1.2)
+KRAKEN_MAX_RETRIES: Final[int] = _int_env("KRAKEN_MAX_RETRIES", 3)
+KRAKEN_TIMEOUT_SECONDS: Final[int] = _int_env("KRAKEN_TIMEOUT_SECONDS", 20)
+
+QUANT_STRATEGIES: Final[list[str]] = [
+    "Breakout Retest",
+    "Pullback Trend",
+    "Liquidity Sweep",
+    "Range Reversal",
+    "Momentum Breakout",
+    "Compression Breakout",
+    "Volatility Expansion",
+    "Mean Reversion",
+]
+QUANT_TIMEFRAMES: Final[list[str]] = _timeframe_list_env("QUANT_TIMEFRAMES", ["5m", "15m", "30m", "1h", "4h"])
+QUANT_PAIRS: Final[list[str]] = _list_env(
+    "QUANT_PAIRS",
+    ["BTC/USD", "ETH/USD", "SOL/USD", "LINK/USD", "UNI/USD", "AAVE/USD", "AVAX/USD", "TAO/USD", "XRP/USD", "ADA/USD", "DOGE/USD"],
+)
+RESEARCH_RSI_RANGES: Final[list[tuple[int, int]]] = [(40, 45), (45, 50), (50, 55), (55, 60), (60, 65), (65, 70)]
+RESEARCH_ATR_MULTIPLIERS: Final[list[float]] = [0.5, 0.7, 0.8, 1.0, 1.2, 1.5]
+RESEARCH_ADX_VALUES: Final[list[int]] = [15, 20, 25, 30]
+RESEARCH_RELATIVE_VOLUME_VALUES: Final[list[float]] = [0.8, 1.0, 1.2, 1.5]
+RESEARCH_REWARD_RISK_VALUES: Final[list[float]] = [1.00, 1.10, 1.20, 1.30, 1.50, 2.00]
+RESEARCH_MARKET_REGIMES: Final[list[str]] = ["Trend", "Range", "Compression", "Alta volatilità", "Bassa volatilità"]
+
+# Railway Light progressive research defaults
+RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS: Final[int] = _int_env("RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS", 60)
+RAILWAY_LIGHT_RESEARCH_SECONDS: Final[int] = _int_env("RAILWAY_LIGHT_RESEARCH_SECONDS", 3600)
