@@ -768,3 +768,15 @@ SQLite cache: enabled/disabled
 La password di `DATABASE_URL` non viene mai stampata. Se la connessione PostgreSQL è valida, le migrazioni creano automaticamente le tabelle mancanti prima di avviare scheduler, Data Collector e Research Engine.
 
 In `RAILWAY_LIGHT` il test non si limita a rilevare la presenza di `DATABASE_URL`: viene aperta una connessione reale a PostgreSQL con `SELECT 1`. Solo dopo `PostgreSQL connection: OK` vengono eseguite le migrazioni; al termine viene loggato `Database schema ready`. Se la connessione fallisce, l'errore viene sanificato per non mostrare password e il processo termina.
+
+## Database bootstrap obbligatorio
+
+All'avvio `project.main` esegue un bootstrap PostgreSQL prima di continuare con scheduler e sviluppo applicativo:
+
+1. connessione PostgreSQL reale;
+2. creazione tabella `startup_test`;
+3. inserimento riga;
+4. lettura della riga appena inserita;
+5. log `Database bootstrap SUCCESS`.
+
+Solo dopo il bootstrap vengono eseguite le migrazioni. Al termine vengono stampati `Migration completed` e la lista delle tabelle/schema previsti. Subito dopo viene verificato il Data Collector con una sola candela `BTC/USD` `5m` (`OHLC write OK`, `OHLC read OK`) e viene verificata la persistenza research con un record fittizio in `research.strategy_results` (`Research write OK`, `Research read OK`). Se una qualsiasi operazione fallisce viene stampato traceback completo e il processo termina.

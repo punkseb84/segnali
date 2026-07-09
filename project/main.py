@@ -5,11 +5,11 @@ research batches without requiring a dedicated server.
 """
 from __future__ import annotations
 
+from project.bootstrap import bootstrap_or_exit
 from project.config.settings import PlatformSettings, load_settings
 from project.data_collector.kraken_client import KrakenOhlcClient
 from project.data_collector.repository import MarketDataRepository
 from project.data_collector.service import DataCollectorService
-from project.database.migrations import run_migrations
 from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info, sanitize_postgres_error
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
@@ -96,8 +96,7 @@ def main() -> None:
         raise SystemExit(1) from exc
     logger.info("Checkpoint B")
     log_postgres_success(postgres, logger)
-    run_migrations(postgres)
-    logger.info("Checkpoint C")
+    bootstrap_or_exit(postgres, settings, logger)
     logger.info("Database schema ready")
     data_collector = build_data_collector(settings, event_bus, postgres) if settings.enable_data_collector else None
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
