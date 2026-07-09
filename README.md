@@ -741,3 +741,7 @@ research.research_reports
 ```
 
 Questo evita di mantenere milioni di combinazioni in memoria e permette a Railway di riprendere il lavoro dopo redeploy o restart.
+
+### Nota sul warning volume persistente
+
+In `RUN_MODE=RAILWAY_LIGHT` la piattaforma usa PostgreSQL come storage primario e quindi non deve richiedere un volume `/data` per i database principali. Il warning sul volume persistente rimane attivo solo per i run mode legacy/locali che usano SQLite (`RESEARCH` o `SYNC_DATA`).

@@ -6,7 +6,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 
-from config import ACTIVE_MODE, DATA_DIR, DUPLICATE_MINUTES, ENABLE_LIVE_SIGNALS, ENABLE_WATCHLIST_ALERTS, EXPORT_DIR, LOOP_SLEEP_SECONDS, MAX_CONSECUTIVE_STOP_LOSSES, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_DB_PATH, OHLC_LIMIT, PAIRS, PERSISTENT_VOLUME_DETECTED, PROJECT_ALPHA_RESEARCH_MODE, QUANT_PAIRS, QUANT_TIMEFRAMES, RESEARCH_DB_PATH, RESEARCH_INTERVAL_SECONDS, RESEARCH_MODE, RUN_MODE, STOP_LOSS_PAUSE_HOURS, TIMEFRAMES
+from config import ACTIVE_MODE, DATA_DIR, DUPLICATE_MINUTES, ENABLE_LIVE_SIGNALS, ENABLE_WATCHLIST_ALERTS, EXPORT_DIR, LOOP_SLEEP_SECONDS, MAX_CONSECUTIVE_STOP_LOSSES, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_DB_PATH, OHLC_LIMIT, PAIRS, PERSISTENT_VOLUME_DETECTED, PROJECT_ALPHA_RESEARCH_MODE, QUANT_PAIRS, QUANT_TIMEFRAMES, RESEARCH_DB_PATH, RESEARCH_INTERVAL_SECONDS, RESEARCH_MODE, RUN_MODE, STOP_LOSS_PAUSE_HOURS, TIMEFRAMES, USES_LOCAL_SQLITE_PERSISTENCE
 from exchange import fetch_ohlc
 from indicators import add_indicators, classify_market_regime
 from monitor import monitor_open_trades
@@ -152,8 +152,10 @@ def log_runtime_config() -> None:
     logger.info("OHLC database path=%s", OHLC_DB_PATH)
     logger.info("Research database path=%s", RESEARCH_DB_PATH)
     logger.info("EXPORT_DIR=%s", EXPORT_DIR)
-    if not PERSISTENT_VOLUME_DETECTED:
-        logger.warning("WARNING: persistent volume not detected, data may be lost on redeploy")
+    if USES_LOCAL_SQLITE_PERSISTENCE and not PERSISTENT_VOLUME_DETECTED:
+        logger.warning("WARNING: persistent volume not detected, local SQLite research data may be lost on redeploy")
+    elif not USES_LOCAL_SQLITE_PERSISTENCE:
+        logger.info("Persistent volume check skipped: RUN_MODE=%s uses PostgreSQL as primary storage", RUN_MODE)
 
 
 def run_sync_data_worker() -> None:
@@ -189,6 +191,9 @@ def run_research_worker() -> None:
 
 def main() -> None:
     log_runtime_config()
+    if RUN_MODE == "RAILWAY_LIGHT":
+        logger.info("RUN_MODE=RAILWAY_LIGHT is served by the modular entrypoint: python -m project.main")
+        return
     if RUN_MODE == "SYNC_DATA":
         run_sync_data_worker()
         return

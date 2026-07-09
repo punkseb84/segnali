@@ -127,9 +127,9 @@ EXCHANGE_NAME: Final[str] = "Kraken"
 DIRECTION: Final[str] = "LONG"
 
 # Quant Research Engine / Railway persistence
-SUPPORTED_RUN_MODES: Final[tuple[str, ...]] = ("RESEARCH", "LIVE", "SYNC_DATA")
-_RUN_MODE_RAW = os.getenv("RUN_MODE", "RESEARCH").strip().upper()
-RUN_MODE: Final[str] = _RUN_MODE_RAW if _RUN_MODE_RAW in SUPPORTED_RUN_MODES else "RESEARCH"
+SUPPORTED_RUN_MODES: Final[tuple[str, ...]] = ("RAILWAY_LIGHT", "RESEARCH", "LIVE", "SYNC_DATA")
+_RUN_MODE_RAW = os.getenv("RUN_MODE", "RAILWAY_LIGHT").strip().upper()
+RUN_MODE: Final[str] = _RUN_MODE_RAW if _RUN_MODE_RAW in SUPPORTED_RUN_MODES else "RAILWAY_LIGHT"
 
 _DATA_DIR_ENV = os.getenv("DATA_DIR", "/data").strip() or "/data"
 _data_dir_candidate = Path(_DATA_DIR_ENV)
@@ -144,6 +144,7 @@ Path(EXPORT_DIR).mkdir(parents=True, exist_ok=True)
 OHLC_DB_PATH: Final[str] = os.path.join(DATA_DIR, "ohlc_cache.sqlite")
 RESEARCH_DB_PATH: Final[str] = os.path.join(DATA_DIR, "research_database.sqlite")
 PERSISTENT_VOLUME_DETECTED: Final[bool] = _persistent_volume_detected
+USES_LOCAL_SQLITE_PERSISTENCE: Final[bool] = RUN_MODE in {"RESEARCH", "SYNC_DATA"}
 
 RESEARCH_BATCH_SIZE: Final[int] = _int_env("RESEARCH_BATCH_SIZE", 100)
 MAX_RESEARCH_RUNTIME_MINUTES: Final[int] = _int_env("MAX_RESEARCH_RUNTIME_MINUTES", 20)
