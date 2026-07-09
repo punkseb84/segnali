@@ -197,7 +197,10 @@ def run_research_worker() -> None:
 def main() -> None:
     log_runtime_config()
     if RUN_MODE == "RAILWAY_LIGHT":
-        logger.info("RUN_MODE=RAILWAY_LIGHT is served by the modular entrypoint: python -m project.main")
+        logger.info("RUN_MODE=RAILWAY_LIGHT detected in legacy app.py; delegating to project.main")
+        from project.main import main as modular_main
+
+        modular_main()
         return
     if RUN_MODE == "SYNC_DATA":
         run_sync_data_worker()
