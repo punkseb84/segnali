@@ -145,8 +145,8 @@ OHLC_DB_PATH: Final[str] = os.path.join(DATA_DIR, "ohlc_cache.sqlite")
 RESEARCH_DB_PATH: Final[str] = os.path.join(DATA_DIR, "research_database.sqlite")
 PERSISTENT_VOLUME_DETECTED: Final[bool] = _persistent_volume_detected
 
-RESEARCH_BATCH_SIZE: Final[int] = _int_env("RESEARCH_BATCH_SIZE", 250)
-MAX_RESEARCH_RUNTIME_MINUTES: Final[int] = _int_env("MAX_RESEARCH_RUNTIME_MINUTES", 45)
+RESEARCH_BATCH_SIZE: Final[int] = _int_env("RESEARCH_BATCH_SIZE", 100)
+MAX_RESEARCH_RUNTIME_MINUTES: Final[int] = _int_env("MAX_RESEARCH_RUNTIME_MINUTES", 20)
 RESUME_RESEARCH: Final[bool] = _bool_env("RESUME_RESEARCH", True)
 
 KRAKEN_API_SLEEP_SECONDS: Final[float] = _float_env("KRAKEN_API_SLEEP_SECONDS", 1.2)
@@ -174,3 +174,7 @@ RESEARCH_ADX_VALUES: Final[list[int]] = [15, 20, 25, 30]
 RESEARCH_RELATIVE_VOLUME_VALUES: Final[list[float]] = [0.8, 1.0, 1.2, 1.5]
 RESEARCH_REWARD_RISK_VALUES: Final[list[float]] = [1.00, 1.10, 1.20, 1.30, 1.50, 2.00]
 RESEARCH_MARKET_REGIMES: Final[list[str]] = ["Trend", "Range", "Compression", "Alta volatilità", "Bassa volatilità"]
+
+# Railway Light progressive research defaults
+RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS: Final[int] = _int_env("RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS", 60)
+RAILWAY_LIGHT_RESEARCH_SECONDS: Final[int] = _int_env("RAILWAY_LIGHT_RESEARCH_SECONDS", 3600)

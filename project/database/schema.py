@@ -54,8 +54,26 @@ CREATE TABLE IF NOT EXISTS market_data.sync_log (
 
 RESEARCH_SCHEMA = """
 CREATE SCHEMA IF NOT EXISTS research;
+CREATE TABLE IF NOT EXISTS research.strategy_combinations (
+    id BIGSERIAL PRIMARY KEY,
+    strategy TEXT NOT NULL,
+    pair TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    parameters JSONB NOT NULL,
+    combination_key TEXT GENERATED ALWAYS AS (md5(strategy || '|' || pair || '|' || timeframe || '|' || parameters::text)) STORED,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(combination_key)
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_combinations_status
+    ON research.strategy_combinations(status, id);
+
 CREATE TABLE IF NOT EXISTS research.strategy_results (
     id BIGSERIAL PRIMARY KEY,
+    combination_id BIGINT REFERENCES research.strategy_combinations(id),
+    batch_id BIGINT,
     strategy TEXT NOT NULL,
     pair TEXT NOT NULL,
     timeframe TEXT NOT NULL,
@@ -80,10 +98,13 @@ CREATE TABLE IF NOT EXISTS research.strategy_results (
 CREATE TABLE IF NOT EXISTS research.research_batches (
     id BIGSERIAL PRIMARY KEY,
     status TEXT NOT NULL,
+    batch_size INTEGER NOT NULL DEFAULT 100,
     total_combinations INTEGER NOT NULL DEFAULT 0,
     processed_combinations INTEGER NOT NULL DEFAULT 0,
+    last_combination_id BIGINT,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ
 );
 CREATE TABLE IF NOT EXISTS research.research_reports (
     id BIGSERIAL PRIMARY KEY,

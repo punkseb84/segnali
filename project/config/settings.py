@@ -39,6 +39,7 @@ def _list_env(name: str, default: list[str]) -> list[str]:
 
 @dataclass(frozen=True)
 class PlatformSettings:
+    run_mode: str = os.getenv("RUN_MODE", "RAILWAY_LIGHT").strip().upper()
     database_url: str = os.getenv("DATABASE_URL", "")
     exchange_name: str = os.getenv("EXCHANGE_NAME", "Kraken")
     kraken_api_base: str = os.getenv("KRAKEN_API_BASE", "https://api.kraken.com/0/public")
@@ -46,9 +47,9 @@ class PlatformSettings:
     kraken_max_retries: int = _int_env("KRAKEN_MAX_RETRIES", 3)
     kraken_timeout_seconds: int = _int_env("KRAKEN_TIMEOUT_SECONDS", 20)
     enable_data_collector: bool = _bool_env("ENABLE_DATA_COLLECTOR", True)
-    enable_research_engine: bool = _bool_env("ENABLE_RESEARCH_ENGINE", False)
-    enable_decision_engine: bool = _bool_env("ENABLE_DECISION_ENGINE", False)
-    enable_strategy_engine: bool = _bool_env("ENABLE_STRATEGY_ENGINE", False)
+    enable_research_engine: bool = _bool_env("ENABLE_RESEARCH_ENGINE", True)
+    enable_decision_engine: bool = _bool_env("ENABLE_DECISION_ENGINE", True)
+    enable_strategy_engine: bool = _bool_env("ENABLE_STRATEGY_ENGINE", True)
     enable_notification_engine: bool = _bool_env("ENABLE_NOTIFICATION_ENGINE", False)
     collector_pairs: list[str] = field(default_factory=lambda: _list_env("COLLECTOR_PAIRS", ["BTC/USD", "ETH/USD", "SOL/USD"]))
     collector_timeframes: list[str] = field(default_factory=lambda: [item.strip().lower() for item in os.getenv("COLLECTOR_TIMEFRAMES", "5m,15m,1h").split(",") if item.strip()])
@@ -56,6 +57,12 @@ class PlatformSettings:
     scheduler_collector_seconds: int = _int_env("SCHEDULER_COLLECTOR_SECONDS", 300)
     scheduler_decision_seconds: int = _int_env("SCHEDULER_DECISION_SECONDS", 900)
     scheduler_strategy_seconds: int = _int_env("SCHEDULER_STRATEGY_SECONDS", 60)
+    research_batch_size: int = _int_env("RESEARCH_BATCH_SIZE", 100)
+    max_research_runtime_minutes: int = _int_env("MAX_RESEARCH_RUNTIME_MINUTES", 20)
+    research_sleep_between_batches_seconds: int = _int_env("RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS", 60)
+    resume_research: bool = _bool_env("RESUME_RESEARCH", True)
+    scheduler_research_seconds: int = _int_env("SCHEDULER_RESEARCH_SECONDS", 86400)
+    railway_light_research_seconds: int = _int_env("RAILWAY_LIGHT_RESEARCH_SECONDS", 3600)
     max_runtime_minutes: int = _int_env("MAX_MODULE_RUNTIME_MINUTES", 45)
 
 

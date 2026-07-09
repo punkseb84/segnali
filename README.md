@@ -683,3 +683,61 @@ Intervalli target:
 4. **Fase 4 — Decision Engine**: classificare `TREND_UP`, `TREND_DOWN`, `RANGE`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`, `COMPRESSION`, `BREAKOUT`, `NEWS_EVENT`, `NO_TRADE` e pubblicare strategie abilitate.
 5. **Fase 5 — Strategy Engine**: generare segnali solo se strategia validata, abilitata, coerente con mercato e con reward/risk valido.
 6. **Fase 6 — Notification Engine**: separare Telegram e predisporre Discord, Email e Webhook come subscriber di eventi.
+
+## Railway Light — ricerca progressiva senza server dedicato
+
+La piattaforma è adattata per Railway a costi contenuti: non esegue backtest massivi tutti insieme e non usa SQLite come database principale. Il database principale è PostgreSQL Railway; SQLite resta solo un eventuale cache locale legacy/non primaria.
+
+### Configurazione consigliata
+
+```env
+RUN_MODE=RAILWAY_LIGHT
+ENABLE_DATA_COLLECTOR=true
+ENABLE_RESEARCH_ENGINE=true
+ENABLE_DECISION_ENGINE=true
+ENABLE_STRATEGY_ENGINE=true
+ENABLE_NOTIFICATION_ENGINE=false
+RESEARCH_BATCH_SIZE=100
+MAX_RESEARCH_RUNTIME_MINUTES=20
+RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS=60
+RESUME_RESEARCH=True
+SCHEDULER_COLLECTOR_SECONDS=300
+SCHEDULER_DECISION_SECONDS=900
+SCHEDULER_STRATEGY_SECONDS=60
+RAILWAY_LIGHT_RESEARCH_SECONDS=3600
+```
+
+### Regole operative
+
+- Il Data Collector gira ogni 5 minuti e salva OHLC in `market_data.ohlc`.
+- Il Research Engine genera le combinazioni e le salva in `research.strategy_combinations`.
+- Ogni ciclo processa solo un batch piccolo (`RESEARCH_BATCH_SIZE=100`).
+- Ogni batch ha limite runtime massimo di 20 minuti.
+- Dopo ogni batch lo stato viene salvato in `research.research_batches` e nelle singole combinazioni.
+- Se Railway riavvia il container, le combinazioni `PENDING` o `FAILED_RETRYABLE` vengono riprese dal punto esatto.
+- Il Research Engine legge solo OHLC già presenti in PostgreSQL e non chiama Kraken.
+- In `RAILWAY_LIGHT` il processo resta sempre acceso, raccoglie dati e processa ricerca a piccoli batch.
+- I report Telegram devono restare throttled: solo on-demand o una volta al giorno nella futura Fase 6.
+
+### Scheduling Railway Light
+
+```text
+Data Collector   ogni 5 minuti
+Decision Engine  ogni 15 minuti
+Strategy Engine  ogni 1 minuto
+Research Engine  a batch leggeri in RAILWAY_LIGHT, oppure batch continui in RUN_MODE=RESEARCH
+Notification     real time solo su eventi, con report giornaliero/on-demand
+```
+
+### Persistenza ricerca progressiva
+
+Le combinazioni sono persistite in PostgreSQL prima di essere elaborate:
+
+```text
+research.strategy_combinations
+research.research_batches
+research.strategy_results
+research.research_reports
+```
+
+Questo evita di mantenere milioni di combinazioni in memoria e permette a Railway di riprendere il lavoro dopo redeploy o restart.
