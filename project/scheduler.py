@@ -63,6 +63,12 @@ class PlatformScheduler:
 
     def run_forever(self) -> None:
         self.configure()
+        self.logger.info("Checkpoint E - Scheduler started")
+        last_heartbeat = 0.0
         while True:
             schedule.run_pending()
+            now = time.monotonic()
+            if now - last_heartbeat >= 30:
+                self.logger.info("Heartbeat")
+                last_heartbeat = now
             time.sleep(1)

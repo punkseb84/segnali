@@ -72,6 +72,9 @@ def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postg
 def main() -> None:
     settings = load_settings()
     logger = get_module_logger("system")
+    logger.info("======================================")
+    logger.info("PROJECT MAIN VERSION: 2026-07-09 BUILD 1")
+    logger.info("======================================")
     event_bus = EventBus()
     log_storage_startup(settings, logger)
     logger.info(
@@ -82,6 +85,7 @@ def main() -> None:
         settings.enable_strategy_engine,
         settings.enable_notification_engine,
     )
+    logger.info("Checkpoint A")
     try:
         postgres = build_postgres(settings)
     except PostgresUnavailableError as exc:
@@ -90,12 +94,15 @@ def main() -> None:
     except Exception as exc:
         log_postgres_failure(exc, settings, logger)
         raise SystemExit(1) from exc
+    logger.info("Checkpoint B")
     log_postgres_success(postgres, logger)
     run_migrations(postgres)
+    logger.info("Checkpoint C")
     logger.info("Database schema ready")
     data_collector = build_data_collector(settings, event_bus, postgres) if settings.enable_data_collector else None
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
     scheduler = PlatformScheduler(settings, data_collector, research_engine)
+    logger.info("Checkpoint D")
     scheduler.run_forever()
 
 
