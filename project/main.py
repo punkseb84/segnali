@@ -72,6 +72,45 @@ def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postg
 def main() -> None:
     settings = load_settings()
     logger = get_module_logger("system")
+    logger.info("BOOTSTRAP TEST STARTED")
+
+    try:
+        import os
+        import psycopg2
+
+        database_url = os.getenv("DATABASE_URL")
+        logger.info("BOOTSTRAP DATABASE_URL exists: %s", "yes" if database_url else "no")
+
+        conn = psycopg2.connect(database_url)
+        cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS startup_test (
+                id SERIAL PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        cur.execute("INSERT INTO startup_test DEFAULT VALUES RETURNING id")
+        row_id = cur.fetchone()[0]
+
+        cur.execute("SELECT id, created_at FROM startup_test WHERE id = %s", (row_id,))
+        row = cur.fetchone()
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        logger.info("BOOTSTRAP startup_test created")
+        logger.info("BOOTSTRAP insert OK id=%s", row_id)
+        logger.info("BOOTSTRAP read OK row=%s", row)
+        logger.info("BOOTSTRAP TEST SUCCESS")
+
+    except Exception:
+        logger.exception("BOOTSTRAP TEST FAILED")
+        raise
+
+    logger.info("BOOTSTRAP TEST COMPLETED, continuing normal startup")
     logger.info("======================================")
     logger.info("PROJECT MAIN VERSION: 2026-07-09 BUILD 1")
     logger.info("======================================")
