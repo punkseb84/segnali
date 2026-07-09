@@ -535,3 +535,151 @@ Il motore salva tutto in `research_database.sqlite`, tabella `strategy_results`,
 - `research_summary.txt`.
 
 Il report include TOP strategie, TOP pair, TOP timeframe, TOP strategy, TOP regimi, motivi di mancata validazione e suggerimenti automatici su parametri, pair, timeframe e strategie da approfondire. Il software non modifica automaticamente il bot live.
+
+# Modular Quant Platform — Piano di rifattorizzazione
+
+> Stato attuale: **FASE 1 completata**. Questa fase crea la nuova architettura modulare e implementa il solo **Data Collector**. Le fasi successive migreranno PostgreSQL/research/decision/strategy/notification senza riscrivere tutto in un unico passaggio.
+
+## Nuova struttura cartelle
+
+```text
+project/
+├── config/
+│   └── settings.py
+├── data_collector/
+│   ├── kraken_client.py
+│   ├── repository.py
+│   └── service.py
+├── database/
+│   ├── migrations.py
+│   ├── postgres.py
+│   └── schema.py
+├── decision_engine/
+│   └── service.py
+├── notification_engine/
+│   └── service.py
+├── research_engine/
+│   └── service.py
+├── shared/
+│   ├── events.py
+│   ├── indicators.py
+│   ├── logging.py
+│   ├── market_structure.py
+│   ├── price_action.py
+│   ├── risk.py
+│   ├── utils.py
+│   └── validators.py
+├── strategy_engine/
+│   └── service.py
+├── logs/
+├── scheduler.py
+└── main.py
+```
+
+## Responsabilità dei moduli
+
+| Modulo | Responsabilità | Stato |
+| --- | --- | --- |
+| `data_collector` | Scarica dati Kraken, aggiorna dati incrementali, evita duplicati, verifica integrità, scrive log sync. Non conosce strategie, indicatori o notifiche. | Fase 1 |
+| `database` | Connessione PostgreSQL, schema `market_data`, `research`, `signals`, `statistics`, `system`, migrazioni idempotenti. | Fase 1 base |
+| `shared` | Event bus, logging modulare, confini per indicatori, risk, price action, market structure e validator. | Fase 1 base |
+| `research_engine` | Trova edge leggendo solo PostgreSQL e salvando risultati in `research.*`. | Fase 3 |
+| `decision_engine` | Classifica regime e produce lista strategie abilitate. Non genera segnali. | Fase 4 |
+| `strategy_engine` | Applica solo strategie validate/abilitate e produce eventi `NEW_SIGNAL`. | Fase 5 |
+| `notification_engine` | Riceve eventi e invia Telegram/Discord/Email/Webhook senza decidere o calcolare. | Fase 6 |
+| `scheduler` | Pianifica attività indipendenti per ogni modulo. | Fase 1 base |
+
+## Dipendenze tra moduli
+
+I moduli non devono chiamarsi direttamente per decisioni operative. La comunicazione passa dall'`EventBus` interno.
+
+```text
+Data Collector ──MARKET_UPDATED──▶ Event Bus ──▶ moduli subscriber futuri
+Research Engine ─RESEARCH_COMPLETED/STRATEGY_VALIDATED──▶ Event Bus
+Decision Engine ─MARKET_REGIME_CHANGED──▶ Event Bus
+Strategy Engine ─NEW_SIGNAL/TRADE_OPENED/TRADE_CLOSED──▶ Event Bus
+Notification Engine ◀── eventi dal Bus
+```
+
+## Diagramma architetturale
+
+```text
+                    ┌────────────────────┐
+                    │  config/settings   │
+                    └─────────┬──────────┘
+                              │
+┌──────────────┐      ┌────────▼────────┐      ┌──────────────────┐
+│   Kraken     │─────▶│ Data Collector  │─────▶│ PostgreSQL       │
+│ public OHLC  │      │ sync only       │      │ market_data.*    │
+└──────────────┘      └────────┬────────┘      └────────┬─────────┘
+                               │ MARKET_UPDATED          │
+                               ▼                         │
+                        ┌────────────┐                   │
+                        │ Event Bus  │◀──────────────────┘
+                        └─────┬──────┘
+                              │
+      ┌───────────────────────┼───────────────────────┐
+      ▼                       ▼                       ▼
+Research Engine          Decision Engine          Notification Engine
+Phase 3                  Phase 4                  Phase 6
+      │                       │                       ▲
+      ▼                       ▼                       │
+research.*              enabled strategies        events only
+                              │
+                              ▼
+                       Strategy Engine
+                       Phase 5 → NEW_SIGNAL
+```
+
+## Flusso dati della Fase 1
+
+1. `project.main` carica le variabili ambiente tramite `project.config.settings`.
+2. `database.migrations.run_migrations()` crea gli schema PostgreSQL idempotenti.
+3. `DataCollectorService.sync_pair()` legge l'ultimo timestamp da `market_data.ohlc`.
+4. `KrakenOhlcClient.fetch_ohlc()` scarica solo il range incrementale usando `since`.
+5. `MarketDataRepository.insert_ohlc()` scrive in `market_data.ohlc` con `ON CONFLICT DO NOTHING`.
+6. `market_data.sync_log` registra successo/fallimento, righe inserite ed eventuale errore.
+7. Il servizio pubblica `MARKET_UPDATED` su `EventBus`.
+
+## PostgreSQL Railway
+
+La nuova piattaforma usa `DATABASE_URL` di Railway PostgreSQL:
+
+```env
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+ENABLE_DATA_COLLECTOR=true
+ENABLE_RESEARCH_ENGINE=false
+ENABLE_DECISION_ENGINE=false
+ENABLE_STRATEGY_ENGINE=false
+ENABLE_NOTIFICATION_ENGINE=false
+COLLECTOR_PAIRS=BTC/USD,ETH/USD,SOL/USD
+COLLECTOR_TIMEFRAMES=5m,15m,1h
+KRAKEN_API_SLEEP_SECONDS=1.2
+KRAKEN_MAX_RETRIES=3
+KRAKEN_TIMEOUT_SECONDS=20
+```
+
+Il `Procfile` avvia la nuova piattaforma modulare:
+
+```text
+worker: python -m project.main
+```
+
+## Scheduler centrale
+
+Intervalli target:
+
+- Data Collector: ogni 5 minuti (`SCHEDULER_COLLECTOR_SECONDS=300`);
+- Research Engine: ogni notte, da implementare in Fase 3;
+- Decision Engine: ogni 15 minuti, da implementare in Fase 4;
+- Strategy Engine: ogni minuto, da implementare in Fase 5;
+- Notification Engine: real time via Event Bus, da implementare in Fase 6.
+
+## Piano di migrazione
+
+1. **Fase 1 — Architettura + Data Collector**: introdotta in questa modifica. Il vecchio codice resta disponibile, ma il nuovo entrypoint Railway è `project.main`.
+2. **Fase 2 — PostgreSQL e migrazione dati**: migrare dati legacy SQLite verso PostgreSQL e consolidare repository per ogni schema.
+3. **Fase 3 — Quant Research Engine**: spostare la ricerca in `project/research_engine`, leggere solo da PostgreSQL e scrivere `research.strategy_results`, `research.research_batches`, `research.research_reports`.
+4. **Fase 4 — Decision Engine**: classificare `TREND_UP`, `TREND_DOWN`, `RANGE`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`, `COMPRESSION`, `BREAKOUT`, `NEWS_EVENT`, `NO_TRADE` e pubblicare strategie abilitate.
+5. **Fase 5 — Strategy Engine**: generare segnali solo se strategia validata, abilitata, coerente con mercato e con reward/risk valido.
+6. **Fase 6 — Notification Engine**: separare Telegram e predisporre Discord, Email e Webhook come subscriber di eventi.
