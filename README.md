@@ -766,3 +766,5 @@ SQLite cache: enabled/disabled
 ```
 
 La password di `DATABASE_URL` non viene mai stampata. Se la connessione PostgreSQL è valida, le migrazioni creano automaticamente le tabelle mancanti prima di avviare scheduler, Data Collector e Research Engine.
+
+In `RAILWAY_LIGHT` il test non si limita a rilevare la presenza di `DATABASE_URL`: viene aperta una connessione reale a PostgreSQL con `SELECT 1`. Solo dopo `PostgreSQL connection: OK` vengono eseguite le migrazioni; al termine viene loggato `Database schema ready`. Se la connessione fallisce, l'errore viene sanificato per non mostrare password e il processo termina.

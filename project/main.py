@@ -10,7 +10,7 @@ from project.data_collector.kraken_client import KrakenOhlcClient
 from project.data_collector.repository import MarketDataRepository
 from project.data_collector.service import DataCollectorService
 from project.database.migrations import run_migrations
-from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info
+from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info, sanitize_postgres_error
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
 from project.scheduler import PlatformScheduler
@@ -26,7 +26,6 @@ def build_postgres(settings: PlatformSettings) -> PostgresClient:
         raise PostgresUnavailableError(RAILWAY_LIGHT_MISSING_DATABASE_URL)
     postgres = PostgresClient(PostgresConfig(settings.database_url))
     postgres.test_connection()
-    run_migrations(postgres)
     return postgres
 
 
@@ -44,9 +43,9 @@ def log_postgres_success(postgres: PostgresClient, logger) -> None:
     logger.info("PostgreSQL %s", postgres.connection_info.display())
 
 
-def log_postgres_failure(exc: Exception, logger) -> None:
+def log_postgres_failure(exc: Exception, settings: PlatformSettings, logger) -> None:
     logger.error("PostgreSQL connection: FAILED")
-    logger.error("%s", exc)
+    logger.error("%s", sanitize_postgres_error(str(exc), settings.database_url))
 
 
 def build_data_collector(settings: PlatformSettings, event_bus: EventBus, postgres: PostgresClient) -> DataCollectorService:
@@ -86,12 +85,14 @@ def main() -> None:
     try:
         postgres = build_postgres(settings)
     except PostgresUnavailableError as exc:
-        log_postgres_failure(exc, logger)
+        log_postgres_failure(exc, settings, logger)
         raise SystemExit(1) from exc
     except Exception as exc:
-        log_postgres_failure(exc, logger)
-        raise
+        log_postgres_failure(exc, settings, logger)
+        raise SystemExit(1) from exc
     log_postgres_success(postgres, logger)
+    run_migrations(postgres)
+    logger.info("Database schema ready")
     data_collector = build_data_collector(settings, event_bus, postgres) if settings.enable_data_collector else None
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
     scheduler = PlatformScheduler(settings, data_collector, research_engine)
