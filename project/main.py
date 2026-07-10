@@ -67,6 +67,7 @@ def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postg
         batch_size=settings.research_batch_size,
         max_runtime_minutes=settings.max_research_runtime_minutes,
         sleep_between_batches_seconds=settings.research_sleep_between_batches_seconds,
+        batch_interval_seconds=settings.railway_light_research_seconds if settings.run_mode == "RAILWAY_LIGHT" else settings.research_sleep_between_batches_seconds,
     )
 
 

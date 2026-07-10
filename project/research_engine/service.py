@@ -52,12 +52,14 @@ class ProgressiveResearchEngine:
         batch_size: int = 100,
         max_runtime_minutes: int = 20,
         sleep_between_batches_seconds: int = 60,
+        batch_interval_seconds: int = 3600,
     ) -> None:
         self.repository = repository
         self.event_bus = event_bus or EventBus()
         self.batch_size = batch_size
         self.max_runtime_seconds = max_runtime_minutes * 60
         self.sleep_between_batches_seconds = sleep_between_batches_seconds
+        self.batch_interval_seconds = batch_interval_seconds
         self.logger = get_module_logger("research")
 
     def generate_combinations(self, pairs: list[str], timeframes: list[str]):
@@ -131,10 +133,43 @@ class ProgressiveResearchEngine:
                 self.logger.exception("Research combination failed id=%s: %s", combination.id, exc)
         self.repository.finish_batch(batch_id, "COMPLETED", processed, last_id)
         self.logger.info("RESEARCH BATCH COMPLETED batch_id=%s processed=%s total_combinations=%s last_combination_id=%s", batch_id, processed, total, last_id)
+        self.log_progress_snapshot(total)
         self.event_bus.publish(Event(EventType.RESEARCH_COMPLETED, {"batch_id": batch_id, "processed": processed}))
         if sleep_after and self.sleep_between_batches_seconds > 0:
             time.sleep(self.sleep_between_batches_seconds)
         return ResearchBatchResult(batch_id, processed, "COMPLETED", f"Processed {processed} combinations")
+
+    def log_progress_snapshot(self, total: int) -> None:
+        counts = self.repository.fetch_progress_counts()
+        done = counts.get("DONE", 0)
+        pending = counts.get("PENDING", 0)
+        retryable = counts.get("FAILED_RETRYABLE", 0)
+        running = counts.get("RUNNING", 0)
+        progress = (done / total * 100) if total else 0.0
+        batches_remaining = (pending + retryable + running + self.batch_size - 1) // self.batch_size if self.batch_size else 0
+        days_remaining = (batches_remaining * self.batch_interval_seconds) / 86400 if self.batch_interval_seconds else 0.0
+        self.logger.info(
+            "RESEARCH PROGRESS total=%s done=%s pending=%s retryable=%s running=%s progress=%.4f%% estimated_batches_remaining=%s estimated_days_remaining=%.2f",
+            total,
+            done,
+            pending,
+            retryable,
+            running,
+            progress,
+            batches_remaining,
+            days_remaining,
+        )
+        best = self.repository.fetch_best_result()
+        if best:
+            self.logger.info(
+                "RESEARCH BEST strategy=%s pair=%s timeframe=%s profit_factor=%.4f expectancy=%.6f net_profit=%.6f",
+                best["strategy"],
+                best["pair"],
+                best["timeframe"],
+                best["profit_factor"],
+                best["expectancy"],
+                best["net_profit"],
+            )
 
     def evaluate_combination(self, combination: ResearchCombination) -> dict[str, Any]:
         candles = self.repository.fetch_ohlc(combination.pair, combination.timeframe)

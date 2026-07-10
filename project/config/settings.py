@@ -66,7 +66,7 @@ class PlatformSettings:
     research_sleep_between_batches_seconds: int = _int_env("RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS", 60)
     resume_research: bool = _bool_env("RESUME_RESEARCH", True)
     scheduler_research_seconds: int = _int_env("SCHEDULER_RESEARCH_SECONDS", 86400)
-    railway_light_research_seconds: int = _int_env("RAILWAY_LIGHT_RESEARCH_SECONDS", 3600)
+    railway_light_research_seconds: int = _int_env("RAILWAY_LIGHT_RESEARCH_SECONDS", 300)
     max_runtime_minutes: int = _int_env("MAX_MODULE_RUNTIME_MINUTES", 45)
 
 

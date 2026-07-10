@@ -830,3 +830,14 @@ RESEARCH BATCH COMPLETED ...
 ```
 
 Se vuoi evitare lavoro immediato all'avvio, imposta una o entrambe le variabili a `false`.
+
+## Research progress monitor
+
+Il Research Engine ora emette uno snapshot di avanzamento dopo ogni batch completato:
+
+```text
+RESEARCH PROGRESS total=967680 done=1000 pending=966680 retryable=0 running=0 progress=0.1033% estimated_batches_remaining=9667 estimated_days_remaining=33.57
+RESEARCH BEST strategy=... pair=... timeframe=... profit_factor=... expectancy=... net_profit=...
+```
+
+In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 300 secondi, così un batch da 100 combinazioni gira ogni 5 minuti invece che ogni ora. Questo mantiene carico leggero su Railway ma rende la ricerca progressiva molto più utile.

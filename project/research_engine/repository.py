@@ -97,6 +97,34 @@ class ResearchRepository:
             (pair, timeframe, limit),
         )
 
+
+    def fetch_progress_counts(self) -> dict[str, int]:
+        rows = self.client.fetch_all(
+            """SELECT status, COUNT(*)
+            FROM research.strategy_combinations
+            GROUP BY status"""
+        )
+        return {str(status): int(count or 0) for status, count in rows}
+
+    def fetch_best_result(self) -> dict[str, Any] | None:
+        rows = self.client.fetch_all(
+            """SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
+            FROM research.strategy_results
+            ORDER BY profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
+            LIMIT 1"""
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "strategy": row[0],
+            "pair": row[1],
+            "timeframe": row[2],
+            "profit_factor": float(row[3] or 0),
+            "expectancy": float(row[4] or 0),
+            "net_profit": float(row[5] or 0),
+        }
+
     def save_result(self, combination: ResearchCombination, metrics: dict[str, Any], batch_id: int) -> None:
         self.client.execute(
             """INSERT INTO research.strategy_results(

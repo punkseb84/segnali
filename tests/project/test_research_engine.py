@@ -34,6 +34,12 @@ class FakeResearchRepository:
     def fetch_ohlc(self, pair, timeframe, limit=720):
         return [(index, 1, 1, 1, 100 + index, 10) for index in range(220)]
 
+    def fetch_progress_counts(self):
+        return {"DONE": len([item for item in self.done if item[1] == "DONE"]), "PENDING": 0, "FAILED_RETRYABLE": 0, "RUNNING": 0}
+
+    def fetch_best_result(self):
+        return {"strategy": "Breakout", "pair": "BTC/USD", "timeframe": "5m", "profit_factor": 1.2, "expectancy": 0.1, "net_profit": 1.0}
+
     def save_result(self, combination, metrics, batch_id):
         self.results.append((combination.id, metrics["validation"]["status"], batch_id))
 
