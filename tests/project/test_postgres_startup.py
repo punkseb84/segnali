@@ -30,3 +30,21 @@ def test_sanitize_postgres_error_masks_password():
 
     assert "secret" not in sanitized
     assert "user:***@example.railway.internal:5432" in sanitized
+
+
+def test_notification_engine_falls_back_to_live_signals_flag(monkeypatch):
+    monkeypatch.delenv("ENABLE_NOTIFICATION_ENGINE", raising=False)
+    monkeypatch.setenv("ENABLE_LIVE_SIGNALS", "true")
+
+    settings = PlatformSettings()
+
+    assert settings.enable_notification_engine is True
+
+
+def test_notification_engine_flag_has_priority(monkeypatch):
+    monkeypatch.setenv("ENABLE_NOTIFICATION_ENGINE", "false")
+    monkeypatch.setenv("ENABLE_LIVE_SIGNALS", "true")
+
+    settings = PlatformSettings()
+
+    assert settings.enable_notification_engine is False

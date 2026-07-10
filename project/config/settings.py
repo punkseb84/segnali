@@ -16,6 +16,18 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _notification_engine_enabled() -> bool:
+    """Prefer the modular flag, but accept the legacy Railway live-signal flag.
+
+    Some Railway deployments already expose ENABLE_LIVE_SIGNALS but do not yet
+    have ENABLE_NOTIFICATION_ENGINE. The fallback keeps the modular platform
+    compatible without requiring users to rename existing variables.
+    """
+    if os.getenv("ENABLE_NOTIFICATION_ENGINE") is not None:
+        return _bool_env("ENABLE_NOTIFICATION_ENGINE", False)
+    return _bool_env("ENABLE_LIVE_SIGNALS", False)
+
+
 def _float_env(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, default))
@@ -52,7 +64,7 @@ class PlatformSettings:
     enable_research_engine: bool = _bool_env("ENABLE_RESEARCH_ENGINE", True)
     enable_decision_engine: bool = _bool_env("ENABLE_DECISION_ENGINE", True)
     enable_strategy_engine: bool = _bool_env("ENABLE_STRATEGY_ENGINE", True)
-    enable_notification_engine: bool = _bool_env("ENABLE_NOTIFICATION_ENGINE", False)
+    enable_notification_engine: bool = field(default_factory=_notification_engine_enabled)
     collector_pairs: list[str] = field(default_factory=lambda: _list_env("COLLECTOR_PAIRS", ["BTC/USD", "ETH/USD", "SOL/USD"]))
     collector_timeframes: list[str] = field(default_factory=lambda: [item.strip().lower() for item in os.getenv("COLLECTOR_TIMEFRAMES", "5m,15m,1h").split(",") if item.strip()])
     ohlc_limit: int = _int_env("COLLECTOR_OHLC_LIMIT", 720)
