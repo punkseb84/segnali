@@ -20,12 +20,16 @@ class NotificationEngine:
 
     def subscribe(self) -> None:
         self.event_bus.subscribe(EventType.NEW_SIGNAL, self.handle_event)
+        self.event_bus.subscribe(EventType.STOP_LOSS, self.handle_event)
+        self.event_bus.subscribe(EventType.TARGET_HIT, self.handle_event)
         self.event_bus.subscribe(EventType.REPORT_READY, self.handle_event)
         self.logger.info("Notification Engine subscribed enabled=%s telegram_configured=%s", self.enabled, bool(self.telegram_token and self.telegram_chat_id))
 
     def handle_event(self, event: Event) -> None:
         if event.type == EventType.NEW_SIGNAL:
             message = self.format_signal(event.payload)
+        elif event.type in {EventType.STOP_LOSS, EventType.TARGET_HIT}:
+            message = self.format_outcome(event.payload)
         else:
             message = str(event.payload.get("message", event.payload))
         if not self.enabled:
@@ -46,6 +50,20 @@ class NotificationEngine:
             f"Score: {payload.get('score'):.2f}\n"
             f"Probability: {payload.get('probability'):.2%}\n"
             f"Reasons: {', '.join(payload.get('reasons', []))}"
+        )
+
+    def format_outcome(self, payload: dict[str, Any]) -> str:
+        is_stop = payload.get("outcome") == "STOP_LOSS"
+        title = "🛑 Stop Loss raggiunto" if is_stop else "✅ Target 1 raggiunto"
+        return (
+            f"{title}\n"
+            f"ID: {payload.get('signal_id')}\n"
+            f"Strategy: {payload.get('strategy')}\n"
+            f"Pair: {payload.get('pair')} {payload.get('timeframe')}\n"
+            f"Entry: {payload.get('entry'):.6f}\n"
+            f"Outcome price: {payload.get('outcome_price'):.6f}\n"
+            f"Closed at: {payload.get('closed_at')}\n"
+            f"Ambiguous candle: {payload.get('ambiguous')}"
         )
 
     def send_telegram(self, message: str) -> None:

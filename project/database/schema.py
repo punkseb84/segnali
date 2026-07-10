@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS signals.generated_signals (
     status TEXT NOT NULL DEFAULT 'NEW',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_generated_signals_active
+    ON signals.generated_signals(strategy, pair, timeframe, regime, status, created_at DESC);
 """
 STATISTICS_SCHEMA = """
 CREATE SCHEMA IF NOT EXISTS statistics;

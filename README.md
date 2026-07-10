@@ -651,6 +651,7 @@ ENABLE_DATA_COLLECTOR=true
 ENABLE_RESEARCH_ENGINE=true
 ENABLE_DECISION_ENGINE=true
 ENABLE_STRATEGY_ENGINE=true
+ENABLE_POSITION_MONITOR=true
 ENABLE_NOTIFICATION_ENGINE=false
 # Se Railway non ha ancora questa variabile, puoi usare ENABLE_LIVE_SIGNALS=false/true come fallback.
 # Se mancano entrambe ma TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID sono presenti, Telegram viene abilitato automaticamente.
@@ -674,7 +675,8 @@ Intervalli target:
 - Data Collector: ogni 5 minuti (`SCHEDULER_COLLECTOR_SECONDS=300`);
 - Research Engine: batch leggero periodico in `RAILWAY_LIGHT` o continuo in `RESEARCH`;
 - Decision Engine: ogni 15 minuti (`SCHEDULER_DECISION_SECONDS=900`);
-- Strategy Engine: ogni minuto (`SCHEDULER_STRATEGY_SECONDS=60`);
+- Strategy Engine: ogni minuto (`SCHEDULER_STRATEGY_SECONDS=60`), con blocco duplicati finché un segnale uguale resta aperto;
+- Position Monitor: ogni minuto (`SCHEDULER_POSITION_MONITOR_SECONDS=60`) per chiudere segnali a TP1/SL;
 - Notification Engine: real time via Event Bus quando `ENABLE_NOTIFICATION_ENGINE=true`; se questa variabile non esiste su Railway, la piattaforma usa `ENABLE_LIVE_SIGNALS` come fallback; se mancano entrambe ma sono presenti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`, Telegram viene abilitato automaticamente.
 
 ## Piano di migrazione
@@ -698,6 +700,7 @@ ENABLE_DATA_COLLECTOR=true
 ENABLE_RESEARCH_ENGINE=true
 ENABLE_DECISION_ENGINE=true
 ENABLE_STRATEGY_ENGINE=true
+ENABLE_POSITION_MONITOR=true
 ENABLE_NOTIFICATION_ENGINE=false
 # fallback supportato se ENABLE_NOTIFICATION_ENGINE non è presente:
 # ENABLE_LIVE_SIGNALS=false
@@ -855,6 +858,14 @@ Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi
 
 - Decision Engine: classifica il regime su OHLC PostgreSQL e abilita famiglie di strategie.
 - Strategy Engine: legge il miglior candidato research, verifica soglia minima di profit factor e coerenza con il regime, salva il segnale in `signals.generated_signals` e pubblica `NEW_SIGNAL`.
-- Notification Engine: si sottoscrive agli eventi e può inviare Telegram se `ENABLE_NOTIFICATION_ENGINE=true`, oppure se `ENABLE_LIVE_SIGNALS=true`, oppure automaticamente quando esistono già `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`; servono comunque le variabili Telegram configurate.
+- Position Monitor: legge i segnali aperti da `signals.generated_signals`, controlla gli OHLC PostgreSQL e chiude il segnale quando raggiunge TP1 o SL, pubblicando `TARGET_HIT` o `STOP_LOSS`.
+- Notification Engine: si sottoscrive agli eventi e può inviare Telegram se `ENABLE_NOTIFICATION_ENGINE=true`, oppure se `ENABLE_LIVE_SIGNALS=true`, oppure automaticamente quando esistono già `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`; invia anche notifiche TP1/SL prodotte dal Position Monitor.
 
 Per sicurezza, le notifiche restano disabilitate di default. I segnali possono comunque essere salvati in PostgreSQL per audit e verifica prima di attivare Telegram.
+
+
+## Duplicate signal protection e TP1/SL modulari
+
+In `RAILWAY_LIGHT` lo Strategy Engine non deve inviare lo stesso segnale ogni minuto. Prima di salvare un nuovo segnale, controlla se esiste già un segnale attivo con stessa strategia, pair, timeframe e regime in stato `NEW` o `OPEN`; se esiste, il nuovo invio viene saltato.
+
+Il Position Monitor chiude i segnali aperti quando gli OHLC PostgreSQL raggiungono `take_profit` o `stop_loss`. Se TP1 e SL sono nella stessa candela, viene applicata una regola conservativa: vince lo stop loss. Gli eventi `TARGET_HIT` e `STOP_LOSS` vengono inviati al Notification Engine per Telegram.

@@ -74,11 +74,37 @@ class StrategyEngine:
                 f"regime={decision.regime}",
             ],
         )
+        duplicate_id = self.find_active_duplicate(signal)
+        if duplicate_id is not None:
+            self.logger.info(
+                "STRATEGY duplicate skipped existing_signal_id=%s strategy=%s pair=%s timeframe=%s regime=%s",
+                duplicate_id,
+                signal.strategy,
+                signal.pair,
+                signal.timeframe,
+                signal.regime,
+            )
+            return None
         signal_id = self.save_signal(signal)
         payload = {**signal.__dict__, "signal_id": signal_id}
         self.logger.info("NEW SIGNAL id=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
         self.event_bus.publish(Event(EventType.NEW_SIGNAL, payload))
         return signal
+
+    def find_active_duplicate(self, signal: GeneratedSignal) -> int | None:
+        rows = self.research_repository.client.fetch_all(
+            """SELECT id
+            FROM signals.generated_signals
+            WHERE strategy = %s
+              AND pair = %s
+              AND timeframe = %s
+              AND regime = %s
+              AND status IN ('NEW', 'OPEN')
+            ORDER BY created_at DESC
+            LIMIT 1""",
+            (signal.strategy, signal.pair, signal.timeframe, signal.regime),
+        )
+        return int(rows[0][0]) if rows else None
 
     def save_signal(self, signal: GeneratedSignal) -> int:
         rows = self.research_repository.client.fetch_all(

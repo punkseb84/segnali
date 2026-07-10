@@ -14,6 +14,7 @@ from project.decision_engine.service import DecisionEngine
 from project.notification_engine.service import NotificationEngine
 from project.database.migrations import run_migrations
 from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info, sanitize_postgres_error
+from project.position_monitor.service import PositionMonitor
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
 from project.scheduler import PlatformScheduler
@@ -88,6 +89,10 @@ def build_notification_engine(settings: PlatformSettings, event_bus: EventBus) -
     return notification
 
 
+def build_position_monitor(event_bus: EventBus, postgres: PostgresClient) -> PositionMonitor:
+    return PositionMonitor(postgres, event_bus)
+
+
 def main() -> None:
     settings = load_settings()
     logger = get_module_logger("system")
@@ -140,11 +145,12 @@ def main() -> None:
     event_bus = EventBus()
     log_storage_startup(settings, logger)
     logger.info(
-        "Starting modular quant platform | collector=%s research=%s decision=%s strategy=%s notification=%s",
+        "Starting modular quant platform | collector=%s research=%s decision=%s strategy=%s position_monitor=%s notification=%s",
         settings.enable_data_collector,
         settings.enable_research_engine,
         settings.enable_decision_engine,
         settings.enable_strategy_engine,
+        settings.enable_position_monitor,
         settings.enable_notification_engine,
     )
     logger.info("Checkpoint A")
@@ -170,9 +176,10 @@ def main() -> None:
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
     decision_engine = build_decision_engine(event_bus, postgres) if settings.enable_decision_engine else None
     strategy_engine = build_strategy_engine(research_repository, decision_engine, event_bus) if settings.enable_strategy_engine and decision_engine is not None else None
+    position_monitor = build_position_monitor(event_bus, postgres) if settings.enable_position_monitor else None
     if settings.enable_notification_engine:
         build_notification_engine(settings, event_bus)
-    scheduler = PlatformScheduler(settings, data_collector, research_engine, decision_engine, strategy_engine)
+    scheduler = PlatformScheduler(settings, data_collector, research_engine, decision_engine, strategy_engine, position_monitor)
     logger.info("Checkpoint D")
     scheduler.run_forever()
 

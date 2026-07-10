@@ -24,13 +24,18 @@ class StrategyEngineProtocol(Protocol):
     def evaluate(self): ...
 
 
+class PositionMonitorProtocol(Protocol):
+    def monitor_open_signals(self) -> int: ...
+
+
 class PlatformScheduler:
-    def __init__(self, settings: PlatformSettings, data_collector: DataCollectorService | None = None, research_engine: ResearchEngineProtocol | None = None, decision_engine: DecisionEngineProtocol | None = None, strategy_engine: StrategyEngineProtocol | None = None) -> None:
+    def __init__(self, settings: PlatformSettings, data_collector: DataCollectorService | None = None, research_engine: ResearchEngineProtocol | None = None, decision_engine: DecisionEngineProtocol | None = None, strategy_engine: StrategyEngineProtocol | None = None, position_monitor: PositionMonitorProtocol | None = None) -> None:
         self.settings = settings
         self.data_collector = data_collector
         self.research_engine = research_engine
         self.decision_engine = decision_engine
         self.strategy_engine = strategy_engine
+        self.position_monitor = position_monitor
         self.logger = get_module_logger("system")
 
     def configure(self) -> None:
@@ -66,6 +71,10 @@ class PlatformScheduler:
             schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(self.strategy_engine.evaluate)
             self.logger.info("Strategy Engine scheduled every %ss", self.settings.scheduler_strategy_seconds)
             self.strategy_engine.evaluate()
+        if self.settings.enable_position_monitor and self.position_monitor is not None:
+            schedule.every(self.settings.scheduler_position_monitor_seconds).seconds.do(self.position_monitor.monitor_open_signals)
+            self.logger.info("Position Monitor scheduled every %ss", self.settings.scheduler_position_monitor_seconds)
+            self.position_monitor.monitor_open_signals()
         if self.settings.enable_notification_engine:
             self.logger.info("Notification Engine enabled and subscribed to EventBus")
 
