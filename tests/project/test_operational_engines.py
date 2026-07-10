@@ -52,8 +52,10 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
 
     assert signal is not None
     assert signal.strategy == "Breakout"
+    assert signal.entry_timing == "IMMEDIATE_ON_SIGNAL_RECEIPT"
     assert postgres.inserted
     assert events[-1].payload["signal_id"] == 123
+    assert events[-1].payload["entry_timing"] == "IMMEDIATE_ON_SIGNAL_RECEIPT"
 
 
 def test_notification_engine_skips_when_disabled():

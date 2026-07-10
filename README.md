@@ -869,3 +869,15 @@ Per sicurezza, le notifiche restano disabilitate di default. I segnali possono c
 In `RAILWAY_LIGHT` lo Strategy Engine non deve inviare lo stesso segnale ogni minuto. Prima di salvare un nuovo segnale, controlla se esiste già un segnale attivo con stessa strategia, pair, timeframe e regime in stato `NEW` o `OPEN`; se esiste, il nuovo invio viene saltato.
 
 Il Position Monitor chiude i segnali aperti quando gli OHLC PostgreSQL raggiungono `take_profit` o `stop_loss`. Se TP1 e SL sono nella stessa candela, viene applicata una regola conservativa: vince lo stop loss. Gli eventi `TARGET_HIT` e `STOP_LOSS` vengono inviati al Notification Engine per Telegram.
+
+## Entry timing nei segnali Telegram
+
+I segnali modulari ora includono esplicitamente il minuto di entrata. Lo Strategy Engine salva `signal_time`, `reference_candle_time` e `entry_timing` in `signals.generated_signals`; il messaggio Telegram mostra che l'entrata è `IMMEDIATE_ON_SIGNAL_RECEIPT`, cioè operativa alla ricezione del segnale e non alla candela successiva.
+
+Campi Telegram rilevanti:
+
+```text
+Entry minute: <timestamp generazione segnale>
+Entry timing: entra immediatamente alla ricezione del segnale
+Candela riferimento: <timestamp ultima candela OHLC usata>
+```

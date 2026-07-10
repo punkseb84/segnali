@@ -21,6 +21,9 @@ class GeneratedSignal:
     entry: float
     stop_loss: float
     take_profit: float
+    signal_time: datetime
+    reference_candle_time: Any
+    entry_timing: str
     score: float
     probability: float
     reasons: list[str]
@@ -52,6 +55,8 @@ class StrategyEngine:
             return None
         latest = prices[0]
         entry = float(latest[4])
+        reference_candle_time = latest[0]
+        signal_time = datetime.now(timezone.utc)
         ranges = [float(row[2]) - float(row[3]) for row in prices if float(row[2]) >= float(row[3])]
         avg_range = sum(ranges) / len(ranges) if ranges else entry * 0.005
         stop_loss = max(entry - avg_range, entry * 0.98)
@@ -66,6 +71,9 @@ class StrategyEngine:
             entry=entry,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            signal_time=signal_time,
+            reference_candle_time=reference_candle_time,
+            entry_timing="IMMEDIATE_ON_SIGNAL_RECEIPT",
             score=score,
             probability=probability,
             reasons=[
@@ -108,9 +116,28 @@ class StrategyEngine:
 
     def save_signal(self, signal: GeneratedSignal) -> int:
         rows = self.research_repository.client.fetch_all(
-            """INSERT INTO signals.generated_signals(strategy, pair, timeframe, regime, entry, stop_loss, take_profit, score, probability, reasons, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            """INSERT INTO signals.generated_signals(
+                strategy, pair, timeframe, regime, entry, stop_loss, take_profit,
+                signal_time, reference_candle_time, entry_timing,
+                score, probability, reasons, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             RETURNING id""",
-            (signal.strategy, signal.pair, signal.timeframe, signal.regime, signal.entry, signal.stop_loss, signal.take_profit, signal.score, signal.probability, json.dumps(signal.reasons), datetime.now(timezone.utc)),
+            (
+                signal.strategy,
+                signal.pair,
+                signal.timeframe,
+                signal.regime,
+                signal.entry,
+                signal.stop_loss,
+                signal.take_profit,
+                signal.signal_time,
+                signal.reference_candle_time,
+                signal.entry_timing,
+                signal.score,
+                signal.probability,
+                json.dumps(signal.reasons),
+                signal.signal_time,
+            ),
         )
         return int(rows[0][0])
