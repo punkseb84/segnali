@@ -77,3 +77,22 @@ def test_seed_combinations_streams_to_repository_in_chunks():
     assert seeded == len(repo.seeded)
     assert seeded > 50
     assert repo.seeded[0][0] == "Breakout"
+
+class SqlCaptureClient:
+    def __init__(self):
+        self.sql = ""
+
+    def fetch_all(self, sql, params=None):
+        self.sql = sql
+        return []
+
+
+def test_best_result_query_excludes_bootstrap_records():
+    from project.research_engine.repository import ResearchRepository
+
+    client = SqlCaptureClient()
+    repository = ResearchRepository(client)
+
+    assert repository.fetch_best_result() is None
+    assert "BOOTSTRAP_TEST" in client.sql
+    assert "validation->>'status'" in client.sql

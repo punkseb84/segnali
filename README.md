@@ -841,3 +841,5 @@ RESEARCH BEST strategy=... pair=... timeframe=... profit_factor=... expectancy=.
 ```
 
 In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 300 secondi, così un batch da 100 combinazioni gira ogni 5 minuti invece che ogni ora. Questo mantiene carico leggero su Railway ma rende la ricerca progressiva molto più utile.
+
+Nota: i record diagnostici `BOOTSTRAP_TEST` sono esclusi dal log `RESEARCH BEST`, così il miglior risultato provvisorio mostra solo risultati research reali e non righe create per verificare PostgreSQL.

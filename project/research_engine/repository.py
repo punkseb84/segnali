@@ -110,6 +110,8 @@ class ResearchRepository:
         rows = self.client.fetch_all(
             """SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
             FROM research.strategy_results
+            WHERE strategy <> 'BOOTSTRAP_TEST'
+              AND COALESCE(validation->>'status', '') <> 'BOOTSTRAP'
             ORDER BY profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             LIMIT 1"""
         )
