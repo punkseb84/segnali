@@ -881,3 +881,29 @@ Entry minute: <timestamp generazione segnale>
 Entry timing: entra immediatamente alla ricezione del segnale
 Candela riferimento: <timestamp ultima candela OHLC usata>
 ```
+
+## Timeframe operativo 15m e profitto netto Binance
+
+La piattaforma modulare opera di default sul timeframe `15m` tramite `OPERATIONAL_TIMEFRAME=15m`. Il Decision Engine valuta il regime sul timeframe operativo e lo Strategy Engine seleziona solo candidati research con lo stesso timeframe.
+
+Il calcolo del segnale include ora costi Binance stimati:
+
+```env
+TRADE_NOTIONAL_EUR=100
+BINANCE_BUY_FEE_RATE=0.001
+BINANCE_SELL_FEE_RATE=0.001
+BINANCE_SPREAD_RATE=0.0005
+MIN_TP1_NET_PROFIT_EUR=0.01
+OPERATIONAL_TIMEFRAME=15m
+```
+
+Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Se il TP1 grezzo non garantisce un profitto netto positivo, viene alzato al minimo necessario per avere `net_profit_tp1_eur > 0`. Se il profitto netto resta non positivo, il segnale viene scartato.
+
+Il messaggio Telegram mostra:
+
+```text
+Net profit TP1
+Net loss SL
+Net R/R
+Costi stimati Binance
+```

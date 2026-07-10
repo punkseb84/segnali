@@ -32,8 +32,8 @@ class FakeResearchRepository(ResearchRepository):
     def __init__(self, postgres):
         self.client = postgres
 
-    def fetch_best_result(self):
-        return {"strategy": "Breakout", "pair": "BTC/USD", "timeframe": "5m", "profit_factor": 1.4, "expectancy": 0.2, "net_profit": 10.0}
+    def fetch_best_result(self, timeframe=None):
+        return {"strategy": "Breakout", "pair": "BTC/USD", "timeframe": timeframe or "15m", "profit_factor": 1.4, "expectancy": 0.2, "net_profit": 10.0}
 
     def fetch_ohlc(self, pair, timeframe, limit=720):
         return self.client.fetch_all("FROM market_data.ohlc", (pair, timeframe, limit))
@@ -53,6 +53,8 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert signal is not None
     assert signal.strategy == "Breakout"
     assert signal.entry_timing == "IMMEDIATE_ON_SIGNAL_RECEIPT"
+    assert signal.timeframe == "15m"
+    assert signal.net_profit_tp1_eur > 0
     assert postgres.inserted
     assert events[-1].payload["signal_id"] == 123
     assert events[-1].payload["entry_timing"] == "IMMEDIATE_ON_SIGNAL_RECEIPT"
@@ -63,7 +65,7 @@ def test_notification_engine_skips_when_disabled():
     notification = NotificationEngine(bus, enabled=False)
     notification.subscribe()
 
-    bus.publish(Event(EventType.NEW_SIGNAL, {"signal_id": 1, "strategy": "Breakout", "pair": "BTC/USD", "timeframe": "5m", "regime": "TREND_UP", "entry": 1.0, "stop_loss": 0.9, "take_profit": 1.2, "score": 80.0, "probability": 0.6, "reasons": ["test"]}))
+    bus.publish(Event(EventType.NEW_SIGNAL, {"signal_id": 1, "strategy": "Breakout", "pair": "BTC/USD", "timeframe": "15m", "regime": "TREND_UP", "entry": 1.0, "stop_loss": 0.9, "take_profit": 1.2, "signal_time": "2026-01-01T00:00:00Z", "reference_candle_time": "2026-01-01T00:00:00Z", "net_profit_tp1_eur": 1.0, "net_loss_sl_eur": 1.0, "net_rr": 1.0, "estimated_buy_fee_eur": 0.1, "estimated_sell_fee_eur": 0.1, "estimated_spread_cost_eur": 0.05, "score": 80.0, "probability": 0.6, "reasons": ["test"]}))
 
 
 def test_strategy_engine_skips_active_duplicate_signal():

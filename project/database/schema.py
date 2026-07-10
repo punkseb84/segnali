@@ -128,6 +128,13 @@ CREATE TABLE IF NOT EXISTS signals.generated_signals (
     signal_time TIMESTAMPTZ,
     reference_candle_time TIMESTAMPTZ,
     entry_timing TEXT NOT NULL DEFAULT 'IMMEDIATE_ON_SIGNAL_RECEIPT',
+    gross_profit_tp1_eur NUMERIC,
+    estimated_buy_fee_eur NUMERIC,
+    estimated_sell_fee_eur NUMERIC,
+    estimated_spread_cost_eur NUMERIC,
+    net_profit_tp1_eur NUMERIC,
+    net_loss_sl_eur NUMERIC,
+    net_rr NUMERIC,
     score NUMERIC NOT NULL,
     probability NUMERIC NOT NULL,
     reasons JSONB NOT NULL,
@@ -137,7 +144,14 @@ CREATE TABLE IF NOT EXISTS signals.generated_signals (
 ALTER TABLE signals.generated_signals
     ADD COLUMN IF NOT EXISTS signal_time TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS reference_candle_time TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS entry_timing TEXT NOT NULL DEFAULT 'IMMEDIATE_ON_SIGNAL_RECEIPT';
+    ADD COLUMN IF NOT EXISTS entry_timing TEXT NOT NULL DEFAULT 'IMMEDIATE_ON_SIGNAL_RECEIPT',
+    ADD COLUMN IF NOT EXISTS gross_profit_tp1_eur NUMERIC,
+    ADD COLUMN IF NOT EXISTS estimated_buy_fee_eur NUMERIC,
+    ADD COLUMN IF NOT EXISTS estimated_sell_fee_eur NUMERIC,
+    ADD COLUMN IF NOT EXISTS estimated_spread_cost_eur NUMERIC,
+    ADD COLUMN IF NOT EXISTS net_profit_tp1_eur NUMERIC,
+    ADD COLUMN IF NOT EXISTS net_loss_sl_eur NUMERIC,
+    ADD COLUMN IF NOT EXISTS net_rr NUMERIC;
 CREATE INDEX IF NOT EXISTS idx_generated_signals_active
     ON signals.generated_signals(strategy, pair, timeframe, regime, status, created_at DESC);
 """

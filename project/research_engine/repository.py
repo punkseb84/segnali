@@ -106,14 +106,18 @@ class ResearchRepository:
         )
         return {str(status): int(count or 0) for status, count in rows}
 
-    def fetch_best_result(self) -> dict[str, Any] | None:
+    def fetch_best_result(self, timeframe: str | None = None) -> dict[str, Any] | None:
+        timeframe_filter = "AND timeframe = %s" if timeframe else ""
+        params: tuple[Any, ...] = (timeframe,) if timeframe else ()
         rows = self.client.fetch_all(
-            """SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
+            f"""SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
             FROM research.strategy_results
             WHERE strategy <> 'BOOTSTRAP_TEST'
               AND COALESCE(validation->>'status', '') <> 'BOOTSTRAP'
+              {timeframe_filter}
             ORDER BY profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
-            LIMIT 1"""
+            LIMIT 1""",
+            params,
         )
         if not rows:
             return None

@@ -75,12 +75,22 @@ def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postg
     )
 
 
-def build_decision_engine(event_bus: EventBus, postgres: PostgresClient) -> DecisionEngine:
-    return DecisionEngine(postgres, event_bus)
+def build_decision_engine(settings: PlatformSettings, event_bus: EventBus, postgres: PostgresClient) -> DecisionEngine:
+    return DecisionEngine(postgres, event_bus, timeframe=settings.operational_timeframe)
 
 
-def build_strategy_engine(research_repository: ResearchRepository, decision_engine: DecisionEngine, event_bus: EventBus) -> StrategyEngine:
-    return StrategyEngine(research_repository, decision_engine, event_bus)
+def build_strategy_engine(settings: PlatformSettings, research_repository: ResearchRepository, decision_engine: DecisionEngine, event_bus: EventBus) -> StrategyEngine:
+    return StrategyEngine(
+        research_repository,
+        decision_engine,
+        event_bus,
+        operational_timeframe=settings.operational_timeframe,
+        trade_notional_eur=settings.trade_notional_eur,
+        buy_fee_rate=settings.binance_buy_fee_rate,
+        sell_fee_rate=settings.binance_sell_fee_rate,
+        spread_rate=settings.binance_spread_rate,
+        min_tp1_net_profit_eur=settings.min_tp1_net_profit_eur,
+    )
 
 
 def build_notification_engine(settings: PlatformSettings, event_bus: EventBus) -> NotificationEngine:
@@ -174,8 +184,8 @@ def main() -> None:
     data_collector = build_data_collector(settings, event_bus, postgres) if settings.enable_data_collector else None
     research_repository = ResearchRepository(postgres)
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
-    decision_engine = build_decision_engine(event_bus, postgres) if settings.enable_decision_engine else None
-    strategy_engine = build_strategy_engine(research_repository, decision_engine, event_bus) if settings.enable_strategy_engine and decision_engine is not None else None
+    decision_engine = build_decision_engine(settings, event_bus, postgres) if settings.enable_decision_engine else None
+    strategy_engine = build_strategy_engine(settings, research_repository, decision_engine, event_bus) if settings.enable_strategy_engine and decision_engine is not None else None
     position_monitor = build_position_monitor(event_bus, postgres) if settings.enable_position_monitor else None
     if settings.enable_notification_engine:
         build_notification_engine(settings, event_bus)
