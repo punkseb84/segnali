@@ -48,3 +48,14 @@ def test_notification_engine_flag_has_priority(monkeypatch):
     settings = PlatformSettings()
 
     assert settings.enable_notification_engine is False
+
+
+def test_notification_engine_enables_when_only_telegram_is_configured(monkeypatch):
+    monkeypatch.delenv("ENABLE_NOTIFICATION_ENGINE", raising=False)
+    monkeypatch.delenv("ENABLE_LIVE_SIGNALS", raising=False)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+
+    settings = PlatformSettings()
+
+    assert settings.enable_notification_engine is True

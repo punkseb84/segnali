@@ -19,12 +19,17 @@ def _bool_env(name: str, default: bool) -> bool:
 def _notification_engine_enabled() -> bool:
     """Prefer the modular flag, but accept the legacy Railway live-signal flag.
 
-    Some Railway deployments already expose ENABLE_LIVE_SIGNALS but do not yet
-    have ENABLE_NOTIFICATION_ENGINE. The fallback keeps the modular platform
-    compatible without requiring users to rename existing variables.
+    Some Railway deployments already expose ENABLE_LIVE_SIGNALS, or only have
+    Telegram credentials configured, but do not yet have ENABLE_NOTIFICATION_ENGINE.
+    The fallback keeps the modular platform compatible without requiring users
+    to rename existing variables.
     """
     if os.getenv("ENABLE_NOTIFICATION_ENGINE") is not None:
         return _bool_env("ENABLE_NOTIFICATION_ENGINE", False)
+    if os.getenv("ENABLE_LIVE_SIGNALS") is not None:
+        return _bool_env("ENABLE_LIVE_SIGNALS", False)
+    if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+        return True
     return _bool_env("ENABLE_LIVE_SIGNALS", False)
 
 

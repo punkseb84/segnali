@@ -653,6 +653,7 @@ ENABLE_DECISION_ENGINE=true
 ENABLE_STRATEGY_ENGINE=true
 ENABLE_NOTIFICATION_ENGINE=false
 # Se Railway non ha ancora questa variabile, puoi usare ENABLE_LIVE_SIGNALS=false/true come fallback.
+# Se mancano entrambe ma TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID sono presenti, Telegram viene abilitato automaticamente.
 COLLECTOR_PAIRS=BTC/USD,ETH/USD,SOL/USD
 COLLECTOR_TIMEFRAMES=5m,15m,1h
 KRAKEN_API_SLEEP_SECONDS=1.2
@@ -674,7 +675,7 @@ Intervalli target:
 - Research Engine: batch leggero periodico in `RAILWAY_LIGHT` o continuo in `RESEARCH`;
 - Decision Engine: ogni 15 minuti (`SCHEDULER_DECISION_SECONDS=900`);
 - Strategy Engine: ogni minuto (`SCHEDULER_STRATEGY_SECONDS=60`);
-- Notification Engine: real time via Event Bus quando `ENABLE_NOTIFICATION_ENGINE=true`; se questa variabile non esiste su Railway, la piattaforma usa `ENABLE_LIVE_SIGNALS` come fallback.
+- Notification Engine: real time via Event Bus quando `ENABLE_NOTIFICATION_ENGINE=true`; se questa variabile non esiste su Railway, la piattaforma usa `ENABLE_LIVE_SIGNALS` come fallback; se mancano entrambe ma sono presenti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`, Telegram viene abilitato automaticamente.
 
 ## Piano di migrazione
 
@@ -700,6 +701,7 @@ ENABLE_STRATEGY_ENGINE=true
 ENABLE_NOTIFICATION_ENGINE=false
 # fallback supportato se ENABLE_NOTIFICATION_ENGINE non è presente:
 # ENABLE_LIVE_SIGNALS=false
+# se mancano entrambe, TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID abilitano Telegram automaticamente
 RESEARCH_BATCH_SIZE=100
 MAX_RESEARCH_RUNTIME_MINUTES=20
 RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS=60
@@ -853,6 +855,6 @@ Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi
 
 - Decision Engine: classifica il regime su OHLC PostgreSQL e abilita famiglie di strategie.
 - Strategy Engine: legge il miglior candidato research, verifica soglia minima di profit factor e coerenza con il regime, salva il segnale in `signals.generated_signals` e pubblica `NEW_SIGNAL`.
-- Notification Engine: si sottoscrive agli eventi e può inviare Telegram se `ENABLE_NOTIFICATION_ENGINE=true` oppure, quando questa variabile non è presente su Railway, se `ENABLE_LIVE_SIGNALS=true`; servono comunque le variabili Telegram configurate.
+- Notification Engine: si sottoscrive agli eventi e può inviare Telegram se `ENABLE_NOTIFICATION_ENGINE=true`, oppure se `ENABLE_LIVE_SIGNALS=true`, oppure automaticamente quando esistono già `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`; servono comunque le variabili Telegram configurate.
 
 Per sicurezza, le notifiche restano disabilitate di default. I segnali possono comunque essere salvati in PostgreSQL per audit e verifica prima di attivare Telegram.
