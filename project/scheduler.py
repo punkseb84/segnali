@@ -16,11 +16,21 @@ class ResearchEngineProtocol(Protocol):
     def process_one_batch(self, sleep_after: bool = True): ...
 
 
+class DecisionEngineProtocol(Protocol):
+    def evaluate_market(self): ...
+
+
+class StrategyEngineProtocol(Protocol):
+    def evaluate(self): ...
+
+
 class PlatformScheduler:
-    def __init__(self, settings: PlatformSettings, data_collector: DataCollectorService | None = None, research_engine: ResearchEngineProtocol | None = None) -> None:
+    def __init__(self, settings: PlatformSettings, data_collector: DataCollectorService | None = None, research_engine: ResearchEngineProtocol | None = None, decision_engine: DecisionEngineProtocol | None = None, strategy_engine: StrategyEngineProtocol | None = None) -> None:
         self.settings = settings
         self.data_collector = data_collector
         self.research_engine = research_engine
+        self.decision_engine = decision_engine
+        self.strategy_engine = strategy_engine
         self.logger = get_module_logger("system")
 
     def configure(self) -> None:
@@ -48,20 +58,16 @@ class PlatformScheduler:
             if self.settings.run_research_on_startup:
                 self.logger.info("Research Engine startup batch requested")
                 self.research_engine.process_one_batch(sleep_after=False)
-        if self.settings.enable_decision_engine:
-            schedule.every(self.settings.scheduler_decision_seconds).seconds.do(
-                self.logger.info,
-                "Decision Engine heartbeat: implementation scheduled for Phase 4",
-            )
-            self.logger.info("Decision Engine heartbeat scheduled every %ss", self.settings.scheduler_decision_seconds)
-        if self.settings.enable_strategy_engine:
-            schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(
-                self.logger.info,
-                "Strategy Engine heartbeat: implementation scheduled for Phase 5",
-            )
-            self.logger.info("Strategy Engine heartbeat scheduled every %ss", self.settings.scheduler_strategy_seconds)
+        if self.settings.enable_decision_engine and self.decision_engine is not None:
+            schedule.every(self.settings.scheduler_decision_seconds).seconds.do(self.decision_engine.evaluate_market)
+            self.logger.info("Decision Engine scheduled every %ss", self.settings.scheduler_decision_seconds)
+            self.decision_engine.evaluate_market()
+        if self.settings.enable_strategy_engine and self.strategy_engine is not None:
+            schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(self.strategy_engine.evaluate)
+            self.logger.info("Strategy Engine scheduled every %ss", self.settings.scheduler_strategy_seconds)
+            self.strategy_engine.evaluate()
         if self.settings.enable_notification_engine:
-            self.logger.info("Notification Engine real-time subscriptions reserved for Phase 6")
+            self.logger.info("Notification Engine enabled and subscribed to EventBus")
 
     def run_once(self) -> None:
         self.configure()

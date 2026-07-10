@@ -10,11 +10,14 @@ from project.config.settings import PlatformSettings, load_settings
 from project.data_collector.kraken_client import KrakenOhlcClient
 from project.data_collector.repository import MarketDataRepository
 from project.data_collector.service import DataCollectorService
+from project.decision_engine.service import DecisionEngine
+from project.notification_engine.service import NotificationEngine
 from project.database.migrations import run_migrations
 from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info, sanitize_postgres_error
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
 from project.scheduler import PlatformScheduler
+from project.strategy_engine.service import StrategyEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 
@@ -69,6 +72,20 @@ def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postg
         sleep_between_batches_seconds=settings.research_sleep_between_batches_seconds,
         batch_interval_seconds=settings.railway_light_research_seconds if settings.run_mode == "RAILWAY_LIGHT" else settings.research_sleep_between_batches_seconds,
     )
+
+
+def build_decision_engine(event_bus: EventBus, postgres: PostgresClient) -> DecisionEngine:
+    return DecisionEngine(postgres, event_bus)
+
+
+def build_strategy_engine(research_repository: ResearchRepository, decision_engine: DecisionEngine, event_bus: EventBus) -> StrategyEngine:
+    return StrategyEngine(research_repository, decision_engine, event_bus)
+
+
+def build_notification_engine(settings: PlatformSettings, event_bus: EventBus) -> NotificationEngine:
+    notification = NotificationEngine(event_bus, enabled=settings.enable_notification_engine)
+    notification.subscribe()
+    return notification
 
 
 def main() -> None:
@@ -149,8 +166,13 @@ def main() -> None:
         logger.info("Migration completed")
     logger.info("Database schema ready")
     data_collector = build_data_collector(settings, event_bus, postgres) if settings.enable_data_collector else None
+    research_repository = ResearchRepository(postgres)
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
-    scheduler = PlatformScheduler(settings, data_collector, research_engine)
+    decision_engine = build_decision_engine(event_bus, postgres) if settings.enable_decision_engine else None
+    strategy_engine = build_strategy_engine(research_repository, decision_engine, event_bus) if settings.enable_strategy_engine and decision_engine is not None else None
+    if settings.enable_notification_engine:
+        build_notification_engine(settings, event_bus)
+    scheduler = PlatformScheduler(settings, data_collector, research_engine, decision_engine, strategy_engine)
     logger.info("Checkpoint D")
     scheduler.run_forever()
 

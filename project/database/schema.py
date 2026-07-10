@@ -116,6 +116,21 @@ CREATE TABLE IF NOT EXISTS research.research_reports (
 
 SIGNALS_SCHEMA = """
 CREATE SCHEMA IF NOT EXISTS signals;
+CREATE TABLE IF NOT EXISTS signals.generated_signals (
+    id BIGSERIAL PRIMARY KEY,
+    strategy TEXT NOT NULL,
+    pair TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    regime TEXT NOT NULL,
+    entry NUMERIC NOT NULL,
+    stop_loss NUMERIC NOT NULL,
+    take_profit NUMERIC NOT NULL,
+    score NUMERIC NOT NULL,
+    probability NUMERIC NOT NULL,
+    reasons JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'NEW',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 STATISTICS_SCHEMA = """
 CREATE SCHEMA IF NOT EXISTS statistics;

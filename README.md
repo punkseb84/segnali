@@ -538,7 +538,7 @@ Il report include TOP strategie, TOP pair, TOP timeframe, TOP strategy, TOP regi
 
 # Modular Quant Platform — Piano di rifattorizzazione
 
-> Stato attuale: **FASE 1 completata**. Questa fase crea la nuova architettura modulare e implementa il solo **Data Collector**. Le fasi successive migreranno PostgreSQL/research/decision/strategy/notification senza riscrivere tutto in un unico passaggio.
+> Stato attuale: **fasi operative collegate**. La piattaforma include architettura modulare, PostgreSQL, Data Collector, Research Engine progressivo, Decision Engine, Strategy Engine e Notification Engine; le notifiche restano disabilitate di default per permettere audit dei segnali prima dell'invio live.
 
 ## Nuova struttura cartelle
 
@@ -648,9 +648,9 @@ La nuova piattaforma usa `DATABASE_URL` di Railway PostgreSQL:
 ```env
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 ENABLE_DATA_COLLECTOR=true
-ENABLE_RESEARCH_ENGINE=false
-ENABLE_DECISION_ENGINE=false
-ENABLE_STRATEGY_ENGINE=false
+ENABLE_RESEARCH_ENGINE=true
+ENABLE_DECISION_ENGINE=true
+ENABLE_STRATEGY_ENGINE=true
 ENABLE_NOTIFICATION_ENGINE=false
 COLLECTOR_PAIRS=BTC/USD,ETH/USD,SOL/USD
 COLLECTOR_TIMEFRAMES=5m,15m,1h
@@ -670,10 +670,10 @@ worker: python -m project.main
 Intervalli target:
 
 - Data Collector: ogni 5 minuti (`SCHEDULER_COLLECTOR_SECONDS=300`);
-- Research Engine: ogni notte, da implementare in Fase 3;
-- Decision Engine: ogni 15 minuti, da implementare in Fase 4;
-- Strategy Engine: ogni minuto, da implementare in Fase 5;
-- Notification Engine: real time via Event Bus, da implementare in Fase 6.
+- Research Engine: batch leggero periodico in `RAILWAY_LIGHT` o continuo in `RESEARCH`;
+- Decision Engine: ogni 15 minuti (`SCHEDULER_DECISION_SECONDS=900`);
+- Strategy Engine: ogni minuto (`SCHEDULER_STRATEGY_SECONDS=60`);
+- Notification Engine: real time via Event Bus quando `ENABLE_NOTIFICATION_ENGINE=true`.
 
 ## Piano di migrazione
 
@@ -843,3 +843,13 @@ RESEARCH BEST strategy=... pair=... timeframe=... profit_factor=... expectancy=.
 In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 300 secondi, così un batch da 100 combinazioni gira ogni 5 minuti invece che ogni ora. Questo mantiene carico leggero su Railway ma rende la ricerca progressiva molto più utile.
 
 Nota: i record diagnostici `BOOTSTRAP_TEST` sono esclusi dal log `RESEARCH BEST`, così il miglior risultato provvisorio mostra solo risultati research reali e non righe create per verificare PostgreSQL.
+
+## Operational engines enabled
+
+Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi:
+
+- Decision Engine: classifica il regime su OHLC PostgreSQL e abilita famiglie di strategie.
+- Strategy Engine: legge il miglior candidato research, verifica soglia minima di profit factor e coerenza con il regime, salva il segnale in `signals.generated_signals` e pubblica `NEW_SIGNAL`.
+- Notification Engine: si sottoscrive agli eventi e può inviare Telegram se `ENABLE_NOTIFICATION_ENGINE=true` e le variabili Telegram sono configurate.
+
+Per sicurezza, le notifiche restano disabilitate di default. I segnali possono comunque essere salvati in PostgreSQL per audit e verifica prima di attivare Telegram.

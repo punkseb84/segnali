@@ -1,1 +1,4 @@
-"""Phase 5 boundary: Strategy Engine will apply validated and enabled strategies to create signal events."""
+"""Strategy Engine: generate candidate signal events from validated research and market decisions."""
+from project.strategy_engine.service import GeneratedSignal, StrategyEngine
+
+__all__ = ["GeneratedSignal", "StrategyEngine"]
