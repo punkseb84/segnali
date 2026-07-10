@@ -103,11 +103,13 @@ class ProgressiveResearchEngine:
         self.logger.info("Research combinations seeded_or_seen=%s", seeded)
         return seeded
 
-    def process_one_batch(self) -> ResearchBatchResult:
+    def process_one_batch(self, sleep_after: bool = True) -> ResearchBatchResult:
         started = time.monotonic()
+        self.logger.info("RESEARCH BATCH START batch_size=%s runtime_limit_seconds=%s", self.batch_size, self.max_runtime_seconds)
         total = self.repository.count_combinations()
         pending = self.repository.fetch_next_pending(self.batch_size)
         if not pending:
+            self.logger.info("RESEARCH BATCH IDLE total_combinations=%s", total)
             return ResearchBatchResult(None, 0, "IDLE", "No pending research combinations")
         batch_id = self.repository.create_batch(self.batch_size, total)
         self.repository.mark_running([item.id for item in pending])
@@ -128,8 +130,9 @@ class ProgressiveResearchEngine:
                 self.repository.mark_done(combination.id, "FAILED_RETRYABLE", str(exc))
                 self.logger.exception("Research combination failed id=%s: %s", combination.id, exc)
         self.repository.finish_batch(batch_id, "COMPLETED", processed, last_id)
+        self.logger.info("RESEARCH BATCH COMPLETED batch_id=%s processed=%s total_combinations=%s last_combination_id=%s", batch_id, processed, total, last_id)
         self.event_bus.publish(Event(EventType.RESEARCH_COMPLETED, {"batch_id": batch_id, "processed": processed}))
-        if self.sleep_between_batches_seconds > 0:
+        if sleep_after and self.sleep_between_batches_seconds > 0:
             time.sleep(self.sleep_between_batches_seconds)
         return ResearchBatchResult(batch_id, processed, "COMPLETED", f"Processed {processed} combinations")
 

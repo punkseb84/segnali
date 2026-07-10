@@ -801,3 +801,32 @@ DATA COLLECTOR SYNC ALL END total=... success=... failed=...
 ```
 
 Questi log servono a verificare che `market_data.ohlc` cresca regolarmente senza duplicati prima di ampliare Research, Decision e Strategy Engine.
+
+## Primo ciclo operativo automatico
+
+Dopo il bootstrap, `RAILWAY_LIGHT` ora può avviare subito un primo ciclo operativo senza attendere il primo intervallo scheduler:
+
+```env
+RUN_DATA_COLLECTOR_ON_STARTUP=true
+RUN_RESEARCH_ON_STARTUP=true
+```
+
+Con questi default attivi:
+
+1. il Data Collector esegue immediatamente una sync iniziale delle pair/timeframe configurate;
+2. il Research Engine inizializza le combinazioni mancanti;
+3. viene processato subito un primo batch research senza sleep artificiale;
+4. i successivi cicli continuano via scheduler.
+
+Log attesi:
+
+```text
+Data Collector startup sync requested
+DATA COLLECTOR SYNC ALL START ...
+DATA COLLECTOR SYNC ALL END total=... success=... failed=...
+Research Engine startup batch requested
+RESEARCH BATCH START batch_size=100 runtime_limit_seconds=1200
+RESEARCH BATCH COMPLETED ...
+```
+
+Se vuoi evitare lavoro immediato all'avvio, imposta una o entrambe le variabili a `false`.

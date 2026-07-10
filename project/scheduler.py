@@ -13,7 +13,7 @@ from project.shared.logging import get_module_logger
 
 class ResearchEngineProtocol(Protocol):
     def seed_combinations(self, pairs: list[str], timeframes: list[str], chunk_size: int = 1000) -> int: ...
-    def process_one_batch(self): ...
+    def process_one_batch(self, sleep_after: bool = True): ...
 
 
 class PlatformScheduler:
@@ -31,17 +31,23 @@ class PlatformScheduler:
                 self.settings.collector_timeframes,
             )
             self.logger.info("Data Collector scheduled every %ss", self.settings.scheduler_collector_seconds)
+            if self.settings.run_data_collector_on_startup:
+                self.logger.info("Data Collector startup sync requested")
+                self.data_collector.sync_all_pairs(self.settings.collector_pairs, self.settings.collector_timeframes)
         if self.settings.enable_research_engine and self.research_engine is not None:
             self.research_engine.seed_combinations(self.settings.collector_pairs, self.settings.collector_timeframes)
             if self.settings.run_mode == "RESEARCH":
-                schedule.every(self.settings.research_sleep_between_batches_seconds).seconds.do(self.research_engine.process_one_batch)
+                schedule.every(self.settings.research_sleep_between_batches_seconds).seconds.do(self.research_engine.process_one_batch, False)
                 self.logger.info("Research Engine scheduled in RUN_MODE=RESEARCH every %ss", self.settings.research_sleep_between_batches_seconds)
             elif self.settings.run_mode == "RAILWAY_LIGHT":
-                schedule.every(self.settings.railway_light_research_seconds).seconds.do(self.research_engine.process_one_batch)
+                schedule.every(self.settings.railway_light_research_seconds).seconds.do(self.research_engine.process_one_batch, False)
                 self.logger.info("Research Engine scheduled in RAILWAY_LIGHT every %ss with batch_size=%s runtime_limit=%sm", self.settings.railway_light_research_seconds, self.settings.research_batch_size, self.settings.max_research_runtime_minutes)
             else:
-                schedule.every().day.at("02:00").do(self.research_engine.process_one_batch)
+                schedule.every().day.at("02:00").do(self.research_engine.process_one_batch, False)
                 self.logger.info("Research Engine scheduled nightly at 02:00")
+            if self.settings.run_research_on_startup:
+                self.logger.info("Research Engine startup batch requested")
+                self.research_engine.process_one_batch(sleep_after=False)
         if self.settings.enable_decision_engine:
             schedule.every(self.settings.scheduler_decision_seconds).seconds.do(
                 self.logger.info,

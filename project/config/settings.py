@@ -57,6 +57,8 @@ class PlatformSettings:
     collector_timeframes: list[str] = field(default_factory=lambda: [item.strip().lower() for item in os.getenv("COLLECTOR_TIMEFRAMES", "5m,15m,1h").split(",") if item.strip()])
     ohlc_limit: int = _int_env("COLLECTOR_OHLC_LIMIT", 720)
     scheduler_collector_seconds: int = _int_env("SCHEDULER_COLLECTOR_SECONDS", 300)
+    run_data_collector_on_startup: bool = _bool_env("RUN_DATA_COLLECTOR_ON_STARTUP", True)
+    run_research_on_startup: bool = _bool_env("RUN_RESEARCH_ON_STARTUP", True)
     scheduler_decision_seconds: int = _int_env("SCHEDULER_DECISION_SECONDS", 900)
     scheduler_strategy_seconds: int = _int_env("SCHEDULER_STRATEGY_SECONDS", 60)
     research_batch_size: int = _int_env("RESEARCH_BATCH_SIZE", 100)
