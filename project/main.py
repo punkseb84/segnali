@@ -85,6 +85,7 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         research_repository,
         decision_engine,
         event_bus,
+        min_profit_factor=settings.min_signal_profit_factor,
         operational_timeframe=settings.operational_timeframe,
         trade_notional_eur=settings.trade_notional_eur,
         buy_fee_rate=settings.binance_buy_fee_rate,

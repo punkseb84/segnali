@@ -42,7 +42,7 @@ class StrategyEngine:
         research_repository: ResearchRepository,
         decision_engine: DecisionEngine,
         event_bus: EventBus | None = None,
-        min_profit_factor: float = 1.25,
+        min_profit_factor: float = 1.10,
         operational_timeframe: str = "15m",
         trade_notional_eur: float = 100.0,
         buy_fee_rate: float = 0.001,

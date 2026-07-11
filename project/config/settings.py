@@ -74,6 +74,7 @@ class PlatformSettings:
     collector_pairs: list[str] = field(default_factory=lambda: _list_env("COLLECTOR_PAIRS", ["BTC/USD", "ETH/USD", "SOL/USD"]))
     collector_timeframes: list[str] = field(default_factory=lambda: [item.strip().lower() for item in os.getenv("COLLECTOR_TIMEFRAMES", "15m").split(",") if item.strip()])
     operational_timeframe: str = os.getenv("OPERATIONAL_TIMEFRAME", "15m").strip().lower()
+    min_signal_profit_factor: float = _float_env("MIN_SIGNAL_PROFIT_FACTOR", 1.10)
     trade_notional_eur: float = _float_env("TRADE_NOTIONAL_EUR", 100.0)
     binance_buy_fee_rate: float = _float_env("BINANCE_BUY_FEE_RATE", 0.001)
     binance_sell_fee_rate: float = _float_env("BINANCE_SELL_FEE_RATE", 0.001)

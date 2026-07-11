@@ -931,3 +931,19 @@ SIGNAL_COOLDOWN_MINUTES=45
 ```
 
 Questo impedisce lo spam ogni minuto, ma permette al sistema di tornare a generare segnali se un vecchio record resta aperto troppo a lungo.
+
+## Soglia Profit Factor per segnali 15m
+
+Se i log mostrano:
+
+```text
+STRATEGY candidate rejected strategy=... reason=profit_factor_below_threshold pf=...
+```
+
+significa che il candidato `15m` esiste, ma viene scartato perché sotto la soglia minima. La soglia è ora configurabile:
+
+```env
+MIN_SIGNAL_PROFIT_FACTOR=1.10
+```
+
+Il default è stato abbassato a `1.10` per permettere segnali 15m promettenti, mantenendo comunque il controllo su profitto netto TP1 positivo dopo fee/spread Binance.
