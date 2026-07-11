@@ -49,6 +49,7 @@ class StrategyEngine:
         sell_fee_rate: float = 0.001,
         spread_rate: float = 0.0005,
         min_tp1_net_profit_eur: float = 0.01,
+        signal_cooldown_minutes: int = 45,
     ) -> None:
         self.research_repository = research_repository
         self.decision_engine = decision_engine
@@ -60,6 +61,7 @@ class StrategyEngine:
         self.sell_fee_rate = sell_fee_rate
         self.spread_rate = spread_rate
         self.min_tp1_net_profit_eur = min_tp1_net_profit_eur
+        self.signal_cooldown_minutes = signal_cooldown_minutes
         self.logger = get_module_logger("strategy")
 
     def evaluate(self) -> GeneratedSignal | None:
@@ -129,8 +131,9 @@ class StrategyEngine:
         duplicate_id = self.find_active_duplicate(signal)
         if duplicate_id is not None:
             self.logger.info(
-                "STRATEGY duplicate skipped existing_signal_id=%s strategy=%s pair=%s timeframe=%s regime=%s",
+                "STRATEGY duplicate skipped existing_signal_id=%s cooldown_minutes=%s strategy=%s pair=%s timeframe=%s regime=%s",
                 duplicate_id,
+                self.signal_cooldown_minutes,
                 signal.strategy,
                 signal.pair,
                 signal.timeframe,
@@ -152,9 +155,10 @@ class StrategyEngine:
               AND timeframe = %s
               AND regime = %s
               AND status IN ('NEW', 'OPEN')
+              AND created_at >= NOW() - (%s * INTERVAL '1 minute')
             ORDER BY created_at DESC
             LIMIT 1""",
-            (signal.strategy, signal.pair, signal.timeframe, signal.regime),
+            (signal.strategy, signal.pair, signal.timeframe, signal.regime, self.signal_cooldown_minutes),
         )
         return int(rows[0][0]) if rows else None
 

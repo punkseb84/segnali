@@ -919,3 +919,15 @@ STRATEGY no research candidate available timeframe=15m
 ```
 
 Questo non è un errore Telegram: significa che la ricerca `15m` deve ancora produrre un candidato valido.
+
+## Cooldown duplicati e segnali mancanti
+
+Se non arrivano più segnali dopo il blocco duplicati, la causa può essere un vecchio segnale rimasto in stato `NEW` o `OPEN`. Per evitare che un segnale vecchio blocchi il sistema per sempre, il controllo duplicati ora considera solo segnali uguali creati negli ultimi `SIGNAL_COOLDOWN_MINUTES` minuti.
+
+Default:
+
+```env
+SIGNAL_COOLDOWN_MINUTES=45
+```
+
+Questo impedisce lo spam ogni minuto, ma permette al sistema di tornare a generare segnali se un vecchio record resta aperto troppo a lungo.

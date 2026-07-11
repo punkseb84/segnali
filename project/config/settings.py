@@ -79,6 +79,7 @@ class PlatformSettings:
     binance_sell_fee_rate: float = _float_env("BINANCE_SELL_FEE_RATE", 0.001)
     binance_spread_rate: float = _float_env("BINANCE_SPREAD_RATE", 0.0005)
     min_tp1_net_profit_eur: float = _float_env("MIN_TP1_NET_PROFIT_EUR", 0.01)
+    signal_cooldown_minutes: int = _int_env("SIGNAL_COOLDOWN_MINUTES", 45)
     ohlc_limit: int = _int_env("COLLECTOR_OHLC_LIMIT", 720)
     scheduler_collector_seconds: int = _int_env("SCHEDULER_COLLECTOR_SECONDS", 300)
     run_data_collector_on_startup: bool = _bool_env("RUN_DATA_COLLECTOR_ON_STARTUP", True)

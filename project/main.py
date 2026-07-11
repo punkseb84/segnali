@@ -91,6 +91,7 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         sell_fee_rate=settings.binance_sell_fee_rate,
         spread_rate=settings.binance_spread_rate,
         min_tp1_net_profit_eur=settings.min_tp1_net_profit_eur,
+        signal_cooldown_minutes=settings.signal_cooldown_minutes,
     )
 
 
