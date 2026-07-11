@@ -882,9 +882,9 @@ Entry timing: entra immediatamente alla ricezione del segnale
 Candela riferimento: <timestamp ultima candela OHLC usata>
 ```
 
-## Timeframe operativo 15m e profitto netto Binance
+## Timeframe operativo 1h e profitto netto Binance
 
-La piattaforma modulare opera di default sul timeframe `15m` tramite `OPERATIONAL_TIMEFRAME=15m`. Il Decision Engine valuta il regime sul timeframe operativo e lo Strategy Engine seleziona solo candidati research con lo stesso timeframe.
+La piattaforma modulare opera di default sul timeframe `1h` tramite `OPERATIONAL_TIMEFRAME=1h` e raccoglie candele `1h` tramite `COLLECTOR_TIMEFRAMES=1h`. Il Decision Engine valuta il regime sul timeframe operativo e lo Strategy Engine seleziona solo candidati research con lo stesso timeframe.
 
 Il calcolo del segnale include ora costi Binance stimati:
 
@@ -893,11 +893,12 @@ TRADE_NOTIONAL_EUR=100
 BINANCE_BUY_FEE_RATE=0.001
 BINANCE_SELL_FEE_RATE=0.001
 BINANCE_SPREAD_RATE=0.0005
-MIN_TP1_NET_PROFIT_EUR=0.01
-OPERATIONAL_TIMEFRAME=15m
+MIN_TP1_NET_PROFIT_EUR=2.00
+COLLECTOR_TIMEFRAMES=1h
+OPERATIONAL_TIMEFRAME=1h
 ```
 
-Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Se il TP1 grezzo non garantisce un profitto netto positivo, viene alzato al minimo necessario per avere `net_profit_tp1_eur > 0`. Se il profitto netto resta non positivo, il segnale viene scartato.
+Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Il Take Profit resta tecnico: se il TP tecnico non garantisce profitto netto e R/R coerenti dopo i costi, il segnale viene scartato invece di spostare artificialmente il target.
 
 Il messaggio Telegram mostra:
 
@@ -908,17 +909,17 @@ Net R/R
 Costi stimati Binance
 ```
 
-## Perché dopo il passaggio a 15m potresti non ricevere subito segnali
+## Perché dopo il passaggio a 1h potresti non ricevere subito segnali
 
-Dopo l'impostazione di `OPERATIONAL_TIMEFRAME=15m`, lo Strategy Engine usa solo risultati research sul timeframe operativo. Se il database contiene soprattutto risultati storici `5m`, il sistema non invia segnali finché il Research Engine non produce candidati `15m` validi.
+Dopo l'impostazione di `OPERATIONAL_TIMEFRAME=1h`, lo Strategy Engine usa solo risultati research sul timeframe operativo. Se il database contiene soprattutto risultati storici `5m` o `15m`, il sistema non invia segnali finché il Research Engine non produce candidati `1h` validi.
 
-Per evitare blocchi lunghi, il Research Engine ora dà priorità alle combinazioni `15m` pendenti durante i batch progressivi. Nei log, se non ci sono ancora candidati operativi, vedrai:
+Per evitare blocchi lunghi, il Research Engine ora dà priorità alle combinazioni `1h` pendenti durante i batch progressivi. Nei log, se non ci sono ancora candidati operativi, vedrai:
 
 ```text
-STRATEGY no research candidate available timeframe=15m
+STRATEGY no research candidate available timeframe=1h
 ```
 
-Questo non è un errore Telegram: significa che la ricerca `15m` deve ancora produrre un candidato valido.
+Questo non è un errore Telegram: significa che la ricerca `1h` deve ancora produrre un candidato valido.
 
 ## Cooldown duplicati e segnali mancanti
 
@@ -932,7 +933,7 @@ SIGNAL_COOLDOWN_MINUTES=45
 
 Questo impedisce lo spam ogni minuto, ma permette al sistema di tornare a generare segnali se un vecchio record resta aperto troppo a lungo.
 
-## Soglia Profit Factor per segnali 15m
+## Soglia Profit Factor per segnali 1h
 
 Se i log mostrano:
 
@@ -940,10 +941,10 @@ Se i log mostrano:
 STRATEGY candidate rejected strategy=... reason=profit_factor_below_threshold pf=...
 ```
 
-significa che il candidato `15m` esiste, ma viene scartato perché sotto la soglia minima. La soglia è ora configurabile:
+significa che il candidato `1h` esiste, ma viene scartato perché sotto la soglia minima. La soglia è ora configurabile:
 
 ```env
 MIN_SIGNAL_PROFIT_FACTOR=1.10
 ```
 
-Il default è stato abbassato a `1.10` per permettere segnali 15m promettenti, mantenendo comunque il controllo su profitto netto TP1 positivo dopo fee/spread Binance.
+Il default è `1.10` per permettere segnali 1h promettenti, mantenendo comunque il controllo su profitto netto TP1 positivo dopo fee/spread Binance.

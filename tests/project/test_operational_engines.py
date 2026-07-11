@@ -1,11 +1,22 @@
 import pytest
 
+from project.config.settings import PlatformSettings
 from project.decision_engine.service import DecisionEngine
 from project.notification_engine.service import NotificationEngine
 from project.position_monitor.service import PositionMonitor
 from project.research_engine.repository import ResearchRepository
 from project.shared.events import Event, EventBus, EventType
 from project.strategy_engine.service import StrategyEngine
+
+
+def test_platform_defaults_to_one_hour_timeframe(monkeypatch):
+    monkeypatch.delenv("COLLECTOR_TIMEFRAMES", raising=False)
+    monkeypatch.delenv("OPERATIONAL_TIMEFRAME", raising=False)
+
+    settings = PlatformSettings()
+
+    assert settings.collector_timeframes == ["1h"]
+    assert settings.operational_timeframe == "1h"
 
 
 class FakePostgres:
@@ -55,7 +66,7 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert signal is not None
     assert signal.strategy == "Breakout"
     assert signal.entry_timing == "IMMEDIATE_ON_SIGNAL_RECEIPT"
-    assert signal.timeframe == "15m"
+    assert signal.timeframe == "1h"
     assert signal.net_profit_tp1_eur > 0
     assert postgres.inserted
     assert events[-1].payload["signal_id"] == 123
@@ -76,7 +87,7 @@ def signal_payload():
         "signal_id": 1,
         "strategy": "Breakout",
         "pair": "BTC/USD",
-        "timeframe": "15m",
+        "timeframe": "1h",
         "regime": "TREND_UP",
         "entry": 1.0,
         "stop_loss": 0.9,

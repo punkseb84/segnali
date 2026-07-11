@@ -66,7 +66,7 @@ class StrategyEngine:
         decision_engine: DecisionEngine,
         event_bus: EventBus | None = None,
         min_profit_factor: float = 1.10,
-        operational_timeframe: str = "15m",
+        operational_timeframe: str = "1h",
         trade_notional_eur: float = 100.0,
         buy_fee_rate: float = 0.001,
         sell_fee_rate: float = 0.001,
