@@ -150,8 +150,11 @@ class StrategyEngine:
         validation = self.validate_signal_setup(best, entry, stop_loss, take_profit, economics, volatility, probability_context)
         if validation["status"] == "REJECTED":
             self.logger.info(
-                "SIGNAL_REJECTED reason=%s entry=%.6f stop=%.6f technical_tp=%.6f effective_tp=%.6f stop_distance=%.6f stop_pct=%.4f atr=%.6f stop_atr_ratio=%.4f tp_atr_ratio=%.4f gross_rr=%.4f net_rr=%.4f sample=%s win_rate=%s mfe_percentile=%.6f mae_percentile=%.6f",
+                "SIGNAL_REJECTED reason=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f technical_tp=%.6f effective_tp=%.6f stop_distance=%.6f stop_pct=%.4f atr=%.6f stop_atr_ratio=%.4f tp_atr_ratio=%.4f gross_rr=%.4f net_rr=%.4f sample=%s win_rate=%s mfe_percentile=%.6f mae_percentile=%.6f",
                 validation["reason"],
+                best["strategy"],
+                best["pair"],
+                best["timeframe"],
                 entry,
                 stop_loss,
                 technical_take_profit,

@@ -41,7 +41,7 @@ class FakeResearchRepository:
     def fetch_progress_counts(self):
         return {"DONE": len([item for item in self.done if item[1] == "DONE"]), "PENDING": 0, "FAILED_RETRYABLE": 0, "RUNNING": 0}
 
-    def fetch_best_result(self):
+    def fetch_best_result(self, timeframe=None):
         return {"strategy": "Breakout", "pair": "BTC/USD", "timeframe": "5m", "profit_factor": 1.2, "expectancy": 0.1, "net_profit": 1.0}
 
     def save_result(self, combination, metrics, batch_id):

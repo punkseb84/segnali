@@ -166,10 +166,11 @@ class ProgressiveResearchEngine:
             batches_remaining,
             days_remaining,
         )
-        best = self.repository.fetch_best_result()
+        best = self.repository.fetch_best_result(timeframe=self.priority_timeframe) if self.priority_timeframe else self.repository.fetch_best_result()
         if best:
             self.logger.info(
-                "RESEARCH BEST strategy=%s pair=%s timeframe=%s profit_factor=%.4f expectancy=%.6f net_profit=%.6f",
+                "RESEARCH BEST operational_timeframe=%s strategy=%s pair=%s timeframe=%s profit_factor=%.4f expectancy=%.6f net_profit=%.6f",
+                self.priority_timeframe or "ANY",
                 best["strategy"],
                 best["pair"],
                 best["timeframe"],
