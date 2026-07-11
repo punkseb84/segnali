@@ -98,6 +98,9 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         quantity_step=settings.binance_quantity_step,
         min_qty=settings.binance_min_qty,
         min_notional_eur=settings.binance_min_notional_eur,
+        max_take_profit_distance_pct=settings.max_take_profit_distance_pct,
+        enable_daily_signal_report=settings.enable_daily_signal_report,
+        daily_signal_report_hours=settings.daily_signal_report_hours,
     )
 
 

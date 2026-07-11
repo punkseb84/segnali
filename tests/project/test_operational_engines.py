@@ -60,6 +60,7 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert postgres.inserted
     assert events[-1].payload["signal_id"] == 123
     assert events[-1].payload["entry_timing"] == "IMMEDIATE_ON_SIGNAL_RECEIPT"
+    assert events[-1].payload["net_profit_tp1_eur"] > strategy.min_tp1_net_profit_eur
 
 
 def test_notification_engine_skips_when_disabled():
@@ -195,3 +196,38 @@ def test_quantity_rounding_uses_binance_step():
     economics = make_strategy_for_economics(capital=100, buy_fee=0, sell_fee=0, spread=0, step=0.01).calculate_net_economics(30, 29, 35)
 
     assert economics["quantity"] == pytest.approx(3.33)
+
+
+def test_take_profit_is_adjusted_to_minimum_net_profit_target():
+    strategy = make_strategy_for_economics(capital=100, buy_fee=0.001, sell_fee=0.001, spread=0.0005)
+    strategy.min_tp1_net_profit_eur = 2.0
+    strategy.min_net_rr = 1.2
+
+    take_profit = strategy.adjust_take_profit(64194.3, 64174.315, 64361.422107)
+    economics = strategy.calculate_net_economics(64194.3, 64174.315, take_profit)
+
+    assert economics["net_profit_tp1_eur"] > 2.0
+    assert economics["net_rr"] >= 1.2
+
+
+def test_daily_no_signal_report_is_report_not_trade_signal():
+    postgres = FakePostgres()
+    bus = EventBus()
+    reports = []
+    trade_signals = []
+    bus.subscribe(EventType.REPORT_READY, reports.append)
+    bus.subscribe(EventType.NEW_SIGNAL, trade_signals.append)
+    strategy = StrategyEngine(
+        FakeResearchRepository(postgres),
+        DecisionEngine(postgres),
+        bus,
+        enable_daily_signal_report=True,
+        daily_signal_report_hours=24,
+    )
+
+    published = strategy.publish_daily_signal_report()
+
+    assert published is True
+    assert reports
+    assert trade_signals == []
+    assert "Questo non è un segnale di ingresso" in reports[-1].payload["message"]

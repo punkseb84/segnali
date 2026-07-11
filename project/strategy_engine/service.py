@@ -57,13 +57,16 @@ class StrategyEngine:
         buy_fee_rate: float = 0.001,
         sell_fee_rate: float = 0.001,
         spread_rate: float = 0.0005,
-        min_tp1_net_profit_eur: float = 0.01,
+        min_tp1_net_profit_eur: float = 2.0,
         signal_cooldown_minutes: int = 45,
         min_net_rr: float = 1.20,
         slippage_rate: float = 0.0,
         quantity_step: float = 0.000001,
         min_qty: float = 0.0,
         min_notional_eur: float = 10.0,
+        max_take_profit_distance_pct: float = 0.03,
+        enable_daily_signal_report: bool = True,
+        daily_signal_report_hours: int = 24,
     ) -> None:
         self.research_repository = research_repository
         self.decision_engine = decision_engine
@@ -81,6 +84,10 @@ class StrategyEngine:
         self.quantity_step = quantity_step
         self.min_qty = min_qty
         self.min_notional_eur = min_notional_eur
+        self.max_take_profit_distance_pct = max_take_profit_distance_pct
+        self.enable_daily_signal_report = enable_daily_signal_report
+        self.daily_signal_report_hours = daily_signal_report_hours
+        self._last_no_trade_report_at: datetime | None = None
         self.logger = get_module_logger("strategy")
 
     def evaluate(self) -> GeneratedSignal | None:
@@ -109,7 +116,8 @@ class StrategyEngine:
         ranges = [float(row[2]) - float(row[3]) for row in prices if float(row[2]) >= float(row[3])]
         avg_range = sum(ranges) / len(ranges) if ranges else entry * 0.005
         stop_loss = max(entry - avg_range, entry * 0.98)
-        take_profit = entry + avg_range * 1.5
+        raw_take_profit = entry + avg_range * 1.5
+        take_profit = self.adjust_take_profit(entry, stop_loss, raw_take_profit)
         economics = self.calculate_net_economics(entry, stop_loss, take_profit)
         if not economics["tradable"]:
             self.logger.info(
@@ -131,6 +139,16 @@ class StrategyEngine:
             self.logger.info(
                 "STRATEGY candidate rejected strategy=%s reason=net_rr_below_threshold net_rr=%.4f min_net_rr=%.4f net_profit=%.6f net_loss=%.6f gross_rr=%.4f",
                 best["strategy"], economics["net_rr"], self.min_net_rr, economics["net_profit_tp1_eur"], economics["net_loss_sl_eur"], economics["gross_rr"],
+            )
+            return None
+        if take_profit > entry * (1.0 + self.max_take_profit_distance_pct):
+            self.logger.info(
+                "STRATEGY candidate rejected strategy=%s reason=take_profit_too_far take_profit=%.6f max_take_profit=%.6f min_net_profit=%.6f net_rr=%.4f",
+                best["strategy"],
+                take_profit,
+                entry * (1.0 + self.max_take_profit_distance_pct),
+                economics["net_profit_tp1_eur"],
+                economics["net_rr"],
             )
             return None
         score = min(100.0, 50.0 + best["profit_factor"] * 20.0)
@@ -159,6 +177,71 @@ class StrategyEngine:
         self.logger.info("NEW SIGNAL id=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
         self.event_bus.publish(Event(EventType.NEW_SIGNAL, payload))
         return signal
+
+    def adjust_take_profit(self, entry: float, stop_loss: float, raw_take_profit: float) -> float:
+        """Raise TP only when required to make the trade economically meaningful.
+
+        The strategy can propose a technical TP, but the live signal must clear net
+        profit and net R/R floors after Binance costs. This keeps 100 EUR signals
+        from being sent with a few cents of expected profit.
+        """
+        max_take_profit = entry * (1.0 + self.max_take_profit_distance_pct)
+        take_profit = max(raw_take_profit, entry)
+        economics = self.calculate_net_economics(entry, stop_loss, take_profit)
+        if economics["net_profit_tp1_eur"] > self.min_tp1_net_profit_eur and economics["net_rr"] >= self.min_net_rr:
+            return take_profit
+
+        low = take_profit
+        high = max(low, max_take_profit)
+        for _ in range(32):
+            mid = (low + high) / 2.0
+            economics = self.calculate_net_economics(entry, stop_loss, mid)
+            if economics["net_profit_tp1_eur"] > self.min_tp1_net_profit_eur and economics["net_rr"] >= self.min_net_rr:
+                high = mid
+            else:
+                low = mid
+        adjusted = high
+        if adjusted > raw_take_profit:
+            adjusted_economics = self.calculate_net_economics(entry, stop_loss, adjusted)
+            self.logger.info(
+                "STRATEGY take_profit_adjusted raw=%.6f adjusted=%.6f target_net_profit=%.6f target_net_rr=%.4f expected_net_profit=%.6f expected_net_rr=%.4f",
+                raw_take_profit,
+                adjusted,
+                self.min_tp1_net_profit_eur,
+                self.min_net_rr,
+                adjusted_economics["net_profit_tp1_eur"],
+                adjusted_economics["net_rr"],
+            )
+        return adjusted
+
+    def publish_daily_signal_report(self) -> bool:
+        if not self.enable_daily_signal_report:
+            return False
+        now = datetime.now(timezone.utc)
+        if self._last_no_trade_report_at is not None:
+            elapsed_hours = (now - self._last_no_trade_report_at).total_seconds() / 3600.0
+            if elapsed_hours < self.daily_signal_report_hours:
+                return False
+        recent = self.research_repository.client.fetch_all(
+            """SELECT COUNT(*)
+            FROM signals.generated_signals
+            WHERE created_at >= NOW() - (%s * INTERVAL '1 hour')""",
+            (self.daily_signal_report_hours,),
+        )
+        recent_count = int(recent[0][0] or 0) if recent else 0
+        if recent_count > 0:
+            return False
+        message = (
+            "📊 Daily signal report\n"
+            f"Nessun segnale operativo nelle ultime {self.daily_signal_report_hours}h.\n"
+            f"Motivo: nessun setup ha superato i filtri netti minimi "
+            f"(MIN_TP1_NET_PROFIT_EUR=€{self.min_tp1_net_profit_eur:.2f}, MIN_NET_RR={self.min_net_rr:.2f}).\n"
+            "Questo non è un segnale di ingresso: evita operazioni forzate a profitto atteso insufficiente."
+        )
+        self.event_bus.publish(Event(EventType.REPORT_READY, {"message": message}))
+        self._last_no_trade_report_at = now
+        self.logger.info("STRATEGY daily no-signal report published hours=%s", self.daily_signal_report_hours)
+        return True
 
     def find_active_duplicate(self, signal: GeneratedSignal) -> int | None:
         rows = self.research_repository.client.fetch_all(

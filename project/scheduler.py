@@ -22,6 +22,7 @@ class DecisionEngineProtocol(Protocol):
 
 class StrategyEngineProtocol(Protocol):
     def evaluate(self): ...
+    def publish_daily_signal_report(self) -> bool: ...
 
 
 class PositionMonitorProtocol(Protocol):
@@ -69,8 +70,10 @@ class PlatformScheduler:
             self.decision_engine.evaluate_market()
         if self.settings.enable_strategy_engine and self.strategy_engine is not None:
             schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(self.strategy_engine.evaluate)
+            schedule.every(1).hours.do(self.strategy_engine.publish_daily_signal_report)
             self.logger.info("Strategy Engine scheduled every %ss", self.settings.scheduler_strategy_seconds)
             self.strategy_engine.evaluate()
+            self.strategy_engine.publish_daily_signal_report()
         if self.settings.enable_position_monitor and self.position_monitor is not None:
             schedule.every(self.settings.scheduler_position_monitor_seconds).seconds.do(self.position_monitor.monitor_open_signals)
             self.logger.info("Position Monitor scheduled every %ss", self.settings.scheduler_position_monitor_seconds)
