@@ -1,3 +1,5 @@
+import pytest
+
 from project.decision_engine.service import DecisionEngine
 from project.notification_engine.service import NotificationEngine
 from project.position_monitor.service import PositionMonitor
@@ -65,7 +67,47 @@ def test_notification_engine_skips_when_disabled():
     notification = NotificationEngine(bus, enabled=False)
     notification.subscribe()
 
-    bus.publish(Event(EventType.NEW_SIGNAL, {"signal_id": 1, "strategy": "Breakout", "pair": "BTC/USD", "timeframe": "15m", "regime": "TREND_UP", "entry": 1.0, "stop_loss": 0.9, "take_profit": 1.2, "signal_time": "2026-01-01T00:00:00Z", "reference_candle_time": "2026-01-01T00:00:00Z", "net_profit_tp1_eur": 1.0, "net_loss_sl_eur": 1.0, "net_rr": 1.0, "estimated_buy_fee_eur": 0.1, "estimated_sell_fee_eur": 0.1, "estimated_spread_cost_eur": 0.05, "score": 80.0, "probability": 0.6, "reasons": ["test"]}))
+    bus.publish(Event(EventType.NEW_SIGNAL, signal_payload()))
+
+
+def signal_payload():
+    return {
+        "signal_id": 1,
+        "strategy": "Breakout",
+        "pair": "BTC/USD",
+        "timeframe": "15m",
+        "regime": "TREND_UP",
+        "entry": 1.0,
+        "stop_loss": 0.9,
+        "take_profit": 1.2,
+        "signal_time": "2026-01-01T00:00:00Z",
+        "reference_candle_time": "2026-01-01T00:00:00Z",
+        "quantity": 100.0,
+        "gross_rr": 2.0,
+        "net_profit_tp1_eur": 1.0,
+        "net_loss_sl_eur": 1.0,
+        "net_rr": 1.0,
+        "estimated_buy_fee_eur": 0.1,
+        "estimated_sell_fee_eur": 0.1,
+        "estimated_sell_fee_sl_eur": 0.1,
+        "estimated_spread_cost_eur": 0.05,
+        "estimated_slippage_cost_eur": 0.0,
+        "score": 80.0,
+        "probability": 0.6,
+        "reasons": ["test"],
+    }
+
+
+def test_notification_report_uses_engine_economic_fields():
+    message = NotificationEngine(EventBus()).format_signal(signal_payload())
+
+    assert "Quantity: 100.00000000" in message
+    assert "Gross R/R: 2.00" in message
+    assert "Net profit TP1: €1.0000" in message
+    assert "Net loss SL: €1.0000" in message
+    assert "Net R/R: 1.00" in message
+    assert "sell fee TP €0.1000" in message
+    assert "sell fee SL €0.1000" in message
 
 
 def test_strategy_engine_skips_active_duplicate_signal():
@@ -102,3 +144,54 @@ def test_position_monitor_closes_target_hit_and_publishes_event():
     assert closed == 1
     assert postgres.updated[-1][1] == ("TARGET_HIT", 1)
     assert events[-1].payload["signal_id"] == 1
+
+
+def make_strategy_for_economics(capital=100.0, buy_fee=0.001, sell_fee=0.001, spread=0.0, step=0.000001):
+    return StrategyEngine(
+        FakeResearchRepository(FakePostgres()),
+        DecisionEngine(FakePostgres()),
+        trade_notional_eur=capital,
+        buy_fee_rate=buy_fee,
+        sell_fee_rate=sell_fee,
+        spread_rate=spread,
+        quantity_step=step,
+        min_net_rr=0.0,
+        min_notional_eur=0.0,
+    )
+
+
+def test_long_tp_farther_than_sl_has_expected_gross_rr_without_costs():
+    economics = make_strategy_for_economics(buy_fee=0, sell_fee=0, spread=0).calculate_net_economics(100, 99, 108)
+
+    assert economics["gross_rr"] == pytest.approx(8.0, rel=1e-3)
+    assert economics["net_rr"] == pytest.approx(8.0, rel=1e-3)
+
+
+def test_fees_can_make_small_profit_net_negative():
+    economics = make_strategy_for_economics(buy_fee=0.001, sell_fee=0.001, spread=0).calculate_net_economics(100, 99, 100.1)
+
+    assert economics["gross_profit_tp1_eur"] > 0
+    assert economics["net_profit_tp1_eur"] < 0
+
+
+def test_profit_and_loss_scale_linearly_with_capital():
+    ten = make_strategy_for_economics(capital=10, buy_fee=0, sell_fee=0, spread=0).calculate_net_economics(100, 99, 108)
+    hundred = make_strategy_for_economics(capital=100, buy_fee=0, sell_fee=0, spread=0).calculate_net_economics(100, 99, 108)
+    thousand = make_strategy_for_economics(capital=1000, buy_fee=0, sell_fee=0, spread=0).calculate_net_economics(100, 99, 108)
+
+    assert hundred["gross_profit_tp1_eur"] == pytest.approx(ten["gross_profit_tp1_eur"] * 10)
+    assert thousand["gross_loss_sl_eur"] == pytest.approx(hundred["gross_loss_sl_eur"] * 10)
+    assert ten["gross_rr"] == pytest.approx(hundred["gross_rr"])
+
+
+def test_spread_reduces_net_profit():
+    no_spread = make_strategy_for_economics(buy_fee=0, sell_fee=0, spread=0).calculate_net_economics(100, 99, 108)
+    with_spread = make_strategy_for_economics(buy_fee=0, sell_fee=0, spread=0.001).calculate_net_economics(100, 99, 108)
+
+    assert with_spread["net_profit_tp1_eur"] < no_spread["net_profit_tp1_eur"]
+
+
+def test_quantity_rounding_uses_binance_step():
+    economics = make_strategy_for_economics(capital=100, buy_fee=0, sell_fee=0, spread=0, step=0.01).calculate_net_economics(30, 29, 35)
+
+    assert economics["quantity"] == pytest.approx(3.33)
