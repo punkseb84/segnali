@@ -99,6 +99,12 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         min_qty=settings.binance_min_qty,
         min_notional_eur=settings.binance_min_notional_eur,
         max_take_profit_distance_pct=settings.max_take_profit_distance_pct,
+        min_stop_atr_ratio=settings.min_stop_atr_ratio,
+        min_stop_spread_multiple=settings.min_stop_spread_multiple,
+        max_tp_atr_multiple=settings.max_tp_atr_multiple,
+        historical_mfe_percentile=settings.historical_mfe_percentile,
+        min_probability_sample_size=settings.min_probability_sample_size,
+        probability_horizon_candles=settings.probability_horizon_candles,
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
     )
@@ -110,8 +116,8 @@ def build_notification_engine(settings: PlatformSettings, event_bus: EventBus) -
     return notification
 
 
-def build_position_monitor(event_bus: EventBus, postgres: PostgresClient) -> PositionMonitor:
-    return PositionMonitor(postgres, event_bus)
+def build_position_monitor(settings: PlatformSettings, event_bus: EventBus, postgres: PostgresClient) -> PositionMonitor:
+    return PositionMonitor(postgres, event_bus, ambiguous_candle_mode=settings.ambiguous_candle_mode)
 
 
 def main() -> None:
@@ -197,7 +203,7 @@ def main() -> None:
     research_engine = build_research_engine(settings, event_bus, postgres) if settings.enable_research_engine else None
     decision_engine = build_decision_engine(settings, event_bus, postgres) if settings.enable_decision_engine else None
     strategy_engine = build_strategy_engine(settings, research_repository, decision_engine, event_bus) if settings.enable_strategy_engine and decision_engine is not None else None
-    position_monitor = build_position_monitor(event_bus, postgres) if settings.enable_position_monitor else None
+    position_monitor = build_position_monitor(settings, event_bus, postgres) if settings.enable_position_monitor else None
     if settings.enable_notification_engine:
         build_notification_engine(settings, event_bus)
     scheduler = PlatformScheduler(settings, data_collector, research_engine, decision_engine, strategy_engine, position_monitor)

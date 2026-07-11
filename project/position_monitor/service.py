@@ -15,10 +15,17 @@ class PositionMonitor:
     to trade. It only watches already-created signals against PostgreSQL OHLC.
     """
 
-    def __init__(self, postgres: PostgresClient, event_bus: EventBus | None = None, max_signals_per_cycle: int = 50) -> None:
+    def __init__(
+        self,
+        postgres: PostgresClient,
+        event_bus: EventBus | None = None,
+        max_signals_per_cycle: int = 50,
+        ambiguous_candle_mode: str = "conservative",
+    ) -> None:
         self.postgres = postgres
         self.event_bus = event_bus or EventBus()
         self.max_signals_per_cycle = max_signals_per_cycle
+        self.ambiguous_candle_mode = ambiguous_candle_mode
         self.logger = get_module_logger("position_monitor")
 
     def monitor_open_signals(self) -> int:
@@ -69,16 +76,47 @@ class PositionMonitor:
             high_f = float(high)
             low_f = float(low)
             close_f = float(close)
-            tp_hit = high_f >= signal["take_profit"]
-            sl_hit = low_f <= signal["stop_loss"]
-            if not tp_hit and not sl_hit:
+            outcome = self.resolve_candle_outcome(
+                "LONG",
+                high_f,
+                low_f,
+                signal["take_profit"],
+                signal["stop_loss"],
+                self.ambiguous_candle_mode,
+            )
+            if outcome is None:
                 continue
-            # Conservative handling: if TP and SL happen in the same candle, SL wins.
-            outcome = "STOP_LOSS" if sl_hit else "TARGET_HIT"
-            outcome_price = signal["stop_loss"] if sl_hit else signal["take_profit"]
-            self.close_signal(signal, outcome, outcome_price, timestamp, close_f, ambiguous=tp_hit and sl_hit)
+            outcome_price = signal["stop_loss"] if outcome == "STOP_LOSS" else signal["take_profit"]
+            ambiguous = high_f >= signal["take_profit"] and low_f <= signal["stop_loss"]
+            self.close_signal(signal, outcome, outcome_price, timestamp, close_f, ambiguous=ambiguous)
             return True
         return False
+
+    @staticmethod
+    def resolve_candle_outcome(
+        direction: str,
+        high: float,
+        low: float,
+        take_profit: float,
+        stop_loss: float,
+        ambiguous_mode: str = "conservative",
+    ) -> str | None:
+        direction = direction.upper()
+        if direction == "SHORT":
+            tp_hit = low <= take_profit
+            sl_hit = high >= stop_loss
+        else:
+            tp_hit = high >= take_profit
+            sl_hit = low <= stop_loss
+        if not tp_hit and not sl_hit:
+            return None
+        if tp_hit and sl_hit:
+            if ambiguous_mode == "optimistic":
+                return "TARGET_HIT"
+            if ambiguous_mode == "ambiguous":
+                return None
+            return "STOP_LOSS"
+        return "TARGET_HIT" if tp_hit else "STOP_LOSS"
 
     def close_signal(self, signal: dict[str, Any], outcome: str, outcome_price: float, timestamp: Any, close_price: float, ambiguous: bool = False) -> None:
         self.postgres.execute(

@@ -81,6 +81,8 @@ def signal_payload():
         "entry": 1.0,
         "stop_loss": 0.9,
         "take_profit": 1.2,
+        "technical_take_profit": 1.2,
+        "effective_take_profit": 1.2,
         "signal_time": "2026-01-01T00:00:00Z",
         "reference_candle_time": "2026-01-01T00:00:00Z",
         "quantity": 100.0,
@@ -88,6 +90,15 @@ def signal_payload():
         "net_profit_tp1_eur": 1.0,
         "net_loss_sl_eur": 1.0,
         "net_rr": 1.0,
+        "stop_distance": 0.1,
+        "stop_pct": 10.0,
+        "atr": 0.1,
+        "stop_atr_ratio": 1.0,
+        "tp_atr_ratio": 2.0,
+        "historical_sample_size": 50,
+        "historical_win_rate": 0.6,
+        "probability_confidence": "MEDIUM",
+        "validation_status": "PASSED",
         "estimated_buy_fee_eur": 0.1,
         "estimated_sell_fee_eur": 0.1,
         "estimated_sell_fee_sl_eur": 0.1,
@@ -104,6 +115,10 @@ def test_notification_report_uses_engine_economic_fields():
 
     assert "Quantity: 100.00000000" in message
     assert "Gross R/R: 2.00" in message
+    assert "Technical TP: 1.200000" in message
+    assert "Effective TP: 1.200000" in message
+    assert "Probability confidence: MEDIUM" in message
+    assert "Validation: PASSED" in message
     assert "Net profit TP1: €1.0000" in message
     assert "Net loss SL: €1.0000" in message
     assert "Net R/R: 1.00" in message
@@ -198,16 +213,75 @@ def test_quantity_rounding_uses_binance_step():
     assert economics["quantity"] == pytest.approx(3.33)
 
 
-def test_take_profit_is_adjusted_to_minimum_net_profit_target():
+def test_take_profit_is_not_moved_to_monetary_target():
     strategy = make_strategy_for_economics(capital=100, buy_fee=0.001, sell_fee=0.001, spread=0.0005)
     strategy.min_tp1_net_profit_eur = 2.0
     strategy.min_net_rr = 1.2
 
-    take_profit = strategy.adjust_take_profit(64194.3, 64174.315, 64361.422107)
-    economics = strategy.calculate_net_economics(64194.3, 64174.315, take_profit)
+    raw_take_profit = 64361.422107
+    economics = strategy.calculate_net_economics(64194.3, 64174.315, raw_take_profit)
 
-    assert economics["net_profit_tp1_eur"] > 2.0
-    assert economics["net_rr"] >= 1.2
+    assert economics["net_profit_tp1_eur"] < 2.0
+
+
+def make_prices(count=80, close=100.0, candle_range=2.0):
+    return [
+        (
+            index,
+            close,
+            close + candle_range / 2,
+            close - candle_range / 2,
+            close,
+            10,
+        )
+        for index in range(count)
+    ]
+
+
+def test_validation_rejects_stop_too_tight_for_volatility():
+    strategy = make_strategy_for_economics(spread=0.001)
+    prices = make_prices()
+    economics = strategy.calculate_net_economics(100, 99.9, 102)
+    volatility = strategy.calculate_volatility_context(prices, 100, 99.9, 102)
+    probability = strategy.estimate_probability_context(prices, 100, 99.9, 102)
+
+    validation = strategy.validate_signal_setup({"strategy": "Breakout"}, 100, 99.9, 102, economics, volatility, probability)
+
+    assert validation["status"] == "REJECTED"
+    assert validation["reason"] == "STOP_TOO_TIGHT_FOR_VOLATILITY"
+
+
+def test_validation_rejects_target_too_far_for_atr():
+    strategy = make_strategy_for_economics(spread=0)
+    prices = make_prices()
+    economics = strategy.calculate_net_economics(100, 98, 130)
+    volatility = strategy.calculate_volatility_context(prices, 100, 98, 130)
+    probability = strategy.estimate_probability_context(prices, 100, 98, 130)
+
+    validation = strategy.validate_signal_setup({"strategy": "Breakout"}, 100, 98, 130, economics, volatility, probability)
+
+    assert validation["status"] == "REJECTED"
+    assert validation["reason"] == "TP_TOO_FAR_FOR_ATR"
+
+
+def test_probability_is_unavailable_when_historical_sample_is_insufficient():
+    strategy = make_strategy_for_economics()
+    context = strategy.estimate_probability_context(make_prices(count=10), 100, 98, 103)
+
+    assert context["sample_size"] < strategy.min_probability_sample_size
+    assert context["probability"] is None
+    assert context["confidence"] == "LOW"
+
+
+def test_conservative_same_candle_long_counts_stop_first():
+    outcome = PositionMonitor.resolve_candle_outcome("LONG", high=105, low=95, take_profit=104, stop_loss=96)
+
+    assert outcome == "STOP_LOSS"
+
+
+def test_short_candle_resolution_supports_target_and_stop():
+    assert PositionMonitor.resolve_candle_outcome("SHORT", high=105, low=95, take_profit=96, stop_loss=104) == "STOP_LOSS"
+    assert PositionMonitor.resolve_candle_outcome("SHORT", high=103, low=95, take_profit=96, stop_loss=104) == "TARGET_HIT"
 
 
 def test_daily_no_signal_report_is_report_not_trade_signal():

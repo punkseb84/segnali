@@ -38,6 +38,8 @@ class NotificationEngine:
         self.send_telegram(message)
 
     def format_signal(self, payload: dict[str, Any]) -> str:
+        probability = payload.get("probability")
+        probability_text = "non disponibile" if probability is None else f"{probability:.2%}"
         return (
             "🟢 NEW SIGNAL\n"
             f"ID: {payload.get('signal_id')}\n"
@@ -50,14 +52,23 @@ class NotificationEngine:
             f"Candela riferimento: {payload.get('reference_candle_time')}\n"
             f"Quantity: {payload.get('quantity'):.8f}\n"
             f"Stop: {payload.get('stop_loss'):.6f}\n"
-            f"Take Profit: {payload.get('take_profit'):.6f}\n"
+            f"Stop distance: {payload.get('stop_distance'):.6f} USD / {payload.get('stop_pct'):.3f}%\n"
+            f"Technical TP: {payload.get('technical_take_profit'):.6f}\n"
+            f"Effective TP: {payload.get('effective_take_profit'):.6f}\n"
+            f"ATR {payload.get('timeframe')}: {payload.get('atr'):.6f}\n"
+            f"Stop/ATR: {payload.get('stop_atr_ratio'):.2f}\n"
+            f"TP/ATR: {payload.get('tp_atr_ratio'):.2f}\n"
             f"Gross R/R: {payload.get('gross_rr'):.2f}\n"
             f"Net profit TP1: €{payload.get('net_profit_tp1_eur'):.4f}\n"
             f"Net loss SL: €{payload.get('net_loss_sl_eur'):.4f}\n"
             f"Net R/R: {payload.get('net_rr'):.2f}\n"
+            f"Historical sample: {payload.get('historical_sample_size')}\n"
+            f"Historical win rate: {payload.get('historical_win_rate') if payload.get('historical_win_rate') is not None else 'non disponibile'}\n"
+            f"Probability: {probability_text}\n"
+            f"Probability confidence: {payload.get('probability_confidence')}\n"
+            f"Validation: {payload.get('validation_status')}\n"
             f"Costi stimati Binance: buy fee €{payload.get('estimated_buy_fee_eur'):.4f}, sell fee TP €{payload.get('estimated_sell_fee_eur'):.4f}, sell fee SL €{payload.get('estimated_sell_fee_sl_eur'):.4f}, spread €{payload.get('estimated_spread_cost_eur'):.4f}, slippage €{payload.get('estimated_slippage_cost_eur'):.4f}\n"
             f"Score: {payload.get('score'):.2f}\n"
-            f"Probability: {payload.get('probability'):.2%}\n"
             f"Reasons: {', '.join(payload.get('reasons', []))}"
         )
 
