@@ -37,6 +37,17 @@ class ResearchRepository:
         rows = self.client.fetch_all("SELECT COUNT(*) FROM research.strategy_combinations")
         return int(rows[0][0] or 0)
 
+    def existing_timeframes(self, timeframes: list[str]) -> set[str]:
+        if not timeframes:
+            return set()
+        rows = self.client.fetch_all(
+            """SELECT DISTINCT timeframe
+            FROM research.strategy_combinations
+            WHERE timeframe = ANY(%s)""",
+            (timeframes,),
+        )
+        return {str(row[0]) for row in rows}
+
     def fetch_next_pending(self, limit: int, priority_timeframe: str | None = None) -> list[ResearchCombination]:
         order_clause = "CASE WHEN timeframe = %s THEN 0 ELSE 1 END, id" if priority_timeframe else "id"
         params: tuple[Any, ...] = (priority_timeframe, limit) if priority_timeframe else (limit,)

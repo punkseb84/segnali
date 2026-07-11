@@ -20,6 +20,9 @@ class FakeResearchRepository:
     def count_combinations(self):
         return self.existing_count if self.existing_count is not None else len(self.combinations)
 
+    def existing_timeframes(self, timeframes):
+        return set()
+
     def fetch_next_pending(self, limit, priority_timeframe=None):
         self.priority_timeframe = priority_timeframe
         return self.combinations[:limit]
@@ -87,6 +90,21 @@ def test_seed_combinations_streams_to_repository_in_chunks():
     assert seeded == len(repo.seeded)
     assert seeded > 50
     assert repo.seeded[0][0] == "Breakout"
+
+
+def test_seed_combinations_adds_new_operational_timeframe_when_existing_data_is_for_other_timeframes():
+    class TimeframeAwareRepository(FakeResearchRepository):
+        def existing_timeframes(self, timeframes):
+            return {"15m"}
+
+    repo = TimeframeAwareRepository(existing_count=100)
+    engine = ProgressiveResearchEngine(repo, sleep_between_batches_seconds=0)
+
+    seeded = engine.seed_combinations(["BTC/USD"], ["1h"], chunk_size=50)
+
+    assert seeded == len(repo.seeded)
+    assert seeded > 0
+    assert {item[2] for item in repo.seeded} == {"1h"}
 
 class SqlCaptureClient:
     def __init__(self):

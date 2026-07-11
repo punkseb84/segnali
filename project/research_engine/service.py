@@ -92,12 +92,17 @@ class ProgressiveResearchEngine:
 
     def seed_combinations(self, pairs: list[str], timeframes: list[str], chunk_size: int = 1000) -> int:
         existing = self.repository.count_combinations()
-        if existing > 0:
-            self.logger.info("Research combinations already present=%s; skip reseed", existing)
+        existing_timeframes = self.repository.existing_timeframes(timeframes)
+        missing_timeframes = [timeframe for timeframe in timeframes if timeframe not in existing_timeframes]
+        if existing > 0 and not missing_timeframes:
+            self.logger.info("Research combinations already present=%s timeframes=%s; skip reseed", existing, sorted(existing_timeframes))
             return existing
+        seed_timeframes = missing_timeframes or timeframes
+        if missing_timeframes:
+            self.logger.info("Research combinations missing for timeframes=%s; seeding only missing timeframes", missing_timeframes)
         seeded = 0
         chunk: list[tuple[str, str, str, dict[str, Any]]] = []
-        for combination in self.generate_combinations(pairs, timeframes):
+        for combination in self.generate_combinations(pairs, seed_timeframes):
             chunk.append(combination)
             if len(chunk) >= chunk_size:
                 seeded += self.repository.seed_combinations(chunk)
