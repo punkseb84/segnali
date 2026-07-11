@@ -53,6 +53,7 @@ class ProgressiveResearchEngine:
         max_runtime_minutes: int = 20,
         sleep_between_batches_seconds: int = 60,
         batch_interval_seconds: int = 3600,
+        priority_timeframe: str | None = None,
     ) -> None:
         self.repository = repository
         self.event_bus = event_bus or EventBus()
@@ -60,6 +61,7 @@ class ProgressiveResearchEngine:
         self.max_runtime_seconds = max_runtime_minutes * 60
         self.sleep_between_batches_seconds = sleep_between_batches_seconds
         self.batch_interval_seconds = batch_interval_seconds
+        self.priority_timeframe = priority_timeframe
         self.logger = get_module_logger("research")
 
     def generate_combinations(self, pairs: list[str], timeframes: list[str]):
@@ -109,7 +111,7 @@ class ProgressiveResearchEngine:
         started = time.monotonic()
         self.logger.info("RESEARCH BATCH START batch_size=%s runtime_limit_seconds=%s", self.batch_size, self.max_runtime_seconds)
         total = self.repository.count_combinations()
-        pending = self.repository.fetch_next_pending(self.batch_size)
+        pending = self.repository.fetch_next_pending(self.batch_size, priority_timeframe=self.priority_timeframe)
         if not pending:
             self.logger.info("RESEARCH BATCH IDLE total_combinations=%s", total)
             return ResearchBatchResult(None, 0, "IDLE", "No pending research combinations")

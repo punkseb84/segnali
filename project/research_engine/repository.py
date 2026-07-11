@@ -37,14 +37,16 @@ class ResearchRepository:
         rows = self.client.fetch_all("SELECT COUNT(*) FROM research.strategy_combinations")
         return int(rows[0][0] or 0)
 
-    def fetch_next_pending(self, limit: int) -> list[ResearchCombination]:
+    def fetch_next_pending(self, limit: int, priority_timeframe: str | None = None) -> list[ResearchCombination]:
+        order_clause = "CASE WHEN timeframe = %s THEN 0 ELSE 1 END, id" if priority_timeframe else "id"
+        params: tuple[Any, ...] = (priority_timeframe, limit) if priority_timeframe else (limit,)
         rows = self.client.fetch_all(
-            """SELECT id, strategy, pair, timeframe, parameters
+            f"""SELECT id, strategy, pair, timeframe, parameters
             FROM research.strategy_combinations
             WHERE status IN ('PENDING', 'FAILED_RETRYABLE')
-            ORDER BY id
+            ORDER BY {order_clause}
             LIMIT %s""",
-            (limit,),
+            params,
         )
         return [ResearchCombination(int(row[0]), str(row[1]), str(row[2]), str(row[3]), dict(row[4] or {}) if isinstance(row[4], dict) else json.loads(row[4] or "{}")) for row in rows]
 

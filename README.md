@@ -907,3 +907,15 @@ Net loss SL
 Net R/R
 Costi stimati Binance
 ```
+
+## Perché dopo il passaggio a 15m potresti non ricevere subito segnali
+
+Dopo l'impostazione di `OPERATIONAL_TIMEFRAME=15m`, lo Strategy Engine usa solo risultati research sul timeframe operativo. Se il database contiene soprattutto risultati storici `5m`, il sistema non invia segnali finché il Research Engine non produce candidati `15m` validi.
+
+Per evitare blocchi lunghi, il Research Engine ora dà priorità alle combinazioni `15m` pendenti durante i batch progressivi. Nei log, se non ci sono ancora candidati operativi, vedrai:
+
+```text
+STRATEGY no research candidate available timeframe=15m
+```
+
+Questo non è un errore Telegram: significa che la ricerca `15m` deve ancora produrre un candidato valido.

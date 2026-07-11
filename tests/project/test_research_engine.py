@@ -20,7 +20,8 @@ class FakeResearchRepository:
     def count_combinations(self):
         return self.existing_count if self.existing_count is not None else len(self.combinations)
 
-    def fetch_next_pending(self, limit):
+    def fetch_next_pending(self, limit, priority_timeframe=None):
+        self.priority_timeframe = priority_timeframe
         return self.combinations[:limit]
 
     def create_batch(self, batch_size, total_combinations):
@@ -68,6 +69,15 @@ def test_progressive_research_processes_one_small_batch_and_publishes_completion
     assert events[-1].payload == {"batch_id": 10, "processed": 1}
 
 
+def test_progressive_research_passes_priority_timeframe_to_repository():
+    repo = FakeResearchRepository()
+    engine = ProgressiveResearchEngine(repo, batch_size=100, sleep_between_batches_seconds=0, priority_timeframe="15m")
+
+    engine.process_one_batch()
+
+    assert repo.priority_timeframe == "15m"
+
+
 def test_seed_combinations_streams_to_repository_in_chunks():
     repo = FakeResearchRepository(existing_count=0)
     engine = ProgressiveResearchEngine(repo, sleep_between_batches_seconds=0)
@@ -81,9 +91,11 @@ def test_seed_combinations_streams_to_repository_in_chunks():
 class SqlCaptureClient:
     def __init__(self):
         self.sql = ""
+        self.params = None
 
     def fetch_all(self, sql, params=None):
         self.sql = sql
+        self.params = params
         return []
 
 
@@ -96,3 +108,14 @@ def test_best_result_query_excludes_bootstrap_records():
     assert repository.fetch_best_result() is None
     assert "BOOTSTRAP_TEST" in client.sql
     assert "validation->>'status'" in client.sql
+
+
+def test_pending_query_prioritizes_operational_timeframe():
+    from project.research_engine.repository import ResearchRepository
+
+    client = SqlCaptureClient()
+    repository = ResearchRepository(client)
+
+    assert repository.fetch_next_pending(100, priority_timeframe="15m") == []
+    assert "CASE WHEN timeframe = %s THEN 0 ELSE 1 END" in client.sql
+    assert client.params == ("15m", 100)
