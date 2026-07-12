@@ -54,6 +54,12 @@ def _list_env(name: str, default: list[str]) -> list[str]:
     return [item.strip().upper() for item in raw.split(",") if item.strip()]
 
 
+def _signal_classes_env(name: str, default: list[str]) -> list[str]:
+    allowed = {"A", "B", "C"}
+    configured = [item for item in _list_env(name, default) if item in allowed]
+    return configured or default
+
+
 @dataclass(frozen=True)
 class PlatformSettings:
     run_mode: str = os.getenv("RUN_MODE", "RAILWAY_LIGHT").strip().upper()
@@ -92,6 +98,7 @@ class PlatformSettings:
     historical_mfe_percentile: float = _float_env("HISTORICAL_MFE_PERCENTILE", 90.0)
     min_probability_sample_size: int = _int_env("MIN_PROBABILITY_SAMPLE_SIZE", 30)
     probability_horizon_candles: int = _int_env("PROBABILITY_HORIZON_CANDLES", 8)
+    signal_classes: list[str] = field(default_factory=lambda: _signal_classes_env("SIGNAL_CLASSES", ["A", "B", "C"]))
     ambiguous_candle_mode: str = os.getenv("AMBIGUOUS_CANDLE_MODE", "conservative").strip().lower()
     enable_daily_signal_report: bool = _bool_env("ENABLE_DAILY_SIGNAL_REPORT", True)
     daily_signal_report_hours: int = _int_env("DAILY_SIGNAL_REPORT_HOURS", 24)

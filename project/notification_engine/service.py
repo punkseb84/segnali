@@ -43,6 +43,7 @@ class NotificationEngine:
         return (
             "🟢 NEW SIGNAL\n"
             f"ID: {payload.get('signal_id')}\n"
+            f"Class: {payload.get('signal_class', 'B')}\n"
             f"Strategy: {payload.get('strategy')}\n"
             f"Pair: {payload.get('pair')} {payload.get('timeframe')}\n"
             f"Regime: {payload.get('regime')}\n"

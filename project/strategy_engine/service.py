@@ -54,6 +54,7 @@ class GeneratedSignal:
     probability_confidence: str
     validation_status: str
     validation_reason: str
+    signal_class: str
     score: float
     probability: float | None
     reasons: list[str]
@@ -85,6 +86,7 @@ class StrategyEngine:
         historical_mfe_percentile: float = 90.0,
         min_probability_sample_size: int = 30,
         probability_horizon_candles: int = 8,
+        allowed_signal_classes: list[str] | None = None,
         enable_daily_signal_report: bool = True,
         daily_signal_report_hours: int = 24,
     ) -> None:
@@ -111,6 +113,7 @@ class StrategyEngine:
         self.historical_mfe_percentile = historical_mfe_percentile
         self.min_probability_sample_size = min_probability_sample_size
         self.probability_horizon_candles = probability_horizon_candles
+        self.allowed_signal_classes = allowed_signal_classes or ["A", "B", "C"]
         self.enable_daily_signal_report = enable_daily_signal_report
         self.daily_signal_report_hours = daily_signal_report_hours
         self._last_no_trade_report_at: datetime | None = None
@@ -128,9 +131,14 @@ class StrategyEngine:
         if best["profit_factor"] < self.min_profit_factor:
             self.logger.info("STRATEGY candidate rejected strategy=%s reason=profit_factor_below_threshold pf=%.4f threshold=%.4f", best["strategy"], best["profit_factor"], self.min_profit_factor)
             return None
-        if best["strategy"] not in decision.enabled_strategies:
-            self.logger.info("STRATEGY candidate disabled strategy=%s regime=%s enabled=%s", best["strategy"], decision.regime, decision.enabled_strategies)
-            return None
+        regime_aligned = best["strategy"] in decision.enabled_strategies
+        if not regime_aligned:
+            self.logger.info(
+                "STRATEGY regime soft mismatch strategy=%s regime=%s enabled=%s action=continue_as_lower_quality",
+                best["strategy"],
+                decision.regime,
+                decision.enabled_strategies,
+            )
         prices = self.research_repository.fetch_ohlc(best["pair"], best["timeframe"], limit=120)
         if len(prices) < 5:
             self.logger.info("STRATEGY no recent OHLC for pair=%s timeframe=%s", best["pair"], best["timeframe"])
@@ -182,16 +190,24 @@ class StrategyEngine:
                 self.min_notional_eur,
             )
             return None
-        if economics["net_profit_tp1_eur"] <= self.min_tp1_net_profit_eur:
+        if economics["net_profit_tp1_eur"] <= 0:
             self.logger.info(
-                "STRATEGY candidate rejected strategy=%s reason=tp1_net_profit_not_positive net_profit=%.6f min_net_profit=%.6f",
-                best["strategy"], economics["net_profit_tp1_eur"], self.min_tp1_net_profit_eur,
+                "STRATEGY candidate rejected strategy=%s reason=tp1_net_profit_not_positive net_profit=%.6f",
+                best["strategy"], economics["net_profit_tp1_eur"],
             )
             return None
-        if economics["net_rr"] < self.min_net_rr:
+        signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned)
+        if signal_class not in self.allowed_signal_classes:
             self.logger.info(
-                "STRATEGY candidate rejected strategy=%s reason=net_rr_below_threshold net_rr=%.4f min_net_rr=%.4f net_profit=%.6f net_loss=%.6f gross_rr=%.4f",
-                best["strategy"], economics["net_rr"], self.min_net_rr, economics["net_profit_tp1_eur"], economics["net_loss_sl_eur"], economics["gross_rr"],
+                "STRATEGY candidate rejected strategy=%s reason=signal_class_not_enabled class=%s allowed=%s pf=%.4f expectancy=%.6f net_rr=%.4f net_profit=%.6f validation=%s",
+                best["strategy"],
+                signal_class,
+                self.allowed_signal_classes,
+                best["profit_factor"],
+                best["expectancy"],
+                economics["net_rr"],
+                economics["net_profit_tp1_eur"],
+                validation["status"],
             )
             return None
         score = min(100.0, 50.0 + best["profit_factor"] * 20.0)
@@ -213,8 +229,29 @@ class StrategyEngine:
             historical_sample_size=probability_context["sample_size"], historical_win_rate=probability_context["win_rate"],
             historical_mfe_percentile=probability_context["mfe_percentile"], historical_mae_percentile=probability_context["mae_percentile"],
             probability_confidence=probability_context["confidence"], validation_status=validation["status"], validation_reason=validation["reason"],
-            score=score, probability=probability,
-            reasons=[f"profit_factor={best['profit_factor']:.4f}", f"expectancy={best['expectancy']:.6f}", f"regime={decision.regime}"],
+            signal_class=signal_class, score=score, probability=probability,
+            reasons=[
+                f"profit_factor={best['profit_factor']:.4f}",
+                f"expectancy={best['expectancy']:.6f}",
+                f"regime={decision.regime}",
+                f"signal_class={signal_class}",
+                "regime_aligned=true" if regime_aligned else "regime_aligned=false",
+            ],
+        )
+        self.logger.info(
+            "SIGNAL_CLASSIFIED class=%s strategy=%s pair=%s timeframe=%s pf=%.4f expectancy=%.6f net_profit=%.6f net_rr=%.4f validation=%s reason=%s regime_aligned=%s allowed=%s",
+            signal.signal_class,
+            signal.strategy,
+            signal.pair,
+            signal.timeframe,
+            best["profit_factor"],
+            best["expectancy"],
+            signal.net_profit_tp1_eur,
+            signal.net_rr,
+            signal.validation_status,
+            signal.validation_reason,
+            regime_aligned,
+            self.allowed_signal_classes,
         )
         duplicate_id = self.find_active_duplicate(signal)
         if duplicate_id is not None:
@@ -223,7 +260,7 @@ class StrategyEngine:
         signal_id = self.save_signal(signal)
         self.log_economic_debug(signal_id, signal)
         payload = {**signal.__dict__, "signal_id": signal_id}
-        self.logger.info("NEW SIGNAL id=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
+        self.logger.info("NEW SIGNAL id=%s class=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.signal_class, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
         self.event_bus.publish(Event(EventType.NEW_SIGNAL, payload))
         return signal
 
@@ -328,17 +365,18 @@ class StrategyEngine:
         volatility: dict[str, float],
         probability_context: dict[str, Any],
     ) -> dict[str, str]:
+        warnings: list[str] = []
         stop_noise_floor = max(
             volatility["atr"] * self.min_stop_atr_ratio,
             volatility["avg_range"] * self.min_stop_atr_ratio,
             volatility["spread_price"] * self.min_stop_spread_multiple,
         )
         if volatility["stop_distance"] < stop_noise_floor:
-            return {"status": "REJECTED", "reason": "STOP_TOO_TIGHT_FOR_VOLATILITY"}
+            warnings.append("STOP_TOO_TIGHT_FOR_VOLATILITY")
         if volatility["tp_atr_ratio"] > self.max_tp_atr_multiple:
-            return {"status": "REJECTED", "reason": "TP_TOO_FAR_FOR_ATR"}
+            warnings.append("TP_TOO_FAR_FOR_ATR")
         if probability_context["sample_size"] >= self.min_probability_sample_size and volatility["tp_distance"] > probability_context["mfe_percentile"]:
-            return {"status": "REJECTED", "reason": "TP_ABOVE_HISTORICAL_MFE_PERCENTILE"}
+            warnings.append("TP_ABOVE_HISTORICAL_MFE_PERCENTILE")
         if take_profit != take_profit:
             return {"status": "REJECTED", "reason": "INVALID_TAKE_PROFIT"}
         if economics["gross_rr"] > 10.0:
@@ -350,7 +388,43 @@ class StrategyEngine:
                 volatility["tp_atr_ratio"],
                 probability_context["sample_size"],
             )
+        if warnings:
+            return {"status": "PASSED_WITH_WARNINGS", "reason": ",".join(warnings)}
         return {"status": "PASSED", "reason": "OK"}
+
+    def classify_signal(
+        self,
+        best: dict[str, Any],
+        economics: dict[str, float | bool],
+        validation: dict[str, str],
+        probability_context: dict[str, Any],
+        regime_aligned: bool,
+    ) -> str:
+        """Classify rather than over-filter a positive-expectancy setup.
+
+        The class is intentionally based on strategy-level edge and diagnostics,
+        while per-trade gates remain limited to tradability and positive TP net.
+        """
+        profit_factor = float(best.get("profit_factor") or 0.0)
+        expectancy = float(best.get("expectancy") or 0.0)
+        net_rr = float(economics.get("net_rr") or 0.0)
+        net_profit = float(economics.get("net_profit_tp1_eur") or 0.0)
+        sample_size = int(probability_context.get("sample_size") or 0)
+        has_warnings = validation["status"] != "PASSED"
+
+        if (
+            profit_factor >= 1.40
+            and expectancy > 0
+            and net_profit >= self.min_tp1_net_profit_eur
+            and net_rr >= self.min_net_rr
+            and regime_aligned
+            and not has_warnings
+            and sample_size >= self.min_probability_sample_size
+        ):
+            return "A"
+        if profit_factor >= self.min_profit_factor and expectancy > 0 and net_profit > 0 and regime_aligned:
+            return "B"
+        return "C"
 
     def publish_daily_signal_report(self) -> bool:
         if not self.enable_daily_signal_report:
@@ -372,9 +446,9 @@ class StrategyEngine:
         message = (
             "📊 Daily signal report\n"
             f"Nessun segnale operativo nelle ultime {self.daily_signal_report_hours}h.\n"
-            f"Motivo: nessun setup ha superato i filtri netti minimi "
-            f"(MIN_TP1_NET_PROFIT_EUR=€{self.min_tp1_net_profit_eur:.2f}, MIN_NET_RR={self.min_net_rr:.2f}).\n"
-            "Questo non è un segnale di ingresso: evita operazioni forzate a profitto atteso insufficiente."
+            f"Motivo: nessun setup appartenente alle classi abilitate {','.join(self.allowed_signal_classes)} "
+            "è stato prodotto dal motore live.\n"
+            "Questo non è un segnale di ingresso: evita operazioni forzate e valuta il sistema su molte operazioni."
         )
         self.event_bus.publish(Event(EventType.REPORT_READY, {"message": message}))
         self._last_no_trade_report_at = now
@@ -450,9 +524,9 @@ class StrategyEngine:
                 gross_profit_tp1_eur, gross_loss_sl_eur, estimated_buy_fee_eur, estimated_sell_fee_eur,
                 estimated_sell_fee_sl_eur, estimated_spread_cost_eur, estimated_slippage_cost_eur,
                 net_profit_tp1_eur, net_loss_sl_eur, gross_rr, net_rr,
-                score, probability, reasons, created_at
+                signal_class, score, probability, reasons, created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             RETURNING id""",
             (
                 signal.strategy, signal.pair, signal.timeframe, signal.regime, signal.entry, signal.stop_loss, signal.take_profit,
@@ -460,7 +534,7 @@ class StrategyEngine:
                 signal.tp_notional_eur, signal.sl_notional_eur, signal.gross_profit_tp1_eur, signal.gross_loss_sl_eur,
                 signal.estimated_buy_fee_eur, signal.estimated_sell_fee_eur, signal.estimated_sell_fee_sl_eur,
                 signal.estimated_spread_cost_eur, signal.estimated_slippage_cost_eur, signal.net_profit_tp1_eur,
-                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.score, signal.probability,
+                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.signal_class, signal.score, signal.probability,
                 json.dumps(signal.reasons), signal.signal_time,
             ),
         )

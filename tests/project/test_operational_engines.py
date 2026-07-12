@@ -17,6 +17,15 @@ def test_platform_defaults_to_one_hour_timeframe(monkeypatch):
 
     assert settings.collector_timeframes == ["1h"]
     assert settings.operational_timeframe == "1h"
+    assert settings.signal_classes == ["A", "B", "C"]
+
+
+def test_platform_signal_classes_are_configurable(monkeypatch):
+    monkeypatch.setenv("SIGNAL_CLASSES", "A,B")
+
+    settings = PlatformSettings()
+
+    assert settings.signal_classes == ["A", "B"]
 
 
 class FakePostgres:
@@ -71,7 +80,8 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert postgres.inserted
     assert events[-1].payload["signal_id"] == 123
     assert events[-1].payload["entry_timing"] == "IMMEDIATE_ON_SIGNAL_RECEIPT"
-    assert events[-1].payload["net_profit_tp1_eur"] > strategy.min_tp1_net_profit_eur
+    assert events[-1].payload["net_profit_tp1_eur"] > 0
+    assert events[-1].payload["signal_class"] in {"A", "B", "C"}
 
 
 def test_notification_engine_skips_when_disabled():
@@ -110,6 +120,7 @@ def signal_payload():
         "historical_win_rate": 0.6,
         "probability_confidence": "MEDIUM",
         "validation_status": "PASSED",
+        "signal_class": "B",
         "estimated_buy_fee_eur": 0.1,
         "estimated_sell_fee_eur": 0.1,
         "estimated_sell_fee_sl_eur": 0.1,
@@ -124,6 +135,7 @@ def signal_payload():
 def test_notification_report_uses_engine_economic_fields():
     message = NotificationEngine(EventBus()).format_signal(signal_payload())
 
+    assert "Class: B" in message
     assert "Quantity: 100.00000000" in message
     assert "Gross R/R: 2.00" in message
     assert "Technical TP: 1.200000" in message
@@ -258,8 +270,8 @@ def test_validation_rejects_stop_too_tight_for_volatility():
 
     validation = strategy.validate_signal_setup({"strategy": "Breakout"}, 100, 99.9, 102, economics, volatility, probability)
 
-    assert validation["status"] == "REJECTED"
-    assert validation["reason"] == "STOP_TOO_TIGHT_FOR_VOLATILITY"
+    assert validation["status"] == "PASSED_WITH_WARNINGS"
+    assert "STOP_TOO_TIGHT_FOR_VOLATILITY" in validation["reason"]
 
 
 def test_validation_rejects_target_too_far_for_atr():
@@ -271,8 +283,48 @@ def test_validation_rejects_target_too_far_for_atr():
 
     validation = strategy.validate_signal_setup({"strategy": "Breakout"}, 100, 98, 130, economics, volatility, probability)
 
-    assert validation["status"] == "REJECTED"
-    assert validation["reason"] == "TP_TOO_FAR_FOR_ATR"
+    assert validation["status"] == "PASSED_WITH_WARNINGS"
+    assert "TP_TOO_FAR_FOR_ATR" in validation["reason"]
+
+
+def test_strategy_engine_allows_low_net_rr_as_lower_class_signal():
+    strategy = StrategyEngine(
+        FakeResearchRepository(FakePostgres()),
+        DecisionEngine(FakePostgres()),
+        min_net_rr=1.2,
+        min_notional_eur=0.0,
+    )
+    economics = strategy.calculate_net_economics(100, 99, 100.5)
+    validation = {"status": "PASSED_WITH_WARNINGS", "reason": "LOW_NET_RR_DIAGNOSTIC"}
+    probability = {"sample_size": 10}
+
+    signal_class = strategy.classify_signal(
+        {"profit_factor": 1.12, "expectancy": 0.1},
+        economics,
+        validation,
+        probability,
+        regime_aligned=True,
+    )
+
+    assert economics["net_profit_tp1_eur"] > 0
+    assert economics["net_rr"] < strategy.min_net_rr
+    assert signal_class == "B"
+
+
+def test_strategy_engine_respects_enabled_signal_classes():
+    postgres = FakePostgres()
+    bus = EventBus()
+    events = []
+    bus.subscribe(EventType.NEW_SIGNAL, events.append)
+    decision = DecisionEngine(postgres, bus)
+    research = FakeResearchRepository(postgres)
+    strategy = StrategyEngine(research, decision, bus, allowed_signal_classes=["A"])
+
+    signal = strategy.evaluate()
+
+    assert signal is None
+    assert postgres.inserted == []
+    assert events == []
 
 
 def test_probability_is_unavailable_when_historical_sample_is_insufficient():

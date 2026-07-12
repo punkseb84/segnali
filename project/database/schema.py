@@ -143,8 +143,9 @@ CREATE TABLE IF NOT EXISTS signals.generated_signals (
     net_loss_sl_eur NUMERIC,
     gross_rr NUMERIC,
     net_rr NUMERIC,
+    signal_class TEXT NOT NULL DEFAULT 'B',
     score NUMERIC NOT NULL,
-    probability NUMERIC NOT NULL,
+    probability NUMERIC,
     reasons JSONB NOT NULL,
     status TEXT NOT NULL DEFAULT 'NEW',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -167,7 +168,10 @@ ALTER TABLE signals.generated_signals
     ADD COLUMN IF NOT EXISTS net_profit_tp1_eur NUMERIC,
     ADD COLUMN IF NOT EXISTS net_loss_sl_eur NUMERIC,
     ADD COLUMN IF NOT EXISTS gross_rr NUMERIC,
-    ADD COLUMN IF NOT EXISTS net_rr NUMERIC;
+    ADD COLUMN IF NOT EXISTS net_rr NUMERIC,
+    ADD COLUMN IF NOT EXISTS signal_class TEXT NOT NULL DEFAULT 'B';
+ALTER TABLE signals.generated_signals
+    ALTER COLUMN probability DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_generated_signals_active
     ON signals.generated_signals(strategy, pair, timeframe, regime, status, created_at DESC);
 """

@@ -893,21 +893,38 @@ TRADE_NOTIONAL_EUR=100
 BINANCE_BUY_FEE_RATE=0.001
 BINANCE_SELL_FEE_RATE=0.001
 BINANCE_SPREAD_RATE=0.0005
-MIN_TP1_NET_PROFIT_EUR=2.00
+SIGNAL_CLASSES=A,B,C
 COLLECTOR_TIMEFRAMES=1h
 OPERATIONAL_TIMEFRAME=1h
 ```
 
-Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Il Take Profit resta tecnico: se il TP tecnico non garantisce profitto netto e R/R coerenti dopo i costi, il segnale viene scartato invece di spostare artificialmente il target.
+Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Il Take Profit resta tecnico e non viene spostato per ottenere un profitto monetario fisso. Il motore live scarta solo setup non tradabili o con TP netto non positivo; gli altri controlli di qualità producono una classe (`A`, `B`, `C`) invece di bloccare automaticamente il segnale.
 
 Il messaggio Telegram mostra:
 
 ```text
+Class
 Net profit TP1
 Net loss SL
 Net R/R
 Costi stimati Binance
 ```
+
+## Filosofia signal class
+
+Il bot non cerca più il singolo trade "perfetto". L'obiettivo è inviare segnali appartenenti a strategie con vantaggio statistico e classificare la qualità del setup:
+
+- `A`: setup allineato al regime, profit factor elevato, expectancy positiva, profitto netto sopra la soglia informativa, R/R netto sopra soglia informativa e nessun warning diagnostico.
+- `B`: setup con profit factor/expectancy positivi e TP netto positivo, anche se alcuni filtri diagnostici non sono perfetti.
+- `C`: setup positivo ma sperimentale, utile per forward test o ricezione più frequente.
+
+La variabile `SIGNAL_CLASSES` decide quali classi ricevere. Il default è `A,B,C` per non soffocare la generazione operativa. Chi vuole segnali più selettivi può usare:
+
+```env
+SIGNAL_CLASSES=A,B
+```
+
+`MIN_TP1_NET_PROFIT_EUR` e `MIN_NET_RR` restano soglie informative usate per assegnare la classe, non blocchi rigidi sul singolo trade. Il blocco hard resta solo se il TP tecnico produce profitto netto non positivo dopo costi.
 
 ## Perché dopo il passaggio a 1h potresti non ricevere subito segnali
 
@@ -947,4 +964,4 @@ significa che il candidato `1h` esiste, ma viene scartato perché sotto la sogli
 MIN_SIGNAL_PROFIT_FACTOR=1.10
 ```
 
-Il default è `1.10` per permettere segnali 1h promettenti, mantenendo comunque il controllo su profitto netto TP1 positivo dopo fee/spread Binance.
+Il default è `1.10` per permettere segnali 1h promettenti, mantenendo comunque una soglia minima di vantaggio statistico a livello strategia. Gli altri controlli live degradano la classe del segnale invece di scartarlo automaticamente.
