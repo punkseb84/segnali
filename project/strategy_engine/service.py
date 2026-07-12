@@ -122,10 +122,25 @@ class StrategyEngine:
 
     def evaluate(self) -> GeneratedSignal | None:
         decision = self.decision_engine.latest_decision or self.decision_engine.evaluate_market()
-        best = self.research_repository.fetch_best_result(timeframe=self.operational_timeframe)
-        if not best:
+        candidates = self.fetch_strategy_candidates(limit=10)
+        if not candidates:
             self.logger.info("STRATEGY no research candidate available timeframe=%s", self.operational_timeframe)
             return None
+        for best in candidates:
+            signal = self.evaluate_candidate(decision, best)
+            if signal is not None:
+                return signal
+        self.logger.info("STRATEGY no candidate passed validation timeframe=%s candidates=%s", self.operational_timeframe, len(candidates))
+        return None
+
+    def fetch_strategy_candidates(self, limit: int = 10) -> list[dict[str, Any]]:
+        candidates = self.research_repository.fetch_candidate_results(timeframe=self.operational_timeframe, limit=limit)
+        if candidates:
+            return candidates
+        best = self.research_repository.fetch_best_result(timeframe=self.operational_timeframe)
+        return [best] if best else []
+
+    def evaluate_candidate(self, decision: Any, best: dict[str, Any]) -> GeneratedSignal | None:
         if best["timeframe"] != self.operational_timeframe:
             self.logger.info("STRATEGY candidate rejected strategy=%s reason=non_operational_timeframe timeframe=%s required=%s", best["strategy"], best["timeframe"], self.operational_timeframe)
             return None

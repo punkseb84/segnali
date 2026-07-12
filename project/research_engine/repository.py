@@ -120,8 +120,12 @@ class ResearchRepository:
         return {str(status): int(count or 0) for status, count in rows}
 
     def fetch_best_result(self, timeframe: str | None = None) -> dict[str, Any] | None:
+        rows = self.fetch_candidate_results(timeframe=timeframe, limit=1)
+        return rows[0] if rows else None
+
+    def fetch_candidate_results(self, timeframe: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
         timeframe_filter = "AND timeframe = %s" if timeframe else ""
-        params: tuple[Any, ...] = (timeframe,) if timeframe else ()
+        params: tuple[Any, ...] = (timeframe, limit) if timeframe else (limit,)
         rows = self.client.fetch_all(
             f"""SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
             FROM research.strategy_results
@@ -129,20 +133,20 @@ class ResearchRepository:
               AND COALESCE(validation->>'status', '') <> 'BOOTSTRAP'
               {timeframe_filter}
             ORDER BY profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
-            LIMIT 1""",
+            LIMIT %s""",
             params,
         )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "strategy": row[0],
-            "pair": row[1],
-            "timeframe": row[2],
-            "profit_factor": float(row[3] or 0),
-            "expectancy": float(row[4] or 0),
-            "net_profit": float(row[5] or 0),
-        }
+        return [
+            {
+                "strategy": row[0],
+                "pair": row[1],
+                "timeframe": row[2],
+                "profit_factor": float(row[3] or 0),
+                "expectancy": float(row[4] or 0),
+                "net_profit": float(row[5] or 0),
+            }
+            for row in rows
+        ]
 
     def save_result(self, combination: ResearchCombination, metrics: dict[str, Any], batch_id: int) -> None:
         self.client.execute(

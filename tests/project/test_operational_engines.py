@@ -394,6 +394,53 @@ def test_strategy_engine_rejects_high_confidence_negative_historical_ev():
     assert events == []
 
 
+def test_strategy_engine_tries_next_candidate_after_negative_ev_rejection():
+    class MultiCandidateResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return [
+                {
+                    "strategy": "Breakout",
+                    "pair": "SOL/USD",
+                    "timeframe": timeframe or "1h",
+                    "profit_factor": 1.20,
+                    "expectancy": 0.1,
+                    "net_profit": 5.0,
+                },
+                {
+                    "strategy": "Breakout",
+                    "pair": "BTC/USD",
+                    "timeframe": timeframe or "1h",
+                    "profit_factor": 1.18,
+                    "expectancy": 0.1,
+                    "net_profit": 6.0,
+                },
+            ]
+
+        def fetch_ohlc(self, pair, timeframe, limit=720):
+            if pair == "SOL/USD":
+                return [
+                    (index, 100, 100.2, 99.4 if index % 3 == 0 else 99.8, 100, 10)
+                    for index in range(120)
+                ]
+            return [
+                (index, 100, 103, 99, 102, 10)
+                for index in range(20)
+            ]
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    events = []
+    bus.subscribe(EventType.NEW_SIGNAL, events.append)
+    decision = DecisionEngine(postgres, bus)
+    strategy = StrategyEngine(MultiCandidateResearch(postgres), decision, bus)
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.pair == "BTC/USD"
+    assert events[-1].payload["pair"] == "BTC/USD"
+
+
 def test_probability_is_unavailable_when_historical_sample_is_insufficient():
     strategy = make_strategy_for_economics()
     context = strategy.estimate_probability_context(make_prices(count=10), 100, 98, 103)
