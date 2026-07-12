@@ -17,7 +17,7 @@ def test_platform_defaults_to_one_hour_timeframe(monkeypatch):
 
     assert settings.collector_timeframes == ["1h"]
     assert settings.operational_timeframe == "1h"
-    assert settings.signal_classes == ["A", "B", "C"]
+    assert settings.signal_classes == ["A", "B"]
 
 
 def test_platform_signal_classes_are_configurable(monkeypatch):
@@ -118,6 +118,7 @@ def signal_payload():
         "tp_atr_ratio": 2.0,
         "historical_sample_size": 50,
         "historical_win_rate": 0.6,
+        "historical_expected_value_eur": 0.2,
         "probability_confidence": "MEDIUM",
         "validation_status": "PASSED",
         "signal_class": "B",
@@ -141,6 +142,7 @@ def test_notification_report_uses_engine_economic_fields():
     assert "Technical TP: 1.200000" in message
     assert "Effective TP: 1.200000" in message
     assert "Probability confidence: MEDIUM" in message
+    assert "Historical EV: 0.2" in message
     assert "Validation: PASSED" in message
     assert "Net profit TP1: €1.0000" in message
     assert "Net loss SL: €1.0000" in message
@@ -344,13 +346,52 @@ def test_strategy_engine_does_not_hard_reject_positive_edge_below_class_b_pf():
     events = []
     bus.subscribe(EventType.NEW_SIGNAL, events.append)
     decision = DecisionEngine(postgres, bus)
-    strategy = StrategyEngine(LowProfitFactorResearch(postgres), decision, bus)
+    strategy = StrategyEngine(LowProfitFactorResearch(postgres), decision, bus, allowed_signal_classes=["A", "B", "C"])
 
     signal = strategy.evaluate()
 
     assert signal is not None
     assert signal.signal_class == "C"
     assert events[-1].payload["signal_class"] == "C"
+
+
+def test_strategy_engine_rejects_high_confidence_negative_historical_ev():
+    class NegativeExpectedValueResearch(FakeResearchRepository):
+        def fetch_best_result(self, timeframe=None):
+            return {
+                "strategy": "Breakout",
+                "pair": "SOL/USD",
+                "timeframe": timeframe or "1h",
+                "profit_factor": 1.0816,
+                "expectancy": 0.013755,
+                "net_profit": 5.0,
+            }
+
+        def fetch_ohlc(self, pair, timeframe, limit=720):
+            prices = []
+            for index in range(120):
+                close = 76.71
+                if index % 3 == 0:
+                    high = close + 0.2
+                    low = close - 0.6
+                else:
+                    high = close + 0.2
+                    low = close - 0.2
+                prices.append((index, close, high, low, close, 10))
+            return prices
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    events = []
+    bus.subscribe(EventType.NEW_SIGNAL, events.append)
+    decision = DecisionEngine(postgres, bus)
+    strategy = StrategyEngine(NegativeExpectedValueResearch(postgres), decision, bus, allowed_signal_classes=["A", "B", "C"])
+
+    signal = strategy.evaluate()
+
+    assert signal is None
+    assert postgres.inserted == []
+    assert events == []
 
 
 def test_probability_is_unavailable_when_historical_sample_is_insufficient():

@@ -893,12 +893,12 @@ TRADE_NOTIONAL_EUR=100
 BINANCE_BUY_FEE_RATE=0.001
 BINANCE_SELL_FEE_RATE=0.001
 BINANCE_SPREAD_RATE=0.0005
-SIGNAL_CLASSES=A,B,C
+SIGNAL_CLASSES=A,B
 COLLECTOR_TIMEFRAMES=1h
 OPERATIONAL_TIMEFRAME=1h
 ```
 
-Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Il Take Profit resta tecnico e non viene spostato per ottenere un profitto monetario fisso. Il motore live scarta solo setup non tradabili o con TP netto non positivo; gli altri controlli di qualità producono una classe (`A`, `B`, `C`) invece di bloccare automaticamente il segnale.
+Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Il Take Profit resta tecnico e non viene spostato per ottenere un profitto monetario fisso. Il motore live scarta setup non tradabili, TP netto non positivo o setup con expected value storico netto negativo quando il campione è sufficiente; gli altri controlli di qualità producono una classe (`A`, `B`, `C`) invece di bloccare automaticamente il segnale.
 
 Il messaggio Telegram mostra:
 
@@ -907,6 +907,7 @@ Class
 Net profit TP1
 Net loss SL
 Net R/R
+Historical EV
 Costi stimati Binance
 ```
 
@@ -918,13 +919,13 @@ Il bot non cerca più il singolo trade "perfetto". L'obiettivo è inviare segnal
 - `B`: setup con profit factor/expectancy positivi e TP netto positivo, anche se alcuni filtri diagnostici non sono perfetti.
 - `C`: setup positivo ma sperimentale, utile per forward test o ricezione più frequente.
 
-La variabile `SIGNAL_CLASSES` decide quali classi ricevere. Il default è `A,B,C` per non soffocare la generazione operativa. Chi vuole segnali più selettivi può usare:
+La variabile `SIGNAL_CLASSES` decide quali classi ricevere. Il default è `A,B`: la Classe C resta opzionale, perché può contenere setup sperimentali o quasi neutri. Chi vuole ricevere anche forward test più frequenti può usare:
 
 ```env
-SIGNAL_CLASSES=A,B
+SIGNAL_CLASSES=A,B,C
 ```
 
-`MIN_TP1_NET_PROFIT_EUR` e `MIN_NET_RR` restano soglie informative usate per assegnare la classe, non blocchi rigidi sul singolo trade. Il blocco hard resta solo se il TP tecnico produce profitto netto non positivo dopo costi.
+`MIN_TP1_NET_PROFIT_EUR` e `MIN_NET_RR` restano soglie informative usate per assegnare la classe, non blocchi rigidi sul singolo trade. Il blocco hard resta se il TP tecnico produce profitto netto non positivo dopo costi o se, con campione storico sufficiente, la combinazione tra win rate osservato, profitto netto e perdita netta produce expected value negativo.
 
 ## Perché dopo il passaggio a 1h potresti non ricevere subito segnali
 
@@ -958,10 +959,10 @@ Se i log mostrano:
 STRATEGY candidate below class_b_threshold strategy=... pf=... threshold=... action=continue_as_class_c_candidate
 ```
 
-significa che il candidato `1h` esiste e ha un profit factor sotto la soglia di classe B, ma non viene più scartato automaticamente: continua come candidato di classe C se mantiene un vantaggio statistico minimo.
+significa che il candidato `1h` esiste e ha un profit factor sotto la soglia di classe B, ma non viene più scartato automaticamente solo per questo: continua come candidato di classe C se la Classe C è abilitata e se non emerge expected value storico netto negativo.
 
 ```env
 MIN_SIGNAL_PROFIT_FACTOR=1.10
 ```
 
-Il default `1.10` ora separa principalmente Classe B da Classe C. Il blocco hard resta solo per candidati senza vantaggio statistico (`profit_factor <= 1.0` e `expectancy <= 0`), perché non rappresentano una strategia con expectancy positiva.
+Il default `1.10` ora separa principalmente Classe B da Classe C. Il blocco hard resta per candidati senza vantaggio statistico (`profit_factor <= 1.0` e `expectancy <= 0`) o per setup con campione storico sufficiente ma expected value netto negativo.

@@ -65,6 +65,7 @@ class NotificationEngine:
             f"Net R/R: {payload.get('net_rr'):.2f}\n"
             f"Historical sample: {payload.get('historical_sample_size')}\n"
             f"Historical win rate: {payload.get('historical_win_rate') if payload.get('historical_win_rate') is not None else 'non disponibile'}\n"
+            f"Historical EV: {payload.get('historical_expected_value_eur') if payload.get('historical_expected_value_eur') is not None else 'non disponibile'}\n"
             f"Probability: {probability_text}\n"
             f"Probability confidence: {payload.get('probability_confidence')}\n"
             f"Validation: {payload.get('validation_status')}\n"

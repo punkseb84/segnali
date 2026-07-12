@@ -49,6 +49,7 @@ class GeneratedSignal:
     tp_atr_ratio: float
     historical_sample_size: int
     historical_win_rate: float | None
+    historical_expected_value_eur: float | None
     historical_mfe_percentile: float
     historical_mae_percentile: float
     probability_confidence: str
@@ -113,7 +114,7 @@ class StrategyEngine:
         self.historical_mfe_percentile = historical_mfe_percentile
         self.min_probability_sample_size = min_probability_sample_size
         self.probability_horizon_candles = probability_horizon_candles
-        self.allowed_signal_classes = allowed_signal_classes or ["A", "B", "C"]
+        self.allowed_signal_classes = allowed_signal_classes or ["A", "B"]
         self.enable_daily_signal_report = enable_daily_signal_report
         self.daily_signal_report_hours = daily_signal_report_hours
         self._last_no_trade_report_at: datetime | None = None
@@ -210,6 +211,19 @@ class StrategyEngine:
                 best["strategy"], economics["net_profit_tp1_eur"],
             )
             return None
+        historical_expected_value = self.calculate_historical_expected_value(economics, probability_context)
+        if historical_expected_value is not None and historical_expected_value <= 0:
+            self.logger.info(
+                "STRATEGY candidate rejected strategy=%s reason=negative_historical_expected_value ev=%.6f win_rate=%.4f net_profit=%.6f net_loss=%.6f sample=%s confidence=%s",
+                best["strategy"],
+                historical_expected_value,
+                probability_context["win_rate"],
+                economics["net_profit_tp1_eur"],
+                economics["net_loss_sl_eur"],
+                probability_context["sample_size"],
+                probability_context["confidence"],
+            )
+            return None
         signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned)
         if signal_class not in self.allowed_signal_classes:
             self.logger.info(
@@ -241,6 +255,7 @@ class StrategyEngine:
             stop_distance=volatility["stop_distance"], stop_pct=volatility["stop_pct"], atr=volatility["atr"],
             stop_atr_ratio=volatility["stop_atr_ratio"], tp_atr_ratio=volatility["tp_atr_ratio"],
             historical_sample_size=probability_context["sample_size"], historical_win_rate=probability_context["win_rate"],
+            historical_expected_value_eur=historical_expected_value,
             historical_mfe_percentile=probability_context["mfe_percentile"], historical_mae_percentile=probability_context["mae_percentile"],
             probability_confidence=probability_context["confidence"], validation_status=validation["status"], validation_reason=validation["reason"],
             signal_class=signal_class, score=score, probability=probability,
@@ -249,6 +264,7 @@ class StrategyEngine:
                 f"expectancy={best['expectancy']:.6f}",
                 f"regime={decision.regime}",
                 f"signal_class={signal_class}",
+                f"historical_ev={historical_expected_value:.6f}" if historical_expected_value is not None else "historical_ev=unavailable",
                 "regime_aligned=true" if regime_aligned else "regime_aligned=false",
             ],
         )
@@ -331,6 +347,19 @@ class StrategyEngine:
             "mfe_percentile": self.percentile(mfes, self.historical_mfe_percentile),
             "mae_percentile": self.percentile(maes, self.historical_mfe_percentile),
         }
+
+    def calculate_historical_expected_value(
+        self,
+        economics: dict[str, float | bool],
+        probability_context: dict[str, Any],
+    ) -> float | None:
+        """Estimate per-trade EV using comparable recent outcomes when sample is sufficient."""
+        probability = probability_context.get("probability")
+        if probability is None or probability_context.get("sample_size", 0) < self.min_probability_sample_size:
+            return None
+        net_profit = float(economics["net_profit_tp1_eur"])
+        net_loss = float(economics["net_loss_sl_eur"])
+        return (float(probability) * net_profit) - ((1.0 - float(probability)) * net_loss)
 
     def build_historical_outcomes(self, prices: list[tuple[Any, ...]], stop_distance: float, tp_distance: float) -> list[dict[str, float | str]]:
         chronological = list(reversed(prices))
@@ -518,14 +547,15 @@ class StrategyEngine:
 
     def log_economic_debug(self, signal_id: int, signal: GeneratedSignal) -> None:
         self.logger.info(
-            "ECONOMIC_CALC_DEBUG signal_id=%s pair=%s entry=%.6f stop=%.6f technical_tp=%.6f effective_tp=%.6f stop_distance=%.6f stop_pct=%.4f atr=%.6f stop_atr_ratio=%.4f tp_atr_ratio=%.4f capital_eur=%.6f capital_quote=%.6f quantity=%.8f entry_notional=%.6f tp_notional=%.6f sl_notional=%.6f gross_profit_tp=%.6f gross_loss_sl=%.6f buy_fee=%.6f sell_fee_tp=%.6f sell_fee_sl=%.6f spread_cost=%.6f slippage_cost=%.6f net_profit_tp=%.6f net_loss_sl=%.6f gross_rr=%.4f net_rr=%.4f sample=%s win_rate=%s mfe_percentile=%.6f mae_percentile=%.6f validation=%s reason=%s",
+            "ECONOMIC_CALC_DEBUG signal_id=%s pair=%s entry=%.6f stop=%.6f technical_tp=%.6f effective_tp=%.6f stop_distance=%.6f stop_pct=%.4f atr=%.6f stop_atr_ratio=%.4f tp_atr_ratio=%.4f capital_eur=%.6f capital_quote=%.6f quantity=%.8f entry_notional=%.6f tp_notional=%.6f sl_notional=%.6f gross_profit_tp=%.6f gross_loss_sl=%.6f buy_fee=%.6f sell_fee_tp=%.6f sell_fee_sl=%.6f spread_cost=%.6f slippage_cost=%.6f net_profit_tp=%.6f net_loss_sl=%.6f gross_rr=%.4f net_rr=%.4f sample=%s win_rate=%s historical_ev=%s mfe_percentile=%.6f mae_percentile=%.6f validation=%s reason=%s",
             signal_id, signal.pair, signal.entry, signal.stop_loss, signal.technical_take_profit, signal.effective_take_profit,
             signal.stop_distance, signal.stop_pct, signal.atr, signal.stop_atr_ratio, signal.tp_atr_ratio,
             self.trade_notional_eur, self.trade_notional_eur, signal.quantity, signal.entry_notional_eur, signal.tp_notional_eur, signal.sl_notional_eur,
             signal.gross_profit_tp1_eur, signal.gross_loss_sl_eur, signal.estimated_buy_fee_eur,
             signal.estimated_sell_fee_eur, signal.estimated_sell_fee_sl_eur, signal.estimated_spread_cost_eur,
             signal.estimated_slippage_cost_eur, signal.net_profit_tp1_eur, signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr,
-            signal.historical_sample_size, signal.historical_win_rate, signal.historical_mfe_percentile, signal.historical_mae_percentile,
+            signal.historical_sample_size, signal.historical_win_rate, signal.historical_expected_value_eur,
+            signal.historical_mfe_percentile, signal.historical_mae_percentile,
             signal.validation_status, signal.validation_reason,
         )
 
@@ -538,9 +568,9 @@ class StrategyEngine:
                 gross_profit_tp1_eur, gross_loss_sl_eur, estimated_buy_fee_eur, estimated_sell_fee_eur,
                 estimated_sell_fee_sl_eur, estimated_spread_cost_eur, estimated_slippage_cost_eur,
                 net_profit_tp1_eur, net_loss_sl_eur, gross_rr, net_rr,
-                signal_class, score, probability, reasons, created_at
+                signal_class, historical_expected_value_eur, score, probability, reasons, created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             RETURNING id""",
             (
                 signal.strategy, signal.pair, signal.timeframe, signal.regime, signal.entry, signal.stop_loss, signal.take_profit,
@@ -548,7 +578,7 @@ class StrategyEngine:
                 signal.tp_notional_eur, signal.sl_notional_eur, signal.gross_profit_tp1_eur, signal.gross_loss_sl_eur,
                 signal.estimated_buy_fee_eur, signal.estimated_sell_fee_eur, signal.estimated_sell_fee_sl_eur,
                 signal.estimated_spread_cost_eur, signal.estimated_slippage_cost_eur, signal.net_profit_tp1_eur,
-                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.signal_class, signal.score, signal.probability,
+                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.signal_class, signal.historical_expected_value_eur, signal.score, signal.probability,
                 json.dumps(signal.reasons), signal.signal_time,
             ),
         )
