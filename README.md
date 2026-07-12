@@ -950,18 +950,18 @@ SIGNAL_COOLDOWN_MINUTES=45
 
 Questo impedisce lo spam ogni minuto, ma permette al sistema di tornare a generare segnali se un vecchio record resta aperto troppo a lungo.
 
-## Soglia Profit Factor per segnali 1h
+## Profit Factor e classi segnale 1h
 
 Se i log mostrano:
 
 ```text
-STRATEGY candidate rejected strategy=... reason=profit_factor_below_threshold pf=...
+STRATEGY candidate below class_b_threshold strategy=... pf=... threshold=... action=continue_as_class_c_candidate
 ```
 
-significa che il candidato `1h` esiste, ma viene scartato perché sotto la soglia minima. La soglia è ora configurabile:
+significa che il candidato `1h` esiste e ha un profit factor sotto la soglia di classe B, ma non viene più scartato automaticamente: continua come candidato di classe C se mantiene un vantaggio statistico minimo.
 
 ```env
 MIN_SIGNAL_PROFIT_FACTOR=1.10
 ```
 
-Il default è `1.10` per permettere segnali 1h promettenti, mantenendo comunque una soglia minima di vantaggio statistico a livello strategia. Gli altri controlli live degradano la classe del segnale invece di scartarlo automaticamente.
+Il default `1.10` ora separa principalmente Classe B da Classe C. Il blocco hard resta solo per candidati senza vantaggio statistico (`profit_factor <= 1.0` e `expectancy <= 0`), perché non rappresentano una strategia con expectancy positiva.

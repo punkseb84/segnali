@@ -128,9 +128,23 @@ class StrategyEngine:
         if best["timeframe"] != self.operational_timeframe:
             self.logger.info("STRATEGY candidate rejected strategy=%s reason=non_operational_timeframe timeframe=%s required=%s", best["strategy"], best["timeframe"], self.operational_timeframe)
             return None
-        if best["profit_factor"] < self.min_profit_factor:
-            self.logger.info("STRATEGY candidate rejected strategy=%s reason=profit_factor_below_threshold pf=%.4f threshold=%.4f", best["strategy"], best["profit_factor"], self.min_profit_factor)
+        profit_factor = float(best.get("profit_factor") or 0.0)
+        expectancy = float(best.get("expectancy") or 0.0)
+        if profit_factor <= 1.0 and expectancy <= 0:
+            self.logger.info(
+                "STRATEGY candidate rejected strategy=%s reason=no_statistical_edge pf=%.4f expectancy=%.6f",
+                best["strategy"],
+                profit_factor,
+                expectancy,
+            )
             return None
+        if profit_factor < self.min_profit_factor:
+            self.logger.info(
+                "STRATEGY candidate below class_b_threshold strategy=%s pf=%.4f threshold=%.4f action=continue_as_class_c_candidate",
+                best["strategy"],
+                profit_factor,
+                self.min_profit_factor,
+            )
         regime_aligned = best["strategy"] in decision.enabled_strategies
         if not regime_aligned:
             self.logger.info(

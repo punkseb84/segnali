@@ -327,6 +327,32 @@ def test_strategy_engine_respects_enabled_signal_classes():
     assert events == []
 
 
+def test_strategy_engine_does_not_hard_reject_positive_edge_below_class_b_pf():
+    class LowProfitFactorResearch(FakeResearchRepository):
+        def fetch_best_result(self, timeframe=None):
+            return {
+                "strategy": "Breakout",
+                "pair": "BTC/USD",
+                "timeframe": timeframe or "1h",
+                "profit_factor": 1.0816,
+                "expectancy": 0.05,
+                "net_profit": 5.0,
+            }
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    events = []
+    bus.subscribe(EventType.NEW_SIGNAL, events.append)
+    decision = DecisionEngine(postgres, bus)
+    strategy = StrategyEngine(LowProfitFactorResearch(postgres), decision, bus)
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.signal_class == "C"
+    assert events[-1].payload["signal_class"] == "C"
+
+
 def test_probability_is_unavailable_when_historical_sample_is_insufficient():
     strategy = make_strategy_for_economics()
     context = strategy.estimate_probability_context(make_prices(count=10), 100, 98, 103)
