@@ -6,13 +6,14 @@ import sys
 import time
 from datetime import datetime, timedelta
 
-from config import ACTIVE_MODE, DUPLICATE_MINUTES, ENABLE_LIVE_SIGNALS, ENABLE_WATCHLIST_ALERTS, LOOP_SLEEP_SECONDS, MAX_CONSECUTIVE_STOP_LOSSES, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_LIMIT, PAIRS, PROJECT_ALPHA_RESEARCH_MODE, RESEARCH_INTERVAL_SECONDS, RESEARCH_MODE, STOP_LOSS_PAUSE_HOURS, TIMEFRAMES
+from config import ACTIVE_MODE, DATABASE_URL, DATA_DIR, DUPLICATE_MINUTES, ENABLE_LIVE_SIGNALS, ENABLE_WATCHLIST_ALERTS, EXPORT_DIR, LOOP_SLEEP_SECONDS, MAX_CONSECUTIVE_STOP_LOSSES, MAX_SIGNALS_PER_DAY, MAX_SIGNALS_PER_PAIR_PER_DAY, OHLC_DB_PATH, OHLC_LIMIT, PAIRS, PERSISTENT_VOLUME_DETECTED, PROJECT_ALPHA_RESEARCH_MODE, QUANT_PAIRS, QUANT_TIMEFRAMES, RESEARCH_DB_PATH, RESEARCH_INTERVAL_SECONDS, RESEARCH_MODE, RUN_MODE, STOP_LOSS_PAUSE_HOURS, TIMEFRAMES, USES_LOCAL_SQLITE_PERSISTENCE
 from exchange import fetch_ohlc
 from indicators import add_indicators, classify_market_regime
 from monitor import monitor_open_trades
 from reporter import maybe_send_daily_report
 from research import run_research
 from research_alpha import run_project_alpha_research
+from ohlc_cache import sync_ohlc_cache
 from strategy import build_signal
 from telegram_bot import send_message
 from trade_store import all_closed, init_db, insert_signal, signals_since, update_signal_telegram_message_id
@@ -145,6 +146,34 @@ def scan_pair(pair: str) -> None:
 
 
 
+def log_runtime_config() -> None:
+    logger.info("RUN_MODE=%s", RUN_MODE)
+    if RUN_MODE == "RAILWAY_LIGHT":
+        logger.info("DATABASE_URL detected: %s", "yes" if DATABASE_URL else "no")
+        logger.info("Storage backend: PostgreSQL")
+        logger.info("SQLite cache: disabled")
+        return
+    logger.info("DATA_DIR=%s", DATA_DIR)
+    logger.info("OHLC database path=%s", OHLC_DB_PATH)
+    logger.info("Research database path=%s", RESEARCH_DB_PATH)
+    logger.info("EXPORT_DIR=%s", EXPORT_DIR)
+    if USES_LOCAL_SQLITE_PERSISTENCE and not PERSISTENT_VOLUME_DETECTED:
+        logger.warning("WARNING: persistent volume not detected, local SQLite research data may be lost on redeploy")
+    elif not USES_LOCAL_SQLITE_PERSISTENCE:
+        logger.info("Persistent volume check skipped: RUN_MODE=%s uses PostgreSQL as primary storage", RUN_MODE)
+
+
+def run_sync_data_worker() -> None:
+    log_runtime_config()
+    for pair in QUANT_PAIRS:
+        for timeframe in QUANT_TIMEFRAMES:
+            try:
+                frame = sync_ohlc_cache(pair, timeframe)
+                logger.info("SYNC_DATA pair=%s timeframe=%s candles=%s", pair, timeframe, len(frame))
+            except Exception as exc:
+                logger.exception("SYNC_DATA failed pair=%s timeframe=%s: %s", pair, timeframe, exc)
+
+
 def run_project_alpha_worker() -> None:
     init_db()
     logger.info("PROJECT_ALPHA_RESEARCH_MODE enabled: live operative signals are disabled")
@@ -156,7 +185,8 @@ def run_project_alpha_worker() -> None:
 
 def run_research_worker() -> None:
     init_db()
-    logger.info("RESEARCH_MODE enabled: live operative signals are disabled")
+    log_runtime_config()
+    logger.info("RESEARCH mode enabled: live operative signals are disabled")
     while True:
         report = run_research()
         logger.info("Research report generated:\n%s", report)
@@ -165,6 +195,22 @@ def run_research_worker() -> None:
 
 
 def main() -> None:
+    log_runtime_config()
+    if RUN_MODE == "RAILWAY_LIGHT":
+        logger.info("RUN_MODE=RAILWAY_LIGHT detected in legacy app.py; delegating to project.main")
+        from project.main import main as modular_main
+
+        modular_main()
+        return
+    if RUN_MODE == "SYNC_DATA":
+        run_sync_data_worker()
+        return
+    if RUN_MODE == "RESEARCH":
+        run_research_worker()
+        return
+    if RUN_MODE == "LIVE" and not ENABLE_LIVE_SIGNALS:
+        logger.warning("ENABLE_LIVE_SIGNALS=false: live operative signals are disabled")
+        return
     if PROJECT_ALPHA_RESEARCH_MODE:
         run_project_alpha_worker()
         return
