@@ -968,3 +968,5 @@ MIN_SIGNAL_PROFIT_FACTOR=1.10
 Il default `1.10` ora separa principalmente Classe B da Classe C. Il blocco hard resta per candidati senza vantaggio statistico (`profit_factor <= 1.0` e `expectancy <= 0`) o per setup con campione storico sufficiente ma expected value netto negativo.
 
 Quando il miglior candidato viene scartato dai controlli live, lo Strategy Engine non resta più bloccato su quello stesso risultato a ogni minuto: valuta una lista dei migliori candidati `1h` e passa al successivo finché trova un setup valido oppure esaurisce la lista.
+
+I candidati vengono deduplicati per `strategy/pair/timeframe`: se la ricerca contiene molte combinazioni diverse della stessa strategia sullo stesso mercato, il live engine valuta solo la migliore di quel gruppo. Questo evita log ripetuti con valori identici quando più righe research producono lo stesso setup operativo.

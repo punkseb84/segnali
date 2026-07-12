@@ -156,8 +156,10 @@ class StrategyEngine:
             return None
         if profit_factor < self.min_profit_factor:
             self.logger.info(
-                "STRATEGY candidate below class_b_threshold strategy=%s pf=%.4f threshold=%.4f action=continue_as_class_c_candidate",
+                "STRATEGY candidate below class_b_threshold strategy=%s pair=%s timeframe=%s pf=%.4f threshold=%.4f action=continue_as_class_c_candidate",
                 best["strategy"],
+                best["pair"],
+                best["timeframe"],
                 profit_factor,
                 self.min_profit_factor,
             )
@@ -229,8 +231,10 @@ class StrategyEngine:
         historical_expected_value = self.calculate_historical_expected_value(economics, probability_context)
         if historical_expected_value is not None and historical_expected_value <= 0:
             self.logger.info(
-                "STRATEGY candidate rejected strategy=%s reason=negative_historical_expected_value ev=%.6f win_rate=%.4f net_profit=%.6f net_loss=%.6f sample=%s confidence=%s",
+                "STRATEGY candidate rejected strategy=%s pair=%s timeframe=%s reason=negative_historical_expected_value ev=%.6f win_rate=%.4f net_profit=%.6f net_loss=%.6f sample=%s confidence=%s",
                 best["strategy"],
+                best["pair"],
+                best["timeframe"],
                 historical_expected_value,
                 probability_context["win_rate"],
                 economics["net_profit_tp1_eur"],

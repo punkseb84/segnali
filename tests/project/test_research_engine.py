@@ -128,6 +128,18 @@ def test_best_result_query_excludes_bootstrap_records():
     assert "validation->>'status'" in client.sql
 
 
+def test_candidate_results_deduplicate_strategy_pair_timeframe():
+    from project.research_engine.repository import ResearchRepository
+
+    client = SqlCaptureClient()
+    repository = ResearchRepository(client)
+
+    assert repository.fetch_candidate_results(timeframe="1h", limit=10) == []
+    assert "DISTINCT ON (strategy, pair, timeframe)" in client.sql
+    assert "WITH best_per_market" in client.sql
+    assert client.params == ("1h", 10)
+
+
 def test_pending_query_prioritizes_operational_timeframe():
     from project.research_engine.repository import ResearchRepository
 

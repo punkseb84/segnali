@@ -127,11 +127,17 @@ class ResearchRepository:
         timeframe_filter = "AND timeframe = %s" if timeframe else ""
         params: tuple[Any, ...] = (timeframe, limit) if timeframe else (limit,)
         rows = self.client.fetch_all(
-            f"""SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
-            FROM research.strategy_results
-            WHERE strategy <> 'BOOTSTRAP_TEST'
-              AND COALESCE(validation->>'status', '') <> 'BOOTSTRAP'
-              {timeframe_filter}
+            f"""WITH best_per_market AS (
+                SELECT DISTINCT ON (strategy, pair, timeframe)
+                    strategy, pair, timeframe, profit_factor, expectancy, net_profit
+                FROM research.strategy_results
+                WHERE strategy <> 'BOOTSTRAP_TEST'
+                  AND COALESCE(validation->>'status', '') <> 'BOOTSTRAP'
+                  {timeframe_filter}
+                ORDER BY strategy, pair, timeframe, profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
+            )
+            SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
+            FROM best_per_market
             ORDER BY profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             LIMIT %s""",
             params,
