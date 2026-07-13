@@ -852,6 +852,12 @@ In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 300 second
 
 Nota: i record diagnostici `BOOTSTRAP_TEST` sono esclusi dal log `RESEARCH BEST`, così il miglior risultato provvisorio mostra solo risultati research reali e non righe create per verificare PostgreSQL.
 
+### Backtest research allineato al motore live
+
+Il Research Engine progressivo non classifica più le combinazioni con un semplice rendimento close-to-close. Ogni combinazione viene simulata come una serie di trade LONG con stop tecnico, take profit tecnico, orizzonte temporale configurabile, risoluzione prudenziale quando TP e SL sono colpiti nella stessa candela, capitale per trade e costi Binance stimati.
+
+Questo rende `profit_factor`, `expectancy`, `net_profit`, `average_win` e `average_loss` confrontabili con i valori che lo Strategy Engine usa prima dell'invio Telegram: un candidato research positivo deve quindi essere positivo dopo fee, spread e slippage, non solo positivo sul movimento grezzo del prezzo.
+
 ## Operational engines enabled
 
 Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi:

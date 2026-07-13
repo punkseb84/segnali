@@ -54,6 +54,12 @@ class ProgressiveResearchEngine:
         sleep_between_batches_seconds: int = 60,
         batch_interval_seconds: int = 3600,
         priority_timeframe: str | None = None,
+        trade_notional_eur: float = 100.0,
+        buy_fee_rate: float = 0.001,
+        sell_fee_rate: float = 0.001,
+        spread_rate: float = 0.0005,
+        slippage_rate: float = 0.0,
+        probability_horizon_candles: int = 8,
     ) -> None:
         self.repository = repository
         self.event_bus = event_bus or EventBus()
@@ -62,6 +68,12 @@ class ProgressiveResearchEngine:
         self.sleep_between_batches_seconds = sleep_between_batches_seconds
         self.batch_interval_seconds = batch_interval_seconds
         self.priority_timeframe = priority_timeframe
+        self.trade_notional_eur = trade_notional_eur
+        self.buy_fee_rate = buy_fee_rate
+        self.sell_fee_rate = sell_fee_rate
+        self.spread_rate = spread_rate
+        self.slippage_rate = slippage_rate
+        self.probability_horizon_candles = probability_horizon_candles
         self.logger = get_module_logger("research")
 
     def generate_combinations(self, pairs: list[str], timeframes: list[str]):
@@ -183,20 +195,62 @@ class ProgressiveResearchEngine:
         candles = self.repository.fetch_ohlc(combination.pair, combination.timeframe)
         if len(candles) < 200:
             return self.empty_metrics("INSUFFICIENT_OHLC_DATA", len(candles))
-        closes = [float(row[4]) for row in reversed(candles)]
-        returns = [closes[index] - closes[index - 1] for index in range(1, len(closes))]
-        wins = [value for value in returns if value > 0]
-        losses = [value for value in returns if value < 0]
+
+        chronological = list(reversed(candles))
+        reward_risk = float(combination.parameters.get("reward_risk", 1.5) or 1.5)
+        atr_multiplier = float(combination.parameters.get("atr_multiplier", 1.0) or 1.0)
+        horizon = max(1, self.probability_horizon_candles)
+        lookback = 20
+        trade_results: list[float] = []
+        favorable_excursions: list[float] = []
+        adverse_excursions: list[float] = []
+
+        for index in range(lookback, len(chronological) - horizon):
+            entry = float(chronological[index][4])
+            prior_ranges = [float(row[2]) - float(row[3]) for row in chronological[index - lookback:index]]
+            average_range = sum(prior_ranges) / len(prior_ranges) if prior_ranges else 0.0
+            stop_distance = max(average_range * atr_multiplier, entry * 0.0001)
+            target_distance = stop_distance * reward_risk
+            stop = entry - stop_distance
+            target = entry + target_distance
+            future = chronological[index + 1:index + horizon + 1]
+            exit_price = float(future[-1][4])
+
+            for candle in future:
+                high = float(candle[2])
+                low = float(candle[3])
+                hit_target = high >= target
+                hit_stop = low <= stop
+                if hit_stop and hit_target:
+                    exit_price = stop
+                    break
+                if hit_stop:
+                    exit_price = stop
+                    break
+                if hit_target:
+                    exit_price = target
+                    break
+
+            favorable_excursions.append(max(float(row[2]) - entry for row in future))
+            adverse_excursions.append(min(float(row[3]) - entry for row in future))
+            trade_results.append(self._net_long_result(entry, exit_price))
+
+        if not trade_results:
+            return self.empty_metrics("NO_RESEARCH_TRADES", len(candles))
+
+        wins = [value for value in trade_results if value > 0]
+        losses = [value for value in trade_results if value < 0]
         gross_profit = sum(wins)
         gross_loss = abs(sum(losses))
-        expectancy = sum(returns) / len(returns) if returns else 0.0
-        average_win = sum(wins) / len(wins) if wins else 0.0
+        net_profit = sum(trade_results)
+        expectancy = net_profit / len(trade_results)
+        average_win = gross_profit / len(wins) if wins else 0.0
         average_loss = sum(losses) / len(losses) if losses else 0.0
-        max_drawdown = self._max_drawdown(returns)
-        net_profit = sum(returns)
+        max_drawdown = self._max_drawdown(trade_results)
         recovery_factor = net_profit / max_drawdown if max_drawdown else 0.0
+
         return {
-            "win_rate": len(wins) / len(returns) * 100 if returns else 0.0,
+            "win_rate": len(wins) / len(trade_results) * 100,
             "profit_factor": gross_profit / gross_loss if gross_loss else gross_profit,
             "expectancy": expectancy,
             "sharpe": 0.0,
@@ -207,11 +261,36 @@ class ProgressiveResearchEngine:
             "average_loss": average_loss,
             "recovery_factor": recovery_factor,
             "ulcer_index": 0.0,
-            "mfe": max(returns) if returns else 0.0,
-            "mae": min(returns) if returns else 0.0,
+            "mfe": max(favorable_excursions) if favorable_excursions else 0.0,
+            "mae": min(adverse_excursions) if adverse_excursions else 0.0,
             "calmar_ratio": recovery_factor,
-            "validation": {"status": "PROGRESSIVE_BASELINE", "candles": len(candles)},
+            "validation": {
+                "status": "LIVE_ALIGNED_BACKTEST",
+                "candles": len(candles),
+                "trades": len(trade_results),
+                "horizon_candles": horizon,
+                "reward_risk": reward_risk,
+                "atr_multiplier": atr_multiplier,
+                "trade_notional_eur": self.trade_notional_eur,
+                "buy_fee_rate": self.buy_fee_rate,
+                "sell_fee_rate": self.sell_fee_rate,
+                "spread_rate": self.spread_rate,
+                "slippage_rate": self.slippage_rate,
+            },
         }
+
+    def _net_long_result(self, entry: float, exit_price: float) -> float:
+        half_spread = self.spread_rate / 2
+        effective_entry = entry * (1 + half_spread + self.slippage_rate)
+        effective_exit = exit_price * (1 - half_spread - self.slippage_rate)
+        if effective_entry <= 0:
+            return 0.0
+        quantity = self.trade_notional_eur / effective_entry
+        entry_notional = quantity * effective_entry
+        exit_notional = quantity * effective_exit
+        buy_fee = entry_notional * self.buy_fee_rate
+        sell_fee = exit_notional * self.sell_fee_rate
+        return exit_notional - entry_notional - buy_fee - sell_fee
 
     @staticmethod
     def empty_metrics(status: str, candles: int) -> dict[str, Any]:

@@ -73,6 +73,12 @@ def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postg
         sleep_between_batches_seconds=settings.research_sleep_between_batches_seconds,
         batch_interval_seconds=settings.railway_light_research_seconds if settings.run_mode == "RAILWAY_LIGHT" else settings.research_sleep_between_batches_seconds,
         priority_timeframe=settings.operational_timeframe,
+        trade_notional_eur=settings.trade_notional_eur,
+        buy_fee_rate=settings.binance_buy_fee_rate,
+        sell_fee_rate=settings.binance_sell_fee_rate,
+        spread_rate=settings.binance_spread_rate,
+        slippage_rate=settings.binance_slippage_rate,
+        probability_horizon_candles=settings.probability_horizon_candles,
     )
 
 

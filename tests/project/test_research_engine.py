@@ -36,7 +36,7 @@ class FakeResearchRepository:
         self.marked_running.extend(combination_ids)
 
     def fetch_ohlc(self, pair, timeframe, limit=720):
-        return [(index, 1, 1, 1, 100 + index, 10) for index in range(220)]
+        return [(index, 100 + index, 102 + index, 99 + index, 101 + index, 10) for index in range(240)]
 
     def fetch_progress_counts(self):
         return {"DONE": len([item for item in self.done if item[1] == "DONE"]), "PENDING": 0, "FAILED_RETRYABLE": 0, "RUNNING": 0}
@@ -66,11 +66,33 @@ def test_progressive_research_processes_one_small_batch_and_publishes_completion
     assert result.status == "COMPLETED"
     assert repo.batch_size == 100
     assert repo.marked_running == [1]
-    assert repo.results == [(1, "PROGRESSIVE_BASELINE", 10)]
+    assert repo.results == [(1, "LIVE_ALIGNED_BACKTEST", 10)]
     assert repo.done == [(1, "DONE", None)]
     assert repo.finished == [(10, "COMPLETED", 1, 1)]
     assert events[-1].payload == {"batch_id": 10, "processed": 1}
 
+
+
+def test_progressive_research_uses_live_aligned_trade_simulation_after_costs():
+    repo = FakeResearchRepository()
+    engine = ProgressiveResearchEngine(
+        repo,
+        sleep_between_batches_seconds=0,
+        trade_notional_eur=100.0,
+        buy_fee_rate=0.001,
+        sell_fee_rate=0.001,
+        spread_rate=0.0005,
+        probability_horizon_candles=8,
+    )
+
+    metrics = engine.evaluate_combination(repo.combinations[0])
+
+    assert metrics["validation"]["status"] == "LIVE_ALIGNED_BACKTEST"
+    assert metrics["validation"]["trades"] > 0
+    assert metrics["validation"]["trade_notional_eur"] == 100.0
+    assert metrics["profit_factor"] >= 0.0
+    assert "net_profit" in metrics
+    assert "expectancy" in metrics
 
 def test_progressive_research_passes_priority_timeframe_to_repository():
     repo = FakeResearchRepository()
