@@ -99,6 +99,7 @@ class PlatformSettings:
     min_probability_sample_size: int = _int_env("MIN_PROBABILITY_SAMPLE_SIZE", 30)
     probability_horizon_candles: int = _int_env("PROBABILITY_HORIZON_CANDLES", 8)
     signal_classes: list[str] = field(default_factory=lambda: _signal_classes_env("SIGNAL_CLASSES", ["A", "B"]))
+    strategy_ohlc_limit: int = _int_env("STRATEGY_OHLC_LIMIT", 720)
     ambiguous_candle_mode: str = os.getenv("AMBIGUOUS_CANDLE_MODE", "conservative").strip().lower()
     enable_daily_signal_report: bool = _bool_env("ENABLE_DAILY_SIGNAL_REPORT", True)
     daily_signal_report_hours: int = _int_env("DAILY_SIGNAL_REPORT_HOURS", 24)

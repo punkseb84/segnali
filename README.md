@@ -896,9 +896,12 @@ BINANCE_SPREAD_RATE=0.0005
 SIGNAL_CLASSES=A,B
 COLLECTOR_TIMEFRAMES=1h
 OPERATIONAL_TIMEFRAME=1h
+STRATEGY_OHLC_LIMIT=720
 ```
 
 Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Il Take Profit resta tecnico e non viene spostato per ottenere un profitto monetario fisso. Il motore live scarta setup non tradabili, TP netto non positivo o setup con expected value storico netto negativo quando il campione è sufficiente; gli altri controlli di qualità producono una classe (`A`, `B`, `C`) invece di bloccare automaticamente il segnale.
+
+`STRATEGY_OHLC_LIMIT` controlla quante candele recenti usa lo Strategy Engine per ATR, win rate comparabile, MFE/MAE e historical EV. Con orizzonte probabilità `8`, un limite `120` produce al massimo `111` sample (`120 - 8 - 1`); il default `720` rende il campione più ampio quando PostgreSQL contiene abbastanza storico.
 
 Il messaggio Telegram mostra:
 

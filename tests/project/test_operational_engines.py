@@ -18,6 +18,7 @@ def test_platform_defaults_to_one_hour_timeframe(monkeypatch):
     assert settings.collector_timeframes == ["1h"]
     assert settings.operational_timeframe == "1h"
     assert settings.signal_classes == ["A", "B"]
+    assert settings.strategy_ohlc_limit == 720
 
 
 def test_platform_signal_classes_are_configurable(monkeypatch):
@@ -82,6 +83,25 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert events[-1].payload["entry_timing"] == "IMMEDIATE_ON_SIGNAL_RECEIPT"
     assert events[-1].payload["net_profit_tp1_eur"] > 0
     assert events[-1].payload["signal_class"] in {"A", "B", "C"}
+
+
+def test_strategy_engine_uses_configured_ohlc_limit():
+    class CapturingResearch(FakeResearchRepository):
+        def __init__(self, postgres):
+            super().__init__(postgres)
+            self.last_limit = None
+
+        def fetch_ohlc(self, pair, timeframe, limit=720):
+            self.last_limit = limit
+            return super().fetch_ohlc(pair, timeframe, limit)
+
+    postgres = FakePostgres()
+    research = CapturingResearch(postgres)
+    strategy = StrategyEngine(research, DecisionEngine(postgres), ohlc_limit=360)
+
+    strategy.evaluate()
+
+    assert research.last_limit == 360
 
 
 def test_notification_engine_skips_when_disabled():

@@ -105,6 +105,7 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         historical_mfe_percentile=settings.historical_mfe_percentile,
         min_probability_sample_size=settings.min_probability_sample_size,
         probability_horizon_candles=settings.probability_horizon_candles,
+        ohlc_limit=settings.strategy_ohlc_limit,
         allowed_signal_classes=settings.signal_classes,
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,

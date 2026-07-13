@@ -87,6 +87,7 @@ class StrategyEngine:
         historical_mfe_percentile: float = 90.0,
         min_probability_sample_size: int = 30,
         probability_horizon_candles: int = 8,
+        ohlc_limit: int = 720,
         allowed_signal_classes: list[str] | None = None,
         enable_daily_signal_report: bool = True,
         daily_signal_report_hours: int = 24,
@@ -114,6 +115,7 @@ class StrategyEngine:
         self.historical_mfe_percentile = historical_mfe_percentile
         self.min_probability_sample_size = min_probability_sample_size
         self.probability_horizon_candles = probability_horizon_candles
+        self.ohlc_limit = ohlc_limit
         self.allowed_signal_classes = allowed_signal_classes or ["A", "B"]
         self.enable_daily_signal_report = enable_daily_signal_report
         self.daily_signal_report_hours = daily_signal_report_hours
@@ -171,7 +173,7 @@ class StrategyEngine:
                 decision.regime,
                 decision.enabled_strategies,
             )
-        prices = self.research_repository.fetch_ohlc(best["pair"], best["timeframe"], limit=120)
+        prices = self.research_repository.fetch_ohlc(best["pair"], best["timeframe"], limit=self.ohlc_limit)
         if len(prices) < 5:
             self.logger.info("STRATEGY no recent OHLC for pair=%s timeframe=%s", best["pair"], best["timeframe"])
             return None
