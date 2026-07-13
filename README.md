@@ -412,3 +412,576 @@ Metriche incluse: numero trade, win rate, profit factor, expectancy, max drawdow
 - Con `ENABLE_WATCHLIST_ALERTS=false` il bot non manda notifiche watchlist: Telegram resta pulito e ricevi solo operativi, esiti e report.
 - Con `ENFORCE_SETUP_RULES=false` il bot è meno restrittivo sulle penalità secondarie, ma le condizioni critiche continuano a bloccare i segnali più deboli. Per tornare a una modalità ancora più rigida, imposta `ENFORCE_SETUP_RULES=true`.
 - I prezzi nei messaggi sono formattati con almeno 4 decimali, e 6 decimali per crypto sotto 1 euro/dollaro.
+
+## Quant Research Engine e Railway Volume
+
+Il progetto ora nasce come **Quant Research Engine**: non si limita più a generare segnali o a scrivere `NESSUN EDGE VALIDATO`, ma esegue una ricerca massiva su strategie, pair, timeframe, regimi di mercato e parametri tecnici per individuare combinazioni quasi profittevoli e aree da approfondire.
+
+### Modalità operative
+
+Configura `RUN_MODE`:
+
+```env
+RUN_MODE=RESEARCH
+ENABLE_LIVE_SIGNALS=false
+```
+
+Valori disponibili:
+
+- `RESEARCH` — sincronizza i dati OHLC mancanti, esegue la ricerca quantitativa in batch, salva tutti i risultati e produce report/CSV.
+- `SYNC_DATA` — aggiorna solo il database OHLC locale, senza backtest e senza inviare segnali.
+- `LIVE` — usa la parte live del bot; invia segnali solo se `ENABLE_LIVE_SIGNALS=True`.
+
+Di default il progetto usa `RUN_MODE=RESEARCH` e `ENABLE_LIVE_SIGNALS=false`.
+
+### Persistenza SQLite su Railway
+
+Railway può perdere i file locali quando il container viene ricreato. Per conservare database e report:
+
+1. Crea un **Railway Volume**.
+2. Montalo sul path `/data`.
+3. Imposta la variabile:
+
+```env
+DATA_DIR=/data
+```
+
+4. Per ricerca quantitativa:
+
+```env
+RUN_MODE=RESEARCH
+```
+
+5. Per aggiornare solo i dati storici:
+
+```env
+RUN_MODE=SYNC_DATA
+```
+
+6. Per modalità live:
+
+```env
+RUN_MODE=LIVE
+ENABLE_LIVE_SIGNALS=True
+```
+
+Se il volume non è montato, il bot usa automaticamente `./data` come fallback e scrive nei log:
+
+```text
+WARNING: persistent volume not detected, data may be lost on redeploy
+```
+
+I percorsi usati sono configurati in `config.py`:
+
+```python
+DATA_DIR = os.getenv("DATA_DIR", "/data")
+OHLC_DB_PATH = os.path.join(DATA_DIR, "ohlc_cache.sqlite")
+RESEARCH_DB_PATH = os.path.join(DATA_DIR, "research_database.sqlite")
+EXPORT_DIR = os.path.join(DATA_DIR, "exports")
+```
+
+### Database OHLC locale
+
+Il motore usa `ohlc_cache.sqlite` per non scaricare continuamente le stesse candele da Kraken. La tabella `ohlc_data` salva:
+
+- exchange;
+- pair;
+- timeframe;
+- timestamp;
+- open/high/low/close;
+- volume;
+- created_at.
+
+È presente un indice unico su `exchange + pair + timeframe + timestamp`. Le funzioni principali sono:
+
+- `sync_ohlc_cache(pair, timeframe, start_date, end_date)`;
+- `get_ohlc_from_cache(pair, timeframe, start_date, end_date)`;
+- `update_missing_ohlc(pair, timeframe)`.
+
+Tutti i backtest del Quant Research Engine leggono dal cache SQLite e scaricano da Kraken solo quando mancano dati sufficienti.
+
+### Ricerca massiva in batch
+
+La ricerca combina automaticamente:
+
+- strategie: Breakout Retest, Pullback Trend, Liquidity Sweep, Range Reversal, Momentum Breakout, Compression Breakout, Volatility Expansion, Mean Reversion;
+- timeframe: `5m`, `15m`, `30m`, `1h`, `4h`;
+- pair: BTC, ETH, SOL, LINK, UNI, AAVE, AVAX, TAO, XRP, ADA, DOGE;
+- RSI, ATR, ADX, Relative Volume, Reward/Risk e regime di mercato.
+
+Variabili Railway consigliate:
+
+```env
+RESEARCH_BATCH_SIZE=250
+MAX_RESEARCH_RUNTIME_MINUTES=45
+RESUME_RESEARCH=True
+KRAKEN_API_SLEEP_SECONDS=1.2
+KRAKEN_MAX_RETRIES=3
+KRAKEN_TIMEOUT_SECONDS=20
+```
+
+La tabella `research_progress` salva avanzamento, batch corrente, totale combinazioni, combinazioni processate, ultimo strategy/pair/timeframe e stato. Se Railway interrompe il processo, al riavvio `RESUME_RESEARCH=True` riprende dal batch successivo.
+
+### Output generati
+
+Il motore salva tutto in `research_database.sqlite`, tabella `strategy_results`, senza scartare le strategie non validate. Genera inoltre:
+
+- `top100_profit_factor.csv`;
+- `top100_expectancy.csv`;
+- `top100_winrate.csv`;
+- `top100_sharpe.csv`;
+- `top100_netprofit.csv`;
+- `top100_lowest_drawdown.csv`;
+- `research_summary.txt`.
+
+Il report include TOP strategie, TOP pair, TOP timeframe, TOP strategy, TOP regimi, motivi di mancata validazione e suggerimenti automatici su parametri, pair, timeframe e strategie da approfondire. Il software non modifica automaticamente il bot live.
+
+# Modular Quant Platform — Piano di rifattorizzazione
+
+> Stato attuale: **fasi operative collegate**. La piattaforma include architettura modulare, PostgreSQL, Data Collector, Research Engine progressivo, Decision Engine, Strategy Engine e Notification Engine; le notifiche restano disabilitate di default per permettere audit dei segnali prima dell'invio live.
+
+## Nuova struttura cartelle
+
+```text
+project/
+├── config/
+│   └── settings.py
+├── data_collector/
+│   ├── kraken_client.py
+│   ├── repository.py
+│   └── service.py
+├── database/
+│   ├── migrations.py
+│   ├── postgres.py
+│   └── schema.py
+├── decision_engine/
+│   └── service.py
+├── notification_engine/
+│   └── service.py
+├── research_engine/
+│   └── service.py
+├── shared/
+│   ├── events.py
+│   ├── indicators.py
+│   ├── logging.py
+│   ├── market_structure.py
+│   ├── price_action.py
+│   ├── risk.py
+│   ├── utils.py
+│   └── validators.py
+├── strategy_engine/
+│   └── service.py
+├── logs/
+├── scheduler.py
+└── main.py
+```
+
+## Responsabilità dei moduli
+
+| Modulo | Responsabilità | Stato |
+| --- | --- | --- |
+| `data_collector` | Scarica dati Kraken, aggiorna dati incrementali, evita duplicati, verifica integrità, scrive log sync. Non conosce strategie, indicatori o notifiche. | Fase 1 |
+| `database` | Connessione PostgreSQL, schema `market_data`, `research`, `signals`, `statistics`, `system`, migrazioni idempotenti. | Fase 1 base |
+| `shared` | Event bus, logging modulare, confini per indicatori, risk, price action, market structure e validator. | Fase 1 base |
+| `research_engine` | Trova edge leggendo solo PostgreSQL e salvando risultati in `research.*`. | Fase 3 |
+| `decision_engine` | Classifica regime e produce lista strategie abilitate. Non genera segnali. | Fase 4 |
+| `strategy_engine` | Applica solo strategie validate/abilitate e produce eventi `NEW_SIGNAL`. | Fase 5 |
+| `notification_engine` | Riceve eventi e invia Telegram/Discord/Email/Webhook senza decidere o calcolare. | Fase 6 |
+| `scheduler` | Pianifica attività indipendenti per ogni modulo. | Fase 1 base |
+
+## Dipendenze tra moduli
+
+I moduli non devono chiamarsi direttamente per decisioni operative. La comunicazione passa dall'`EventBus` interno.
+
+```text
+Data Collector ──MARKET_UPDATED──▶ Event Bus ──▶ moduli subscriber futuri
+Research Engine ─RESEARCH_COMPLETED/STRATEGY_VALIDATED──▶ Event Bus
+Decision Engine ─MARKET_REGIME_CHANGED──▶ Event Bus
+Strategy Engine ─NEW_SIGNAL/TRADE_OPENED/TRADE_CLOSED──▶ Event Bus
+Notification Engine ◀── eventi dal Bus
+```
+
+## Diagramma architetturale
+
+```text
+                    ┌────────────────────┐
+                    │  config/settings   │
+                    └─────────┬──────────┘
+                              │
+┌──────────────┐      ┌────────▼────────┐      ┌──────────────────┐
+│   Kraken     │─────▶│ Data Collector  │─────▶│ PostgreSQL       │
+│ public OHLC  │      │ sync only       │      │ market_data.*    │
+└──────────────┘      └────────┬────────┘      └────────┬─────────┘
+                               │ MARKET_UPDATED          │
+                               ▼                         │
+                        ┌────────────┐                   │
+                        │ Event Bus  │◀──────────────────┘
+                        └─────┬──────┘
+                              │
+      ┌───────────────────────┼───────────────────────┐
+      ▼                       ▼                       ▼
+Research Engine          Decision Engine          Notification Engine
+Phase 3                  Phase 4                  Phase 6
+      │                       │                       ▲
+      ▼                       ▼                       │
+research.*              enabled strategies        events only
+                              │
+                              ▼
+                       Strategy Engine
+                       Phase 5 → NEW_SIGNAL
+```
+
+## Flusso dati della Fase 1
+
+1. `project.main` carica le variabili ambiente tramite `project.config.settings`.
+2. `database.migrations.run_migrations()` crea gli schema PostgreSQL idempotenti.
+3. `DataCollectorService.sync_pair()` legge l'ultimo timestamp da `market_data.ohlc`.
+4. `KrakenOhlcClient.fetch_ohlc()` scarica solo il range incrementale usando `since`.
+5. `MarketDataRepository.insert_ohlc()` scrive in `market_data.ohlc` con `ON CONFLICT DO NOTHING`.
+6. `market_data.sync_log` registra successo/fallimento, righe inserite ed eventuale errore.
+7. Il servizio pubblica `MARKET_UPDATED` su `EventBus`.
+
+## PostgreSQL Railway
+
+La nuova piattaforma usa `DATABASE_URL` di Railway PostgreSQL:
+
+```env
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+ENABLE_DATA_COLLECTOR=true
+ENABLE_RESEARCH_ENGINE=true
+ENABLE_DECISION_ENGINE=true
+ENABLE_STRATEGY_ENGINE=true
+ENABLE_POSITION_MONITOR=true
+ENABLE_NOTIFICATION_ENGINE=false
+# Se Railway non ha ancora questa variabile, puoi usare ENABLE_LIVE_SIGNALS=false/true come fallback.
+# Se mancano entrambe ma TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID sono presenti, Telegram viene abilitato automaticamente.
+COLLECTOR_PAIRS=BTC/USD,ETH/USD,SOL/USD
+COLLECTOR_TIMEFRAMES=5m,15m,1h
+KRAKEN_API_SLEEP_SECONDS=1.2
+KRAKEN_MAX_RETRIES=3
+KRAKEN_TIMEOUT_SECONDS=20
+```
+
+Il `Procfile` avvia la nuova piattaforma modulare:
+
+```text
+worker: python -m project.main
+```
+
+## Scheduler centrale
+
+Intervalli target:
+
+- Data Collector: ogni 5 minuti (`SCHEDULER_COLLECTOR_SECONDS=300`);
+- Research Engine: batch leggero periodico in `RAILWAY_LIGHT` o continuo in `RESEARCH`;
+- Decision Engine: ogni 15 minuti (`SCHEDULER_DECISION_SECONDS=900`);
+- Strategy Engine: ogni minuto (`SCHEDULER_STRATEGY_SECONDS=60`), con blocco duplicati finché un segnale uguale resta aperto;
+- Position Monitor: ogni minuto (`SCHEDULER_POSITION_MONITOR_SECONDS=60`) per chiudere segnali a TP1/SL;
+- Notification Engine: real time via Event Bus quando `ENABLE_NOTIFICATION_ENGINE=true`; se questa variabile non esiste su Railway, la piattaforma usa `ENABLE_LIVE_SIGNALS` come fallback; se mancano entrambe ma sono presenti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`, Telegram viene abilitato automaticamente.
+
+## Piano di migrazione
+
+1. **Fase 1 — Architettura + Data Collector**: introdotta in questa modifica. Il vecchio codice resta disponibile, ma il nuovo entrypoint Railway è `project.main`.
+2. **Fase 2 — PostgreSQL e migrazione dati**: migrare dati legacy SQLite verso PostgreSQL e consolidare repository per ogni schema.
+3. **Fase 3 — Quant Research Engine**: spostare la ricerca in `project/research_engine`, leggere solo da PostgreSQL e scrivere `research.strategy_results`, `research.research_batches`, `research.research_reports`.
+4. **Fase 4 — Decision Engine**: classificare `TREND_UP`, `TREND_DOWN`, `RANGE`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`, `COMPRESSION`, `BREAKOUT`, `NEWS_EVENT`, `NO_TRADE` e pubblicare strategie abilitate.
+5. **Fase 5 — Strategy Engine**: generare segnali solo se strategia validata, abilitata, coerente con mercato e con reward/risk valido.
+6. **Fase 6 — Notification Engine**: separare Telegram e predisporre Discord, Email e Webhook come subscriber di eventi.
+
+## Railway Light — ricerca progressiva senza server dedicato
+
+La piattaforma è adattata per Railway a costi contenuti: non esegue backtest massivi tutti insieme e non usa SQLite come database principale. Il database principale è PostgreSQL Railway; SQLite resta solo un eventuale cache locale legacy/non primaria.
+
+### Configurazione consigliata
+
+```env
+RUN_MODE=RAILWAY_LIGHT
+ENABLE_DATA_COLLECTOR=true
+ENABLE_RESEARCH_ENGINE=true
+ENABLE_DECISION_ENGINE=true
+ENABLE_STRATEGY_ENGINE=true
+ENABLE_POSITION_MONITOR=true
+ENABLE_NOTIFICATION_ENGINE=false
+# fallback supportato se ENABLE_NOTIFICATION_ENGINE non è presente:
+# ENABLE_LIVE_SIGNALS=false
+# se mancano entrambe, TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID abilitano Telegram automaticamente
+RESEARCH_BATCH_SIZE=100
+MAX_RESEARCH_RUNTIME_MINUTES=20
+RESEARCH_SLEEP_BETWEEN_BATCHES_SECONDS=60
+RESUME_RESEARCH=True
+SCHEDULER_COLLECTOR_SECONDS=300
+SCHEDULER_DECISION_SECONDS=900
+SCHEDULER_STRATEGY_SECONDS=60
+RAILWAY_LIGHT_RESEARCH_SECONDS=3600
+```
+
+### Regole operative
+
+- Il Data Collector gira ogni 5 minuti e salva OHLC in `market_data.ohlc`.
+- Il Research Engine genera le combinazioni e le salva in `research.strategy_combinations`.
+- Ogni ciclo processa solo un batch piccolo (`RESEARCH_BATCH_SIZE=100`).
+- Ogni batch ha limite runtime massimo di 20 minuti.
+- Dopo ogni batch lo stato viene salvato in `research.research_batches` e nelle singole combinazioni.
+- Se Railway riavvia il container, le combinazioni `PENDING` o `FAILED_RETRYABLE` vengono riprese dal punto esatto.
+- Il Research Engine legge solo OHLC già presenti in PostgreSQL e non chiama Kraken.
+- In `RAILWAY_LIGHT` il processo resta sempre acceso, raccoglie dati e processa ricerca a piccoli batch.
+- I report Telegram devono restare throttled: solo on-demand o una volta al giorno nella futura Fase 6.
+
+### Scheduling Railway Light
+
+```text
+Data Collector   ogni 5 minuti
+Decision Engine  ogni 15 minuti
+Strategy Engine  ogni 1 minuto
+Research Engine  a batch leggeri in RAILWAY_LIGHT, oppure batch continui in RUN_MODE=RESEARCH
+Notification     real time solo su eventi, con report giornaliero/on-demand
+```
+
+### Persistenza ricerca progressiva
+
+Le combinazioni sono persistite in PostgreSQL prima di essere elaborate:
+
+```text
+research.strategy_combinations
+research.research_batches
+research.strategy_results
+research.research_reports
+```
+
+Questo evita di mantenere milioni di combinazioni in memoria e permette a Railway di riprendere il lavoro dopo redeploy o restart.
+
+### Nota sul warning volume persistente
+
+In `RUN_MODE=RAILWAY_LIGHT` la piattaforma usa PostgreSQL come storage primario e quindi non deve richiedere un volume `/data` per i database principali. Il warning sul volume persistente rimane attivo solo per i run mode legacy/locali che usano SQLite (`RESEARCH` o `SYNC_DATA`).
+
+### Avvio RAILWAY_LIGHT e PostgreSQL obbligatorio
+
+In `RUN_MODE=RAILWAY_LIGHT` PostgreSQL è obbligatorio. All'avvio la piattaforma legge `DATABASE_URL` dalle variabili Railway; se manca, il processo si ferma con errore chiaro:
+
+```text
+DATABASE_URL missing: Railway PostgreSQL is required in RAILWAY_LIGHT mode
+```
+
+I log di startup non mostrano più percorsi SQLite come database principali in `RAILWAY_LIGHT`. Mostrano invece:
+
+```text
+RUN_MODE=RAILWAY_LIGHT
+DATABASE_URL detected: yes/no
+PostgreSQL connection: OK/FAILED
+PostgreSQL host=<host> database=<database>
+Storage backend: PostgreSQL
+SQLite cache: enabled/disabled
+```
+
+La password di `DATABASE_URL` non viene mai stampata. Se la connessione PostgreSQL è valida, le migrazioni creano automaticamente le tabelle mancanti prima di avviare scheduler, Data Collector e Research Engine.
+
+In `RAILWAY_LIGHT` il test non si limita a rilevare la presenza di `DATABASE_URL`: viene aperta una connessione reale a PostgreSQL con `SELECT 1`. Solo dopo `PostgreSQL connection: OK` vengono eseguite le migrazioni; al termine viene loggato `Database schema ready`. Se la connessione fallisce, l'errore viene sanificato per non mostrare password e il processo termina.
+
+## Database bootstrap obbligatorio
+
+All'avvio `project.main` esegue un bootstrap PostgreSQL prima di continuare con scheduler e sviluppo applicativo:
+
+1. connessione PostgreSQL reale;
+2. creazione tabella `startup_test`;
+3. inserimento riga;
+4. lettura della riga appena inserita;
+5. log `Database bootstrap SUCCESS`.
+
+Solo dopo il bootstrap vengono eseguite le migrazioni. Al termine vengono stampati `Migration completed` e la lista delle tabelle/schema previsti. Subito dopo viene verificato il Data Collector con una sola candela `BTC/USD` `5m` (`OHLC write OK`, `OHLC read OK`) e viene verificata la persistenza research con un record fittizio in `research.strategy_results` (`Research write OK`, `Research read OK`). Se una qualsiasi operazione fallisce viene stampato traceback completo e il processo termina.
+
+## Avanzamento operativo dopo bootstrap
+
+Dopo la verifica infrastrutturale, `RAILWAY_LIGHT` può ridurre il rumore diagnostico impostando:
+
+```env
+ENABLE_BOOTSTRAP_TEST=false
+```
+
+Con il bootstrap diagnostico disabilitato, la piattaforma continua comunque a testare la connessione PostgreSQL, eseguire le migrazioni e avviare lo scheduler, ma non inserisce più righe diagnostiche in `startup_test`, `market_data.ohlc` e `research.strategy_results` ad ogni avvio.
+
+Il Data Collector ora emette log operativi più chiari:
+
+```text
+DATA COLLECTOR START pair=BTC/USD timeframe=5m
+DATA COLLECTOR latest_timestamp pair=BTC/USD timeframe=5m latest=...
+DATA COLLECTOR OK pair=BTC/USD timeframe=5m downloaded_candles=... inserted_candles=... duplicates_skipped=...
+DATA COLLECTOR SYNC ALL END total=... success=... failed=...
+```
+
+Questi log servono a verificare che `market_data.ohlc` cresca regolarmente senza duplicati prima di ampliare Research, Decision e Strategy Engine.
+
+## Primo ciclo operativo automatico
+
+Dopo il bootstrap, `RAILWAY_LIGHT` ora può avviare subito un primo ciclo operativo senza attendere il primo intervallo scheduler:
+
+```env
+RUN_DATA_COLLECTOR_ON_STARTUP=true
+RUN_RESEARCH_ON_STARTUP=true
+```
+
+Con questi default attivi:
+
+1. il Data Collector esegue immediatamente una sync iniziale delle pair/timeframe configurate;
+2. il Research Engine inizializza le combinazioni mancanti;
+3. viene processato subito un primo batch research senza sleep artificiale;
+4. i successivi cicli continuano via scheduler.
+
+Log attesi:
+
+```text
+Data Collector startup sync requested
+DATA COLLECTOR SYNC ALL START ...
+DATA COLLECTOR SYNC ALL END total=... success=... failed=...
+Research Engine startup batch requested
+RESEARCH BATCH START batch_size=100 runtime_limit_seconds=1200
+RESEARCH BATCH COMPLETED ...
+```
+
+Se vuoi evitare lavoro immediato all'avvio, imposta una o entrambe le variabili a `false`.
+
+## Research progress monitor
+
+Il Research Engine ora emette uno snapshot di avanzamento dopo ogni batch completato:
+
+```text
+RESEARCH PROGRESS total=967680 done=1000 pending=966680 retryable=0 running=0 progress=0.1033% estimated_batches_remaining=9667 estimated_days_remaining=33.57
+RESEARCH BEST strategy=... pair=... timeframe=... profit_factor=... expectancy=... net_profit=...
+```
+
+In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 60 secondi e `RESEARCH_BATCH_SIZE` è 500, così il motore processa più combinazioni operative senza attendere giorni prima di trovare candidati utili. Questo aumenta il ritmo della ricerca progressiva mantenendo comunque batch incrementali e resumable su PostgreSQL.
+
+Nota: i record diagnostici `BOOTSTRAP_TEST` sono esclusi dal log `RESEARCH BEST`, così il miglior risultato provvisorio mostra solo risultati research reali e non righe create per verificare PostgreSQL.
+
+### Backtest research allineato al motore live
+
+Il Research Engine progressivo non classifica più le combinazioni con un semplice rendimento close-to-close. Ogni combinazione viene simulata come una serie di trade LONG con stop tecnico, take profit tecnico, orizzonte temporale configurabile, risoluzione prudenziale quando TP e SL sono colpiti nella stessa candela, capitale per trade e costi Binance stimati.
+
+Questo rende `profit_factor`, `expectancy`, `net_profit`, `average_win` e `average_loss` confrontabili con i valori che lo Strategy Engine usa prima dell'invio Telegram: un candidato research positivo deve quindi essere positivo dopo fee, spread e slippage, non solo positivo sul movimento grezzo del prezzo.
+
+Quando viene introdotta una nuova logica di backtest, le vecchie combinazioni `DONE` salvate con validazioni precedenti vengono rimesse in `PENDING` una sola volta e i candidati live leggono solo risultati `LIVE_ALIGNED_BACKTEST`. In questo modo Railway non continua a proporre sempre gli stessi valori storici stale dopo un deploy.
+
+I candidati con `profit_factor <= 1.0` e `expectancy <= 0` non vengono più proposti allo Strategy Engine: restano salvati per analisi research, ma non generano log live ripetitivi perché non hanno edge statistico minimo.
+
+I batch pending non seguono più il solo ordine crescente degli ID: vengono distribuiti per bucket tra strategia, pair e timeframe. In questo modo i primi batch non testano migliaia di varianti della stessa strategia/pair prima di passare alle altre, ma esplorano più rapidamente strategie diverse.
+
+## Operational engines enabled
+
+Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi:
+
+- Decision Engine: classifica il regime su OHLC PostgreSQL e abilita famiglie di strategie.
+- Strategy Engine: legge il miglior candidato research, verifica soglia minima di profit factor e coerenza con il regime, salva il segnale in `signals.generated_signals` e pubblica `NEW_SIGNAL`.
+- Position Monitor: legge i segnali aperti da `signals.generated_signals`, controlla gli OHLC PostgreSQL e chiude il segnale quando raggiunge TP1 o SL, pubblicando `TARGET_HIT` o `STOP_LOSS`.
+- Notification Engine: si sottoscrive agli eventi e può inviare Telegram se `ENABLE_NOTIFICATION_ENGINE=true`, oppure se `ENABLE_LIVE_SIGNALS=true`, oppure automaticamente quando esistono già `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`; invia anche notifiche TP1/SL prodotte dal Position Monitor.
+
+Per sicurezza, le notifiche restano disabilitate di default. I segnali possono comunque essere salvati in PostgreSQL per audit e verifica prima di attivare Telegram.
+
+
+## Duplicate signal protection e TP1/SL modulari
+
+In `RAILWAY_LIGHT` lo Strategy Engine non deve inviare lo stesso segnale ogni minuto. Prima di salvare un nuovo segnale, controlla se esiste già un segnale attivo con stessa strategia, pair, timeframe e regime in stato `NEW` o `OPEN`; se esiste, il nuovo invio viene saltato.
+
+Il Position Monitor chiude i segnali aperti quando gli OHLC PostgreSQL raggiungono `take_profit` o `stop_loss`. Se TP1 e SL sono nella stessa candela, viene applicata una regola conservativa: vince lo stop loss. Gli eventi `TARGET_HIT` e `STOP_LOSS` vengono inviati al Notification Engine per Telegram.
+
+## Entry timing nei segnali Telegram
+
+I segnali modulari ora includono esplicitamente il minuto di entrata. Lo Strategy Engine salva `signal_time`, `reference_candle_time` e `entry_timing` in `signals.generated_signals`; il messaggio Telegram mostra che l'entrata è `IMMEDIATE_ON_SIGNAL_RECEIPT`, cioè operativa alla ricezione del segnale e non alla candela successiva.
+
+Campi Telegram rilevanti:
+
+```text
+Entry minute: <timestamp generazione segnale>
+Entry timing: entra immediatamente alla ricezione del segnale
+Candela riferimento: <timestamp ultima candela OHLC usata>
+```
+
+## Timeframe operativo 1h e profitto netto Binance
+
+La piattaforma modulare opera di default sul timeframe `1h` tramite `OPERATIONAL_TIMEFRAME=1h` e raccoglie candele `1h` tramite `COLLECTOR_TIMEFRAMES=1h`. Il Decision Engine valuta il regime sul timeframe operativo e lo Strategy Engine seleziona solo candidati research con lo stesso timeframe.
+
+Il calcolo del segnale include ora costi Binance stimati:
+
+```env
+TRADE_NOTIONAL_EUR=100
+BINANCE_BUY_FEE_RATE=0.001
+BINANCE_SELL_FEE_RATE=0.001
+BINANCE_SPREAD_RATE=0.0005
+SIGNAL_CLASSES=A,B
+COLLECTOR_TIMEFRAMES=1h
+OPERATIONAL_TIMEFRAME=1h
+STRATEGY_OHLC_LIMIT=720
+```
+
+Prima di inviare un segnale, lo Strategy Engine stima commissione di acquisto, commissione di vendita e spread. Il Take Profit resta tecnico e non viene spostato per ottenere un profitto monetario fisso. Il motore live scarta setup non tradabili, TP netto non positivo o setup con expected value storico netto negativo quando il campione è sufficiente; gli altri controlli di qualità producono una classe (`A`, `B`, `C`) invece di bloccare automaticamente il segnale.
+
+`STRATEGY_OHLC_LIMIT` controlla quante candele recenti usa lo Strategy Engine per ATR, win rate comparabile, MFE/MAE e historical EV. Con orizzonte probabilità `8`, un limite `120` produce al massimo `111` sample (`120 - 8 - 1`); il default `720` rende il campione più ampio quando PostgreSQL contiene abbastanza storico.
+
+Il messaggio Telegram mostra:
+
+```text
+Class
+Net profit TP1
+Net loss SL
+Net R/R
+Historical EV
+Costi stimati Binance
+```
+
+## Filosofia signal class
+
+Il bot non cerca più il singolo trade "perfetto". L'obiettivo è inviare segnali appartenenti a strategie con vantaggio statistico e classificare la qualità del setup:
+
+- `A`: setup allineato al regime, profit factor elevato, expectancy positiva, profitto netto sopra la soglia informativa, R/R netto sopra soglia informativa e nessun warning diagnostico.
+- `B`: setup con profit factor/expectancy positivi e TP netto positivo, anche se alcuni filtri diagnostici non sono perfetti.
+- `C`: setup positivo ma sperimentale, utile per forward test o ricezione più frequente.
+
+La variabile `SIGNAL_CLASSES` decide quali classi ricevere. Il default è `A,B`: la Classe C resta opzionale, perché può contenere setup sperimentali o quasi neutri. Chi vuole ricevere anche forward test più frequenti può usare:
+
+```env
+SIGNAL_CLASSES=A,B,C
+```
+
+`MIN_TP1_NET_PROFIT_EUR` e `MIN_NET_RR` restano soglie informative usate per assegnare la classe, non blocchi rigidi sul singolo trade. Il blocco hard resta se il TP tecnico produce profitto netto non positivo dopo costi o se, con campione storico sufficiente, la combinazione tra win rate osservato, profitto netto e perdita netta produce expected value negativo.
+
+## Perché dopo il passaggio a 1h potresti non ricevere subito segnali
+
+Dopo l'impostazione di `OPERATIONAL_TIMEFRAME=1h`, lo Strategy Engine usa solo risultati research sul timeframe operativo. Se il database contiene soprattutto risultati storici `5m` o `15m`, il sistema non invia segnali finché il Research Engine non produce candidati `1h` validi.
+
+Per evitare blocchi lunghi, il Research Engine ora dà priorità alle combinazioni `1h` pendenti durante i batch progressivi. Nei log, se non ci sono ancora candidati operativi, vedrai:
+
+```text
+STRATEGY no research candidate available timeframe=1h
+```
+
+Questo non è un errore Telegram: significa che la ricerca `1h` deve ancora produrre un candidato valido.
+
+## Cooldown duplicati e segnali mancanti
+
+Se non arrivano più segnali dopo il blocco duplicati, la causa può essere un vecchio segnale rimasto in stato `NEW` o `OPEN`. Per evitare che un segnale vecchio blocchi il sistema per sempre, il controllo duplicati ora considera solo segnali uguali creati negli ultimi `SIGNAL_COOLDOWN_MINUTES` minuti.
+
+Default:
+
+```env
+SIGNAL_COOLDOWN_MINUTES=45
+```
+
+Questo impedisce lo spam ogni minuto, ma permette al sistema di tornare a generare segnali se un vecchio record resta aperto troppo a lungo.
+
+## Profit Factor e classi segnale 1h
+
+Se i log mostrano:
+
+```text
+STRATEGY candidate below class_b_threshold strategy=... pf=... threshold=... action=continue_as_class_c_candidate
+```
+
+significa che il candidato `1h` esiste e ha un profit factor sotto la soglia di classe B, ma non viene più scartato automaticamente solo per questo: continua come candidato di classe C se la Classe C è abilitata e se non emerge expected value storico netto negativo.
+
+```env
+MIN_SIGNAL_PROFIT_FACTOR=1.10
+```
+
+Il default `1.10` ora separa principalmente Classe B da Classe C. Il blocco hard resta per candidati senza vantaggio statistico (`profit_factor <= 1.0` e `expectancy <= 0`) o per setup con campione storico sufficiente ma expected value netto negativo.
+
+Quando il miglior candidato viene scartato dai controlli live, lo Strategy Engine non resta più bloccato su quello stesso risultato a ogni minuto: valuta una lista dei migliori candidati `1h` e passa al successivo finché trova un setup valido oppure esaurisce la lista.
+
+I candidati vengono deduplicati per `strategy/pair/timeframe`: se la ricerca contiene molte combinazioni diverse della stessa strategia sullo stesso mercato, il live engine valuta solo la migliore di quel gruppo. Questo evita log ripetuti con valori identici quando più righe research producono lo stesso setup operativo.
