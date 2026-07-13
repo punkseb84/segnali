@@ -858,6 +858,8 @@ Il Research Engine progressivo non classifica più le combinazioni con un sempli
 
 Questo rende `profit_factor`, `expectancy`, `net_profit`, `average_win` e `average_loss` confrontabili con i valori che lo Strategy Engine usa prima dell'invio Telegram: un candidato research positivo deve quindi essere positivo dopo fee, spread e slippage, non solo positivo sul movimento grezzo del prezzo.
 
+Quando viene introdotta una nuova logica di backtest, le vecchie combinazioni `DONE` salvate con validazioni precedenti vengono rimesse in `PENDING` una sola volta e i candidati live leggono solo risultati `LIVE_ALIGNED_BACKTEST`. In questo modo Railway non continua a proporre sempre gli stessi valori storici stale dopo un deploy.
+
 ## Operational engines enabled
 
 Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi:

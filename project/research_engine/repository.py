@@ -111,6 +111,28 @@ class ResearchRepository:
         )
 
 
+    def reset_stale_results(self, required_validation_status: str = "LIVE_ALIGNED_BACKTEST") -> int:
+        rows = self.client.fetch_all(
+            """UPDATE research.strategy_combinations AS combination
+            SET status = 'PENDING', error_message = NULL, updated_at = NOW()
+            WHERE combination.status = 'DONE'
+              AND EXISTS (
+                  SELECT 1
+                  FROM research.strategy_results AS result
+                  WHERE result.combination_id = combination.id
+                    AND COALESCE(result.validation->>'status', '') <> %s
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM research.strategy_results AS result
+                  WHERE result.combination_id = combination.id
+                    AND COALESCE(result.validation->>'status', '') = %s
+              )
+            RETURNING combination.id""",
+            (required_validation_status, required_validation_status),
+        )
+        return len(rows)
+
     def fetch_progress_counts(self) -> dict[str, int]:
         rows = self.client.fetch_all(
             """SELECT status, COUNT(*)
@@ -132,7 +154,7 @@ class ResearchRepository:
                     strategy, pair, timeframe, profit_factor, expectancy, net_profit
                 FROM research.strategy_results
                 WHERE strategy <> 'BOOTSTRAP_TEST'
-                  AND COALESCE(validation->>'status', '') <> 'BOOTSTRAP'
+                  AND COALESCE(validation->>'status', '') = 'LIVE_ALIGNED_BACKTEST'
                   {timeframe_filter}
                 ORDER BY strategy, pair, timeframe, profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             )

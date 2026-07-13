@@ -12,6 +12,7 @@ class FakeResearchRepository:
         self.results = []
         self.finished = []
         self.combinations = [ResearchCombination(1, "Breakout", "BTC/USD", "5m", {"reward_risk": 1.2})]
+        self.reset_count = 0
 
     def seed_combinations(self, combinations):
         self.seeded.extend(combinations)
@@ -37,6 +38,10 @@ class FakeResearchRepository:
 
     def fetch_ohlc(self, pair, timeframe, limit=720):
         return [(index, 100 + index, 102 + index, 99 + index, 101 + index, 10) for index in range(240)]
+
+    def reset_stale_results(self, required_validation_status="LIVE_ALIGNED_BACKTEST"):
+        self.required_validation_status = required_validation_status
+        return self.reset_count
 
     def fetch_progress_counts(self):
         return {"DONE": len([item for item in self.done if item[1] == "DONE"]), "PENDING": 0, "FAILED_RETRYABLE": 0, "RUNNING": 0}
@@ -64,6 +69,7 @@ def test_progressive_research_processes_one_small_batch_and_publishes_completion
     result = engine.process_one_batch()
 
     assert result.status == "COMPLETED"
+    assert repo.required_validation_status == "LIVE_ALIGNED_BACKTEST"
     assert repo.batch_size == 100
     assert repo.marked_running == [1]
     assert repo.results == [(1, "LIVE_ALIGNED_BACKTEST", 10)]
@@ -159,7 +165,25 @@ def test_candidate_results_deduplicate_strategy_pair_timeframe():
     assert repository.fetch_candidate_results(timeframe="1h", limit=10) == []
     assert "DISTINCT ON (strategy, pair, timeframe)" in client.sql
     assert "WITH best_per_market" in client.sql
+    assert "LIVE_ALIGNED_BACKTEST" in client.sql
     assert client.params == ("1h", 10)
+
+
+def test_stale_result_reset_marks_non_live_aligned_done_combinations_pending():
+    from project.research_engine.repository import ResearchRepository
+
+    class ResetCaptureClient(SqlCaptureClient):
+        def fetch_all(self, sql, params=None):
+            self.sql = sql
+            self.params = params
+            return [(1,), (2,)]
+
+    client = ResetCaptureClient()
+    repository = ResearchRepository(client)
+
+    assert repository.reset_stale_results() == 2
+    assert "status = 'PENDING'" in client.sql
+    assert "LIVE_ALIGNED_BACKTEST" in client.params
 
 
 def test_pending_query_prioritizes_operational_timeframe():

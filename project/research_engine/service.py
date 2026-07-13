@@ -74,6 +74,7 @@ class ProgressiveResearchEngine:
         self.spread_rate = spread_rate
         self.slippage_rate = slippage_rate
         self.probability_horizon_candles = probability_horizon_candles
+        self._stale_results_reset = False
         self.logger = get_module_logger("research")
 
     def generate_combinations(self, pairs: list[str], timeframes: list[str]):
@@ -127,6 +128,7 @@ class ProgressiveResearchEngine:
     def process_one_batch(self, sleep_after: bool = True) -> ResearchBatchResult:
         started = time.monotonic()
         self.logger.info("RESEARCH BATCH START batch_size=%s runtime_limit_seconds=%s", self.batch_size, self.max_runtime_seconds)
+        self.reset_stale_results_once()
         total = self.repository.count_combinations()
         pending = self.repository.fetch_next_pending(self.batch_size, priority_timeframe=self.priority_timeframe)
         if not pending:
@@ -157,6 +159,14 @@ class ProgressiveResearchEngine:
         if sleep_after and self.sleep_between_batches_seconds > 0:
             time.sleep(self.sleep_between_batches_seconds)
         return ResearchBatchResult(batch_id, processed, "COMPLETED", f"Processed {processed} combinations")
+
+    def reset_stale_results_once(self) -> None:
+        if self._stale_results_reset:
+            return
+        reset_count = self.repository.reset_stale_results("LIVE_ALIGNED_BACKTEST")
+        if reset_count:
+            self.logger.info("RESEARCH stale baseline combinations reset count=%s required_validation_status=LIVE_ALIGNED_BACKTEST", reset_count)
+        self._stale_results_reset = True
 
     def log_progress_snapshot(self, total: int) -> None:
         counts = self.repository.fetch_progress_counts()
