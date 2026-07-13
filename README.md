@@ -862,6 +862,8 @@ Quando viene introdotta una nuova logica di backtest, le vecchie combinazioni `D
 
 I candidati con `profit_factor <= 1.0` e `expectancy <= 0` non vengono più proposti allo Strategy Engine: restano salvati per analisi research, ma non generano log live ripetitivi perché non hanno edge statistico minimo.
 
+I batch pending non seguono più il solo ordine crescente degli ID: vengono distribuiti per bucket tra strategia, pair e timeframe. In questo modo i primi batch non testano migliaia di varianti della stessa strategia/pair prima di passare alle altre, ma esplorano più rapidamente strategie diverse.
+
 ## Operational engines enabled
 
 Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi:

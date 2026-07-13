@@ -195,4 +195,6 @@ def test_pending_query_prioritizes_operational_timeframe():
 
     assert repository.fetch_next_pending(100, priority_timeframe="15m") == []
     assert "CASE WHEN timeframe = %s THEN 0 ELSE 1 END" in client.sql
+    assert "ROW_NUMBER() OVER (PARTITION BY strategy, pair, timeframe ORDER BY id)" in client.sql
+    assert "research_bucket" in client.sql
     assert client.params == ("15m", 100)

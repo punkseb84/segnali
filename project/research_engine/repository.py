@@ -49,13 +49,18 @@ class ResearchRepository:
         return {str(row[0]) for row in rows}
 
     def fetch_next_pending(self, limit: int, priority_timeframe: str | None = None) -> list[ResearchCombination]:
-        order_clause = "CASE WHEN timeframe = %s THEN 0 ELSE 1 END, id" if priority_timeframe else "id"
+        priority_expression = "CASE WHEN timeframe = %s THEN 0 ELSE 1 END" if priority_timeframe else "0"
         params: tuple[Any, ...] = (priority_timeframe, limit) if priority_timeframe else (limit,)
         rows = self.client.fetch_all(
-            f"""SELECT id, strategy, pair, timeframe, parameters
-            FROM research.strategy_combinations
-            WHERE status IN ('PENDING', 'FAILED_RETRYABLE')
-            ORDER BY {order_clause}
+            f"""WITH pending AS (
+                SELECT id, strategy, pair, timeframe, parameters,
+                       ROW_NUMBER() OVER (PARTITION BY strategy, pair, timeframe ORDER BY id) AS research_bucket
+                FROM research.strategy_combinations
+                WHERE status IN ('PENDING', 'FAILED_RETRYABLE')
+            )
+            SELECT id, strategy, pair, timeframe, parameters
+            FROM pending
+            ORDER BY {priority_expression}, research_bucket, strategy, pair, timeframe, id
             LIMIT %s""",
             params,
         )
