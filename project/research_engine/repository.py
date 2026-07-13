@@ -155,6 +155,7 @@ class ResearchRepository:
                 FROM research.strategy_results
                 WHERE strategy <> 'BOOTSTRAP_TEST'
                   AND COALESCE(validation->>'status', '') = 'LIVE_ALIGNED_BACKTEST'
+                  AND (profit_factor > 1.0 OR expectancy > 0)
                   {timeframe_filter}
                 ORDER BY strategy, pair, timeframe, profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             )

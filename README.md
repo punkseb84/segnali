@@ -848,7 +848,7 @@ RESEARCH PROGRESS total=967680 done=1000 pending=966680 retryable=0 running=0 pr
 RESEARCH BEST strategy=... pair=... timeframe=... profit_factor=... expectancy=... net_profit=...
 ```
 
-In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 300 secondi, così un batch da 100 combinazioni gira ogni 5 minuti invece che ogni ora. Questo mantiene carico leggero su Railway ma rende la ricerca progressiva molto più utile.
+In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 60 secondi e `RESEARCH_BATCH_SIZE` è 500, così il motore processa più combinazioni operative senza attendere giorni prima di trovare candidati utili. Questo aumenta il ritmo della ricerca progressiva mantenendo comunque batch incrementali e resumable su PostgreSQL.
 
 Nota: i record diagnostici `BOOTSTRAP_TEST` sono esclusi dal log `RESEARCH BEST`, così il miglior risultato provvisorio mostra solo risultati research reali e non righe create per verificare PostgreSQL.
 
@@ -859,6 +859,8 @@ Il Research Engine progressivo non classifica più le combinazioni con un sempli
 Questo rende `profit_factor`, `expectancy`, `net_profit`, `average_win` e `average_loss` confrontabili con i valori che lo Strategy Engine usa prima dell'invio Telegram: un candidato research positivo deve quindi essere positivo dopo fee, spread e slippage, non solo positivo sul movimento grezzo del prezzo.
 
 Quando viene introdotta una nuova logica di backtest, le vecchie combinazioni `DONE` salvate con validazioni precedenti vengono rimesse in `PENDING` una sola volta e i candidati live leggono solo risultati `LIVE_ALIGNED_BACKTEST`. In questo modo Railway non continua a proporre sempre gli stessi valori storici stale dopo un deploy.
+
+I candidati con `profit_factor <= 1.0` e `expectancy <= 0` non vengono più proposti allo Strategy Engine: restano salvati per analisi research, ma non generano log live ripetitivi perché non hanno edge statistico minimo.
 
 ## Operational engines enabled
 

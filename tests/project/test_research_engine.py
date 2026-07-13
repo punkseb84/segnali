@@ -166,6 +166,7 @@ def test_candidate_results_deduplicate_strategy_pair_timeframe():
     assert "DISTINCT ON (strategy, pair, timeframe)" in client.sql
     assert "WITH best_per_market" in client.sql
     assert "LIVE_ALIGNED_BACKTEST" in client.sql
+    assert "profit_factor > 1.0 OR expectancy > 0" in client.sql
     assert client.params == ("1h", 10)
 
 
