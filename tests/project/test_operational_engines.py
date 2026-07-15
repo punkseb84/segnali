@@ -94,6 +94,37 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert events[-1].payload["signal_class"] in {"A", "B", "C"}
 
 
+def test_strategy_engine_logs_candidate_diagnostics_when_no_research_candidate():
+    class NoCandidateResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return []
+
+        def fetch_best_result(self, timeframe=None):
+            return None
+
+        def fetch_candidate_diagnostics(self, timeframe=None):
+            return {
+                "timeframe": timeframe,
+                "total_combinations": 100,
+                "done_combinations": 100,
+                "pending_combinations": 0,
+                "retryable_combinations": 0,
+                "running_combinations": 0,
+                "total_results": 100,
+                "filtered_live_aligned_results": 100,
+                "edge_results": 0,
+                "best_live_profit_factor": 0.98,
+                "best_live_expectancy": -0.01,
+            }
+
+    postgres = FakePostgres()
+    strategy = StrategyEngine(NoCandidateResearch(postgres), DecisionEngine(postgres))
+
+    signal = strategy.evaluate()
+
+    assert signal is None
+    assert strategy._candidate_rejection_reasons == {}
+
 def test_strategy_engine_uses_configured_ohlc_limit():
     class CapturingResearch(FakeResearchRepository):
         def __init__(self, postgres):

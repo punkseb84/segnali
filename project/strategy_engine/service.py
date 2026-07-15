@@ -131,7 +131,12 @@ class StrategyEngine:
         decision = self.decision_engine.latest_decision or self.decision_engine.evaluate_market()
         candidates = self.fetch_strategy_candidates(limit=self.max_candidate_evaluations)
         if not candidates:
-            self.logger.info("STRATEGY no research candidate available timeframe=%s", self.operational_timeframe)
+            diagnostics = self.research_repository.fetch_candidate_diagnostics(timeframe=self.operational_timeframe)
+            self.logger.info(
+                "STRATEGY no research candidate available timeframe=%s diagnostics=%s",
+                self.operational_timeframe,
+                json.dumps(diagnostics, sort_keys=True),
+            )
             return None
         for best in candidates:
             signal = self.evaluate_candidate(decision, best)
