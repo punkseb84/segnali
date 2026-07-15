@@ -91,6 +91,7 @@ class StrategyEngine:
         allowed_signal_classes: list[str] | None = None,
         enable_daily_signal_report: bool = True,
         daily_signal_report_hours: int = 24,
+        max_candidate_evaluations: int = 50,
     ) -> None:
         self.research_repository = research_repository
         self.decision_engine = decision_engine
@@ -119,12 +120,13 @@ class StrategyEngine:
         self.allowed_signal_classes = allowed_signal_classes or ["A", "B"]
         self.enable_daily_signal_report = enable_daily_signal_report
         self.daily_signal_report_hours = daily_signal_report_hours
+        self.max_candidate_evaluations = max(1, max_candidate_evaluations)
         self._last_no_trade_report_at: datetime | None = None
         self.logger = get_module_logger("strategy")
 
     def evaluate(self) -> GeneratedSignal | None:
         decision = self.decision_engine.latest_decision or self.decision_engine.evaluate_market()
-        candidates = self.fetch_strategy_candidates(limit=10)
+        candidates = self.fetch_strategy_candidates(limit=self.max_candidate_evaluations)
         if not candidates:
             self.logger.info("STRATEGY no research candidate available timeframe=%s", self.operational_timeframe)
             return None
@@ -132,7 +134,12 @@ class StrategyEngine:
             signal = self.evaluate_candidate(decision, best)
             if signal is not None:
                 return signal
-        self.logger.info("STRATEGY no candidate passed validation timeframe=%s candidates=%s", self.operational_timeframe, len(candidates))
+        self.logger.info(
+            "STRATEGY no candidate passed validation timeframe=%s candidates_evaluated=%s candidate_limit=%s",
+            self.operational_timeframe,
+            len(candidates),
+            self.max_candidate_evaluations,
+        )
         return None
 
     def fetch_strategy_candidates(self, limit: int = 10) -> list[dict[str, Any]]:

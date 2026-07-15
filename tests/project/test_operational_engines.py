@@ -19,6 +19,15 @@ def test_platform_defaults_to_one_hour_timeframe(monkeypatch):
     assert settings.operational_timeframe == "1h"
     assert settings.signal_classes == ["A", "B"]
     assert settings.strategy_ohlc_limit == 720
+    assert settings.strategy_candidate_limit == 50
+
+
+def test_platform_strategy_candidate_limit_is_configurable(monkeypatch):
+    monkeypatch.setenv("STRATEGY_CANDIDATE_LIMIT", "75")
+
+    settings = PlatformSettings()
+
+    assert settings.strategy_candidate_limit == 75
 
 
 def test_platform_signal_classes_are_configurable(monkeypatch):
@@ -102,6 +111,25 @@ def test_strategy_engine_uses_configured_ohlc_limit():
     strategy.evaluate()
 
     assert research.last_limit == 360
+
+
+def test_strategy_engine_uses_configured_candidate_limit():
+    class CapturingCandidateResearch(FakeResearchRepository):
+        def __init__(self, postgres):
+            super().__init__(postgres)
+            self.last_limit = None
+
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            self.last_limit = limit
+            return [self.fetch_best_result(timeframe)]
+
+    postgres = FakePostgres()
+    research = CapturingCandidateResearch(postgres)
+    strategy = StrategyEngine(research, DecisionEngine(postgres), max_candidate_evaluations=75)
+
+    strategy.evaluate()
+
+    assert research.last_limit == 75
 
 
 def test_notification_engine_skips_when_disabled():
