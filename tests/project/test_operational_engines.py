@@ -211,6 +211,7 @@ def test_strategy_engine_skips_active_duplicate_signal():
 
     assert signal is None
     assert postgres.inserted == []
+    assert strategy._candidate_rejection_reasons["duplicate_active_signal"] == 1
 
 
 def test_position_monitor_closes_target_hit_and_publishes_event():
@@ -440,6 +441,7 @@ def test_strategy_engine_rejects_high_confidence_negative_historical_ev():
     assert signal is None
     assert postgres.inserted == []
     assert events == []
+    assert strategy._candidate_rejection_reasons["negative_historical_expected_value"] == 1
 
 
 def test_strategy_engine_tries_next_candidate_after_negative_ev_rejection():
