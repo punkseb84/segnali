@@ -11,6 +11,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import pandas as pd
+
+from indicators import add_indicators
 from project.research_engine.repository import ResearchCombination, ResearchRepository
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
@@ -34,6 +37,7 @@ ATR_VALUES = [0.5, 0.8, 1.0, 1.2]
 RELATIVE_VOLUME_VALUES = [0.8, 1.0, 1.2, 1.5]
 REWARD_RISK_VALUES = [1.0, 1.2, 1.5, 2.0]
 REGIMES = ["TREND_UP", "TREND_DOWN", "RANGE", "HIGH_VOLATILITY", "LOW_VOLATILITY", "COMPRESSION", "BREAKOUT"]
+VALIDATION_STATUS = "FILTERED_LIVE_ALIGNED_BACKTEST"
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,7 @@ class ProgressiveResearchEngine:
         pending = self.repository.fetch_next_pending(self.batch_size, priority_timeframe=self.priority_timeframe)
         if not pending:
             self.logger.info("RESEARCH BATCH IDLE total_combinations=%s", total)
+            self.log_progress_snapshot(total)
             return ResearchBatchResult(None, 0, "IDLE", "No pending research combinations")
         batch_id = self.repository.create_batch(self.batch_size, total)
         self.repository.mark_running([item.id for item in pending])
@@ -163,9 +168,9 @@ class ProgressiveResearchEngine:
     def reset_stale_results_once(self) -> None:
         if self._stale_results_reset:
             return
-        reset_count = self.repository.reset_stale_results("LIVE_ALIGNED_BACKTEST")
+        reset_count = self.repository.reset_stale_results(VALIDATION_STATUS)
         if reset_count:
-            self.logger.info("RESEARCH stale baseline combinations reset count=%s required_validation_status=LIVE_ALIGNED_BACKTEST", reset_count)
+            self.logger.info("RESEARCH stale baseline combinations reset count=%s required_validation_status=%s", reset_count, VALIDATION_STATUS)
         self._stale_results_reset = True
 
     def log_progress_snapshot(self, total: int) -> None:
@@ -207,23 +212,29 @@ class ProgressiveResearchEngine:
             return self.empty_metrics("INSUFFICIENT_OHLC_DATA", len(candles))
 
         chronological = list(reversed(candles))
+        frame = self.build_feature_frame(chronological)
         reward_risk = float(combination.parameters.get("reward_risk", 1.5) or 1.5)
         atr_multiplier = float(combination.parameters.get("atr_multiplier", 1.0) or 1.0)
         horizon = max(1, self.probability_horizon_candles)
-        lookback = 20
+        signal_mask = self.build_signal_mask(frame, combination)
+        signal_indexes = [int(index) for index in frame.index[signal_mask.fillna(False)].tolist() if int(index) < len(frame) - horizon]
         trade_results: list[float] = []
         favorable_excursions: list[float] = []
         adverse_excursions: list[float] = []
 
-        for index in range(lookback, len(chronological) - horizon):
-            entry = float(chronological[index][4])
-            prior_ranges = [float(row[2]) - float(row[3]) for row in chronological[index - lookback:index]]
-            average_range = sum(prior_ranges) / len(prior_ranges) if prior_ranges else 0.0
-            stop_distance = max(average_range * atr_multiplier, entry * 0.0001)
+        for index in signal_indexes:
+            row = frame.iloc[index]
+            entry = float(row["close"])
+            atr_value = float(row.get("atr14") or 0.0)
+            if entry <= 0 or atr_value <= 0 or pd.isna(atr_value):
+                continue
+            stop_distance = max(atr_value * atr_multiplier, entry * 0.0001)
             target_distance = stop_distance * reward_risk
             stop = entry - stop_distance
             target = entry + target_distance
             future = chronological[index + 1:index + horizon + 1]
+            if not future:
+                continue
             exit_price = float(future[-1][4])
 
             for candle in future:
@@ -275,7 +286,7 @@ class ProgressiveResearchEngine:
             "mae": min(adverse_excursions) if adverse_excursions else 0.0,
             "calmar_ratio": recovery_factor,
             "validation": {
-                "status": "LIVE_ALIGNED_BACKTEST",
+                "status": VALIDATION_STATUS,
                 "candles": len(candles),
                 "trades": len(trade_results),
                 "horizon_candles": horizon,
@@ -286,8 +297,76 @@ class ProgressiveResearchEngine:
                 "sell_fee_rate": self.sell_fee_rate,
                 "spread_rate": self.spread_rate,
                 "slippage_rate": self.slippage_rate,
+                "signals": len(signal_indexes),
+                "strategy_filter": combination.strategy,
+                "filters_applied": True,
             },
         }
+
+    @staticmethod
+    def build_feature_frame(chronological: list[tuple[Any, ...]]) -> pd.DataFrame:
+        frame = pd.DataFrame(chronological, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        numeric_columns = ["open", "high", "low", "close", "volume"]
+        frame[numeric_columns] = frame[numeric_columns].astype(float)
+        return add_indicators(frame).reset_index(drop=True)
+
+    def build_signal_mask(self, frame: pd.DataFrame, combination: ResearchCombination) -> pd.Series:
+        if frame.empty:
+            return pd.Series(False, index=frame.index)
+        rsi_low, rsi_high = self.parse_rsi_range(str(combination.parameters.get("rsi_range", "0-100")))
+        adx_min = float(combination.parameters.get("adx_min", 0.0) or 0.0)
+        relative_volume_min = float(combination.parameters.get("relative_volume_min", 0.0) or 0.0)
+        requested_regime = str(combination.parameters.get("market_regime", "ANY"))
+        base = (
+            frame["rsi14"].between(rsi_low, rsi_high)
+            & (frame["adx14"] >= adx_min)
+            & (frame["relative_volume"].fillna(0.0) >= relative_volume_min)
+            & self.regime_mask(frame, requested_regime)
+        )
+        prior_high = frame["high"].rolling(20).max().shift(1)
+        prior_low = frame["low"].rolling(20).min().shift(1)
+        body = (frame["close"] - frame["open"]).abs()
+        candle_range = (frame["high"] - frame["low"]).replace(0, pd.NA)
+        atr_pct = (frame["atr14"] / frame["close"]).replace([float("inf"), float("-inf")], pd.NA)
+        compression = atr_pct < atr_pct.rolling(100, min_periods=20).median() * 0.8
+        rules = {
+            "Breakout": frame["close"] > prior_high,
+            "Breakout Retest": (frame["close"] > prior_high) & (frame["ema20"] >= frame["ema50"]),
+            "Liquidity Sweep": (frame["low"] < prior_low) & (frame["close"] > prior_low),
+            "Pullback Trend": (frame["low"] <= frame["ema20"]) & (frame["close"] > frame["ema20"]) & (frame["ema20"] > frame["ema50"]),
+            "Range Reversal": (frame["close"] > frame["support"]) & (frame["adx14"] < 25),
+            "Compression Breakout": compression & (frame["close"] > prior_high),
+            "Momentum": (frame["macd_hist"] > 0) & (frame["close"] > frame["ema20"]),
+            "Mean Reversion": (frame["rsi14"] <= rsi_high) & (frame["close"] <= frame["support"] * 1.01),
+            "Trend Following": (frame["close"] > frame["ema200"]) & (frame["ema20"] > frame["ema50"]),
+            "Volatility Expansion": (body / candle_range).fillna(0.0) > 0.6,
+        }
+        return (base & rules.get(combination.strategy, pd.Series(True, index=frame.index))).fillna(False)
+
+    @staticmethod
+    def parse_rsi_range(raw: str) -> tuple[float, float]:
+        try:
+            low, high = raw.split("-", maxsplit=1)
+            return float(low), float(high)
+        except ValueError:
+            return 0.0, 100.0
+
+    @staticmethod
+    def regime_mask(frame: pd.DataFrame, regime: str) -> pd.Series:
+        atr_pct = (frame["atr14"] / frame["close"]).replace([float("inf"), float("-inf")], pd.NA)
+        atr_median = atr_pct.rolling(100, min_periods=20).median()
+        trend_up = (frame["ema20"] > frame["ema50"]) & (frame["close"] > frame["ema200"]) & (frame["adx14"] >= 20)
+        trend_down = (frame["ema20"] < frame["ema50"]) & (frame["close"] < frame["ema200"]) & (frame["adx14"] >= 20)
+        masks = {
+            "TREND_UP": trend_up,
+            "TREND_DOWN": trend_down,
+            "RANGE": frame["adx14"] < 20,
+            "HIGH_VOLATILITY": atr_pct > atr_median * 1.25,
+            "LOW_VOLATILITY": atr_pct < atr_median,
+            "COMPRESSION": atr_pct < atr_median * 0.8,
+            "BREAKOUT": frame["close"] > frame["high"].rolling(20).max().shift(1),
+        }
+        return masks.get(regime, pd.Series(True, index=frame.index)).fillna(False)
 
     def _net_long_result(self, entry: float, exit_price: float) -> float:
         half_spread = self.spread_rate / 2
