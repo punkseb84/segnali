@@ -113,6 +113,7 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         probability_horizon_candles=settings.probability_horizon_candles,
         ohlc_limit=settings.strategy_ohlc_limit,
         allowed_signal_classes=settings.signal_classes,
+        max_candidate_evaluations=settings.strategy_candidate_limit,
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
     )
