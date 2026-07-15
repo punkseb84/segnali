@@ -195,6 +195,33 @@ def test_candidate_results_deduplicate_strategy_pair_timeframe():
     assert client.params == ("1h", 10)
 
 
+
+
+def test_candidate_results_include_parameters_and_validation_payloads():
+    from project.research_engine.repository import ResearchRepository
+
+    class CandidatePayloadClient(SqlCaptureClient):
+        def fetch_all(self, sql, params=None):
+            self.sql = sql
+            self.params = params
+            return [(
+                "Breakout",
+                "BTC/USD",
+                "1h",
+                1.25,
+                0.1,
+                4.0,
+                {"reward_risk": 2.0, "atr_multiplier": 0.8},
+                {"status": "FILTERED_LIVE_ALIGNED_BACKTEST", "signals": 12},
+            )]
+
+    repository = ResearchRepository(CandidatePayloadClient())
+
+    candidates = repository.fetch_candidate_results(timeframe="1h", limit=1)
+
+    assert candidates[0]["parameters"] == {"reward_risk": 2.0, "atr_multiplier": 0.8}
+    assert candidates[0]["validation"]["signals"] == 12
+
 def test_candidate_diagnostics_counts_timeframe_edge_results():
     from project.research_engine.repository import ResearchRepository
 

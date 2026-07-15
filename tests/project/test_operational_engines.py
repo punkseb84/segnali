@@ -94,6 +94,41 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert events[-1].payload["signal_class"] in {"A", "B", "C"}
 
 
+
+
+def test_strategy_engine_uses_research_parameters_for_live_setup():
+    class ParameterizedResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return [{
+                "strategy": "Breakout",
+                "pair": "BTC/USD",
+                "timeframe": timeframe or "1h",
+                "profit_factor": 1.3,
+                "expectancy": 0.2,
+                "net_profit": 10.0,
+                "parameters": {"reward_risk": 2.0, "atr_multiplier": 0.5},
+                "validation": {"reward_risk": 2.0, "atr_multiplier": 0.5},
+            }]
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    events = []
+    bus.subscribe(EventType.NEW_SIGNAL, events.append)
+    strategy = StrategyEngine(
+        ParameterizedResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        allowed_signal_classes=["A", "B", "C"],
+        min_probability_sample_size=999,
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert any(reason == "reward_risk=2.0000" for reason in signal.reasons)
+    assert any(reason == "atr_multiplier=0.5000" for reason in signal.reasons)
+    assert signal.gross_rr == pytest.approx(2.0)
+
 def test_strategy_engine_logs_candidate_diagnostics_when_no_research_candidate():
     class NoCandidateResearch(FakeResearchRepository):
         def fetch_candidate_results(self, timeframe=None, limit=10):

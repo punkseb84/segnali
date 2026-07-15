@@ -156,7 +156,7 @@ class ResearchRepository:
         rows = self.client.fetch_all(
             f"""WITH best_per_market AS (
                 SELECT DISTINCT ON (strategy, pair, timeframe)
-                    strategy, pair, timeframe, profit_factor, expectancy, net_profit
+                    strategy, pair, timeframe, profit_factor, expectancy, net_profit, parameters, validation
                 FROM research.strategy_results
                 WHERE strategy <> 'BOOTSTRAP_TEST'
                   AND COALESCE(validation->>'status', '') = 'FILTERED_LIVE_ALIGNED_BACKTEST'
@@ -164,7 +164,7 @@ class ResearchRepository:
                   {timeframe_filter}
                 ORDER BY strategy, pair, timeframe, profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             )
-            SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
+            SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit, parameters, validation
             FROM best_per_market
             ORDER BY profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             LIMIT %s""",
@@ -178,6 +178,8 @@ class ResearchRepository:
                 "profit_factor": float(row[3] or 0),
                 "expectancy": float(row[4] or 0),
                 "net_profit": float(row[5] or 0),
+                "parameters": dict(row[6] or {}) if isinstance(row[6], dict) else json.loads(row[6] or "{}"),
+                "validation": dict(row[7] or {}) if isinstance(row[7], dict) else json.loads(row[7] or "{}"),
             }
             for row in rows
         ]

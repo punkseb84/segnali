@@ -203,10 +203,14 @@ class StrategyEngine:
         entry = float(latest[4])
         reference_candle_time = latest[0]
         signal_time = datetime.now(timezone.utc)
-        ranges = [float(row[2]) - float(row[3]) for row in prices if float(row[2]) >= float(row[3])]
-        avg_range = sum(ranges) / len(ranges) if ranges else entry * 0.005
-        stop_loss = max(entry - avg_range, entry * 0.98)
-        technical_take_profit = entry + avg_range * 1.5
+        research_parameters = dict(best.get("parameters") or {})
+        reward_risk = float(research_parameters.get("reward_risk", best.get("validation", {}).get("reward_risk", 1.5)) or 1.5)
+        atr_multiplier = float(research_parameters.get("atr_multiplier", best.get("validation", {}).get("atr_multiplier", 1.0)) or 1.0)
+        atr_value = self.calculate_atr(prices)
+        stop_distance = max(atr_value * atr_multiplier, entry * 0.0001)
+        stop_loss = max(entry - stop_distance, entry * 0.98)
+        effective_stop_distance = entry - stop_loss
+        technical_take_profit = entry + effective_stop_distance * reward_risk
         take_profit = technical_take_profit
         economics = self.calculate_net_economics(entry, stop_loss, take_profit)
         volatility = self.calculate_volatility_context(prices, entry, stop_loss, take_profit)
@@ -310,6 +314,8 @@ class StrategyEngine:
             reasons=[
                 f"profit_factor={best['profit_factor']:.4f}",
                 f"expectancy={best['expectancy']:.6f}",
+                f"reward_risk={reward_risk:.4f}",
+                f"atr_multiplier={atr_multiplier:.4f}",
                 f"regime={decision.regime}",
                 f"signal_class={signal_class}",
                 f"historical_ev={historical_expected_value:.6f}" if historical_expected_value is not None else "historical_ev=unavailable",
