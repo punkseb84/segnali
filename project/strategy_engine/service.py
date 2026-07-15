@@ -77,6 +77,8 @@ class StrategyEngine:
         min_tp1_net_profit_eur: float = 2.0,
         signal_cooldown_minutes: int = 45,
         min_net_rr: float = 1.20,
+        min_historical_ev_eur: float = 0.0,
+        historical_ev_tolerance_eur: float = 0.05,
         slippage_rate: float = 0.0,
         quantity_step: float = 0.000001,
         min_qty: float = 0.0,
@@ -90,6 +92,9 @@ class StrategyEngine:
         probability_horizon_candles: int = 8,
         ohlc_limit: int = 720,
         allowed_signal_classes: list[str] | None = None,
+        operative_signal_classes: list[str] | None = None,
+        watchlist_signal_classes: list[str] | None = None,
+        enable_watchlist_alerts: bool = True,
         enable_daily_signal_report: bool = True,
         daily_signal_report_hours: int = 24,
         max_candidate_evaluations: int = 50,
@@ -106,6 +111,8 @@ class StrategyEngine:
         self.min_tp1_net_profit_eur = min_tp1_net_profit_eur
         self.signal_cooldown_minutes = signal_cooldown_minutes
         self.min_net_rr = min_net_rr
+        self.min_historical_ev_eur = min_historical_ev_eur
+        self.historical_ev_tolerance_eur = max(0.0, historical_ev_tolerance_eur)
         self.slippage_rate = slippage_rate
         self.quantity_step = quantity_step
         self.min_qty = min_qty
@@ -118,7 +125,11 @@ class StrategyEngine:
         self.min_probability_sample_size = min_probability_sample_size
         self.probability_horizon_candles = probability_horizon_candles
         self.ohlc_limit = ohlc_limit
-        self.allowed_signal_classes = allowed_signal_classes or ["A", "B"]
+        legacy_allowed = allowed_signal_classes or ["A", "B"]
+        self.operative_signal_classes = operative_signal_classes or legacy_allowed
+        self.watchlist_signal_classes = watchlist_signal_classes or []
+        self.allowed_signal_classes = sorted(set(self.operative_signal_classes + self.watchlist_signal_classes))
+        self.enable_watchlist_alerts = enable_watchlist_alerts
         self.enable_daily_signal_report = enable_daily_signal_report
         self.daily_signal_report_hours = daily_signal_report_hours
         self.max_candidate_evaluations = max(1, max_candidate_evaluations)
@@ -260,14 +271,17 @@ class StrategyEngine:
             )
             return None
         historical_expected_value = self.calculate_historical_expected_value(economics, probability_context)
-        if historical_expected_value is not None and historical_expected_value <= 0:
+        ev_decision = self.evaluate_historical_ev_gate(historical_expected_value, probability_context)
+        if ev_decision["block"]:
             self.record_candidate_rejection("negative_historical_expected_value")
             self.logger.info(
-                "STRATEGY candidate rejected strategy=%s pair=%s timeframe=%s reason=negative_historical_expected_value ev=%.6f win_rate=%.4f net_profit=%.6f net_loss=%.6f sample=%s confidence=%s",
+                "STRATEGY candidate rejected strategy=%s pair=%s timeframe=%s reason=negative_historical_expected_value ev=%.6f threshold=%.6f tolerance=%.6f win_rate=%.4f net_profit=%.6f net_loss=%.6f sample=%s confidence=%s",
                 best["strategy"],
                 best["pair"],
                 best["timeframe"],
-                historical_expected_value,
+                historical_expected_value or 0.0,
+                self.min_historical_ev_eur,
+                self.historical_ev_tolerance_eur,
                 probability_context["win_rate"],
                 economics["net_profit_tp1_eur"],
                 economics["net_loss_sl_eur"],
@@ -275,7 +289,7 @@ class StrategyEngine:
                 probability_context["confidence"],
             )
             return None
-        signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned)
+        signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned, ev_decision)
         if signal_class not in self.allowed_signal_classes:
             self.record_candidate_rejection("signal_class_not_enabled")
             self.logger.info(
@@ -319,6 +333,7 @@ class StrategyEngine:
                 f"regime={decision.regime}",
                 f"signal_class={signal_class}",
                 f"historical_ev={historical_expected_value:.6f}" if historical_expected_value is not None else "historical_ev=unavailable",
+                f"historical_ev_decision={ev_decision['reason']}",
                 "regime_aligned=true" if regime_aligned else "regime_aligned=false",
             ],
         )
@@ -346,7 +361,11 @@ class StrategyEngine:
         self.log_economic_debug(signal_id, signal)
         payload = {**signal.__dict__, "signal_id": signal_id}
         self.logger.info("NEW SIGNAL id=%s class=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.signal_class, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
-        self.event_bus.publish(Event(EventType.NEW_SIGNAL, payload))
+        event_type = EventType.WATCHLIST if signal.signal_class in self.watchlist_signal_classes else EventType.NEW_SIGNAL
+        if event_type == EventType.WATCHLIST and not self.enable_watchlist_alerts:
+            self.logger.info("WATCHLIST saved notification disabled strategy=%s pair=%s timeframe=%s class=%s", signal.strategy, signal.pair, signal.timeframe, signal.signal_class)
+        else:
+            self.event_bus.publish(Event(event_type, payload))
         return signal
 
     def calculate_volatility_context(self, prices: list[tuple[Any, ...]], entry: float, stop_loss: float, take_profit: float) -> dict[str, float]:
@@ -415,6 +434,19 @@ class StrategyEngine:
         net_profit = float(economics["net_profit_tp1_eur"])
         net_loss = float(economics["net_loss_sl_eur"])
         return (float(probability) * net_profit) - ((1.0 - float(probability)) * net_loss)
+
+    def evaluate_historical_ev_gate(self, historical_expected_value: float | None, probability_context: dict[str, Any]) -> dict[str, Any]:
+        confidence = str(probability_context.get("confidence", "LOW"))
+        if historical_expected_value is None:
+            return {"block": False, "reason": "ev_unavailable"}
+        threshold = self.min_historical_ev_eur
+        if confidence == "LOW":
+            return {"block": False, "reason": "low_confidence_no_block"}
+        if confidence == "MEDIUM":
+            block = historical_expected_value < (threshold - self.historical_ev_tolerance_eur)
+            return {"block": block, "reason": "medium_confidence_below_tolerance" if block else "medium_confidence_allowed"}
+        block = historical_expected_value < threshold
+        return {"block": block, "reason": "high_confidence_negative" if block else "high_confidence_allowed"}
 
     def build_historical_outcomes(self, prices: list[tuple[Any, ...]], stop_distance: float, tp_distance: float) -> list[dict[str, float | str]]:
         chronological = list(reversed(prices))
@@ -497,6 +529,7 @@ class StrategyEngine:
         validation: dict[str, str],
         probability_context: dict[str, Any],
         regime_aligned: bool,
+        ev_decision: dict[str, Any] | None = None,
     ) -> str:
         """Classify rather than over-filter a positive-expectancy setup.
 
@@ -509,6 +542,7 @@ class StrategyEngine:
         net_profit = float(economics.get("net_profit_tp1_eur") or 0.0)
         sample_size = int(probability_context.get("sample_size") or 0)
         has_warnings = validation["status"] != "PASSED"
+        ev_reason = (ev_decision or {}).get("reason", "")
 
         if (
             profit_factor >= 1.40
@@ -520,7 +554,7 @@ class StrategyEngine:
             and sample_size >= self.min_probability_sample_size
         ):
             return "A"
-        if profit_factor >= self.min_profit_factor and expectancy > 0 and net_profit > 0 and regime_aligned:
+        if profit_factor >= self.min_profit_factor and expectancy > 0 and net_profit > 0 and regime_aligned and ev_reason != "low_confidence_no_block":
             return "B"
         return "C"
 

@@ -15,11 +15,20 @@ def test_platform_defaults_to_one_hour_timeframe(monkeypatch):
 
     settings = PlatformSettings()
 
-    assert settings.collector_timeframes == ["1h"]
-    assert settings.operational_timeframe == "1h"
+    assert settings.collector_timeframes == ["5m", "15m", "1h", "4h"]
+    assert settings.operational_timeframe == "15m"
+    assert len(settings.collector_pairs) == 20
+    assert "UNI/USD" in settings.collector_pairs
     assert settings.signal_classes == ["A", "B"]
+    assert settings.operative_signal_classes == ["A", "B"]
+    assert settings.watchlist_signal_classes == ["C"]
+    assert settings.enable_watchlist_alerts is True
+    assert settings.min_signal_profit_factor == 1.05
+    assert settings.min_tp1_net_profit_eur == 0.30
+    assert settings.min_net_rr == 1.05
+    assert settings.historical_ev_tolerance_eur == 0.05
     assert settings.strategy_ohlc_limit == 720
-    assert settings.strategy_candidate_limit == 50
+    assert settings.strategy_candidate_limit == 100
 
 
 def test_platform_strategy_candidate_limit_is_configurable(monkeypatch):
@@ -197,6 +206,65 @@ def test_strategy_engine_uses_configured_candidate_limit():
 
     assert research.last_limit == 75
 
+
+
+
+def test_historical_ev_gate_respects_confidence_and_tolerance():
+    strategy = StrategyEngine(FakeResearchRepository(FakePostgres()), DecisionEngine(FakePostgres()), historical_ev_tolerance_eur=0.05)
+
+    assert strategy.evaluate_historical_ev_gate(-10.0, {"confidence": "LOW"})["block"] is False
+    assert strategy.evaluate_historical_ev_gate(-0.01, {"confidence": "MEDIUM"})["block"] is False
+    assert strategy.evaluate_historical_ev_gate(-0.10, {"confidence": "MEDIUM"})["block"] is True
+    assert strategy.evaluate_historical_ev_gate(-0.01, {"confidence": "HIGH"})["block"] is True
+
+
+def test_strategy_engine_publishes_watchlist_for_class_c():
+    class LowQualityResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return [{
+                "strategy": "Breakout",
+                "pair": "BTC/USD",
+                "timeframe": timeframe or "15m",
+                "profit_factor": 1.01,
+                "expectancy": 0.01,
+                "net_profit": 1.0,
+                "parameters": {"reward_risk": 1.2, "atr_multiplier": 1.0},
+                "validation": {"reward_risk": 1.2, "atr_multiplier": 1.0},
+            }]
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    watchlist_events = []
+    new_signal_events = []
+    bus.subscribe(EventType.WATCHLIST, watchlist_events.append)
+    bus.subscribe(EventType.NEW_SIGNAL, new_signal_events.append)
+    strategy = StrategyEngine(
+        LowQualityResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        operational_timeframe="15m",
+        operative_signal_classes=["A", "B"],
+        watchlist_signal_classes=["C"],
+        min_probability_sample_size=999,
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.signal_class == "C"
+    assert watchlist_events
+    assert not new_signal_events
+
+
+def test_notification_engine_formats_watchlist_and_splits_long_messages():
+    notification = NotificationEngine(EventBus(), enabled=False, max_message_length=500)
+    payload = signal_payload() | {"signal_class": "C"}
+
+    message = notification.format_watchlist(payload)
+
+    assert "WATCHLIST" in message
+    assert "NON È UN SEGNALE" in message
+    assert len(notification.split_message("x" * 1200)) == 3
 
 def test_notification_engine_skips_when_disabled():
     bus = EventBus()
