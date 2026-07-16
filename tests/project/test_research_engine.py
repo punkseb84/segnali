@@ -37,9 +37,10 @@ class FakeResearchRepository:
         self.marked_running.extend(combination_ids)
 
     def fetch_ohlc(self, pair, timeframe, limit=720):
-        return [(index, 100 + index, 102 + index, 99 + index, 101 + index, 10) for index in range(240)]
+        chronological = [(index, 100 + index, 100 + index, 99 + index, 101 + index, 10) for index in range(240)]
+        return list(reversed(chronological))
 
-    def reset_stale_results(self, required_validation_status="LIVE_ALIGNED_BACKTEST"):
+    def reset_stale_results(self, required_validation_status="FILTERED_LIVE_ALIGNED_BACKTEST"):
         self.required_validation_status = required_validation_status
         return self.reset_count
 
@@ -69,14 +70,13 @@ def test_progressive_research_processes_one_small_batch_and_publishes_completion
     result = engine.process_one_batch()
 
     assert result.status == "COMPLETED"
-    assert repo.required_validation_status == "LIVE_ALIGNED_BACKTEST"
+    assert repo.required_validation_status == "FILTERED_LIVE_ALIGNED_BACKTEST"
     assert repo.batch_size == 100
     assert repo.marked_running == [1]
-    assert repo.results == [(1, "LIVE_ALIGNED_BACKTEST", 10)]
+    assert repo.results == [(1, "FILTERED_LIVE_ALIGNED_BACKTEST", 10)]
     assert repo.done == [(1, "DONE", None)]
     assert repo.finished == [(10, "COMPLETED", 1, 1)]
     assert events[-1].payload == {"batch_id": 10, "processed": 1}
-
 
 
 def test_progressive_research_uses_live_aligned_trade_simulation_after_costs():
@@ -93,12 +93,37 @@ def test_progressive_research_uses_live_aligned_trade_simulation_after_costs():
 
     metrics = engine.evaluate_combination(repo.combinations[0])
 
-    assert metrics["validation"]["status"] == "LIVE_ALIGNED_BACKTEST"
+    assert metrics["validation"]["status"] == "FILTERED_LIVE_ALIGNED_BACKTEST"
     assert metrics["validation"]["trades"] > 0
     assert metrics["validation"]["trade_notional_eur"] == 100.0
     assert metrics["profit_factor"] >= 0.0
     assert "net_profit" in metrics
     assert "expectancy" in metrics
+
+
+def test_research_signal_mask_uses_combination_filters():
+    repo = FakeResearchRepository()
+    engine = ProgressiveResearchEngine(repo, sleep_between_batches_seconds=0)
+    frame = engine.build_feature_frame(list(reversed(repo.fetch_ohlc("BTC/USD", "5m"))))
+    permissive = ResearchCombination(1, "Breakout", "BTC/USD", "5m", {"rsi_range": "0-100", "adx_min": 0, "relative_volume_min": 0, "market_regime": "ANY"})
+    impossible_volume = ResearchCombination(2, "Breakout", "BTC/USD", "5m", {"rsi_range": "0-100", "adx_min": 0, "relative_volume_min": 999, "market_regime": "ANY"})
+
+    permissive_signals = int(engine.build_signal_mask(frame, permissive).sum())
+    impossible_signals = int(engine.build_signal_mask(frame, impossible_volume).sum())
+
+    assert permissive_signals > 0
+    assert impossible_signals == 0
+
+
+def test_research_metrics_record_filters_applied_and_signal_count():
+    repo = FakeResearchRepository()
+    engine = ProgressiveResearchEngine(repo, sleep_between_batches_seconds=0)
+
+    metrics = engine.evaluate_combination(repo.combinations[0])
+
+    assert metrics["validation"]["filters_applied"] is True
+    assert metrics["validation"]["strategy_filter"] == "Breakout"
+    assert metrics["validation"]["signals"] >= metrics["validation"]["trades"] > 0
 
 def test_progressive_research_passes_priority_timeframe_to_repository():
     repo = FakeResearchRepository()
@@ -165,10 +190,74 @@ def test_candidate_results_deduplicate_strategy_pair_timeframe():
     assert repository.fetch_candidate_results(timeframe="1h", limit=10) == []
     assert "DISTINCT ON (strategy, pair, timeframe)" in client.sql
     assert "WITH best_per_market" in client.sql
-    assert "LIVE_ALIGNED_BACKTEST" in client.sql
+    assert "FILTERED_LIVE_ALIGNED_BACKTEST" in client.sql
     assert "profit_factor > 1.0 OR expectancy > 0" in client.sql
     assert client.params == ("1h", 10)
 
+
+
+
+def test_candidate_results_include_parameters_and_validation_payloads():
+    from project.research_engine.repository import ResearchRepository
+
+    class CandidatePayloadClient(SqlCaptureClient):
+        def fetch_all(self, sql, params=None):
+            self.sql = sql
+            self.params = params
+            return [(
+                "Breakout",
+                "BTC/USD",
+                "1h",
+                1.25,
+                0.1,
+                4.0,
+                {"reward_risk": 2.0, "atr_multiplier": 0.8},
+                {"status": "FILTERED_LIVE_ALIGNED_BACKTEST", "signals": 12},
+            )]
+
+    repository = ResearchRepository(CandidatePayloadClient())
+
+    candidates = repository.fetch_candidate_results(timeframe="1h", limit=1)
+
+    assert candidates[0]["parameters"] == {"reward_risk": 2.0, "atr_multiplier": 0.8}
+    assert candidates[0]["validation"]["signals"] == 12
+
+def test_candidate_diagnostics_counts_timeframe_edge_results():
+    from project.research_engine.repository import ResearchRepository
+
+    class DiagnosticsClient(SqlCaptureClient):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def fetch_all(self, sql, params=None):
+            self.calls.append((sql, params))
+            if "FROM research.strategy_combinations" in sql:
+                return [(100, 90, 10, 0, 0)]
+            return [(80, 75, 3, 1.12, 0.04)]
+
+    client = DiagnosticsClient()
+    repository = ResearchRepository(client)
+
+    diagnostics = repository.fetch_candidate_diagnostics(timeframe="1h")
+
+    assert diagnostics == {
+        "timeframe": "1h",
+        "total_combinations": 100,
+        "done_combinations": 90,
+        "pending_combinations": 10,
+        "retryable_combinations": 0,
+        "running_combinations": 0,
+        "total_results": 80,
+        "filtered_live_aligned_results": 75,
+        "edge_results": 3,
+        "best_live_profit_factor": 1.12,
+        "best_live_expectancy": 0.04,
+    }
+    assert client.calls[0][1] == ("1h",)
+    assert client.calls[1][1] == ("1h",)
+    assert "FILTERED_LIVE_ALIGNED_BACKTEST" in client.calls[1][0]
+    assert "profit_factor > 1.0 OR expectancy > 0" in client.calls[1][0]
 
 def test_stale_result_reset_marks_non_live_aligned_done_combinations_pending():
     from project.research_engine.repository import ResearchRepository
@@ -184,7 +273,7 @@ def test_stale_result_reset_marks_non_live_aligned_done_combinations_pending():
 
     assert repository.reset_stale_results() == 2
     assert "status = 'PENDING'" in client.sql
-    assert "LIVE_ALIGNED_BACKTEST" in client.params
+    assert "FILTERED_LIVE_ALIGNED_BACKTEST" in client.params
 
 
 def test_pending_query_prioritizes_operational_timeframe():
