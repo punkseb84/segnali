@@ -144,12 +144,17 @@ def build_strategy_engine(
     )
 
 
-def build_notification_engine(settings: PlatformSettings, event_bus: EventBus) -> NotificationEngine:
+def build_notification_engine(
+    settings: PlatformSettings,
+    event_bus: EventBus,
+    postgres: PostgresClient,
+) -> NotificationEngine:
     notification = NotificationEngine(
         event_bus,
         enabled=settings.enable_notification_engine,
         max_message_length=settings.telegram_max_message_length,
         max_retries=settings.telegram_max_retries,
+        postgres=postgres,
     )
     notification.subscribe()
     return notification
@@ -206,7 +211,7 @@ def main() -> None:
         logger.info("BOOTSTRAP TEST SKIPPED")
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-16 PROGRESSIVE OPERATIONAL RECOVERY BUILD")
+    logger.info("PROJECT MAIN VERSION: 2026-07-16 AUDITED CLASSIFICATION BUILD")
     logger.info("======================================")
     event_bus = EventBus()
     log_storage_startup(settings, logger)
@@ -230,7 +235,9 @@ def main() -> None:
         settings.min_watchlist_signal_score,
     )
     logger.info(
-        "Progressive operational policy | pair_specific_regime=true hard_research_filter=false class_b_trades=%s class_a_trades=%s require_regime_alignment=%s high_score_mismatch_b=%s dynamic_target=%s",
+        "Audited operational policy | pair_specific_regime=true hard_research_filter=false "
+        "sample_is_b_veto=false class_b_reference_trades=%s class_a_min_trades=%s "
+        "require_regime_alignment=%s high_score_mismatch_b=%s dynamic_target=%s",
         settings.min_research_trades_b,
         settings.min_research_trades,
         settings.require_regime_alignment_for_operative,
@@ -270,7 +277,7 @@ def main() -> None:
     strategy_engine = build_strategy_engine(settings, research_repository, decision_engine, event_bus) if settings.enable_strategy_engine and decision_engine is not None else None
     position_monitor = build_position_monitor(settings, event_bus, postgres) if settings.enable_position_monitor else None
     if settings.enable_notification_engine:
-        build_notification_engine(settings, event_bus)
+        build_notification_engine(settings, event_bus, postgres)
     scheduler = PlatformScheduler(settings, data_collector, research_engine, decision_engine, strategy_engine, position_monitor)
     logger.info("Checkpoint D")
     scheduler.run_forever()
