@@ -1,4 +1,4 @@
-"""Position monitoring for modular signals stored in PostgreSQL."""
+"""Position monitoring for modular operative signals stored in PostgreSQL."""
 from __future__ import annotations
 
 from typing import Any
@@ -9,10 +9,10 @@ from project.shared.logging import get_module_logger
 
 
 class PositionMonitor:
-    """Monitor generated signals and publish TP/SL events.
+    """Monitor only operative A/B signals and publish TP/SL events.
 
-    This module does not generate new signals and does not decide which strategy
-    to trade. It only watches already-created signals against PostgreSQL OHLC.
+    Watchlist C rows are observations, not trades. They must never be closed as TP or
+    SL and must not generate position-outcome notifications.
     """
 
     def __init__(
@@ -39,29 +39,37 @@ class PositionMonitor:
 
     def fetch_open_signals(self) -> list[dict[str, Any]]:
         rows = self.postgres.fetch_all(
-            """SELECT id, strategy, pair, timeframe, regime, entry, stop_loss, take_profit, score, probability, created_at
+            """SELECT id, strategy, pair, timeframe, regime, entry, stop_loss, take_profit,
+                      score, probability, signal_class, created_at
             FROM signals.generated_signals
             WHERE status IN ('NEW', 'OPEN')
+              AND signal_class IN ('A', 'B')
             ORDER BY created_at ASC
             LIMIT %s""",
             (self.max_signals_per_cycle,),
         )
-        return [
-            {
-                "id": row[0],
-                "strategy": row[1],
-                "pair": row[2],
-                "timeframe": row[3],
-                "regime": row[4],
-                "entry": float(row[5]),
-                "stop_loss": float(row[6]),
-                "take_profit": float(row[7]),
-                "score": float(row[8]),
-                "probability": float(row[9]),
-                "created_at": row[10],
-            }
-            for row in rows
-        ]
+        signals: list[dict[str, Any]] = []
+        for row in rows:
+            # Older tests and transitional callers may still provide the previous
+            # 11-column projection without signal_class. Treat those rows as B.
+            has_signal_class = len(row) >= 12
+            signals.append(
+                {
+                    "id": row[0],
+                    "strategy": row[1],
+                    "pair": row[2],
+                    "timeframe": row[3],
+                    "regime": row[4],
+                    "entry": float(row[5]),
+                    "stop_loss": float(row[6]),
+                    "take_profit": float(row[7]),
+                    "score": float(row[8]),
+                    "probability": float(row[9]) if row[9] is not None else None,
+                    "signal_class": row[10] if has_signal_class else "B",
+                    "created_at": row[11] if has_signal_class else row[10],
+                }
+            )
+        return signals
 
     def check_signal(self, signal: dict[str, Any]) -> bool:
         candles = self.postgres.fetch_all(
@@ -118,7 +126,15 @@ class PositionMonitor:
             return "STOP_LOSS"
         return "TARGET_HIT" if tp_hit else "STOP_LOSS"
 
-    def close_signal(self, signal: dict[str, Any], outcome: str, outcome_price: float, timestamp: Any, close_price: float, ambiguous: bool = False) -> None:
+    def close_signal(
+        self,
+        signal: dict[str, Any],
+        outcome: str,
+        outcome_price: float,
+        timestamp: Any,
+        close_price: float,
+        ambiguous: bool = False,
+    ) -> None:
         self.postgres.execute(
             """UPDATE signals.generated_signals
             SET status = %s
@@ -136,8 +152,9 @@ class PositionMonitor:
             "ambiguous": ambiguous,
         }
         self.logger.info(
-            "POSITION CLOSED id=%s outcome=%s pair=%s timeframe=%s outcome_price=%.6f ambiguous=%s",
+            "POSITION CLOSED id=%s class=%s outcome=%s pair=%s timeframe=%s outcome_price=%.6f ambiguous=%s",
             signal["id"],
+            signal.get("signal_class", "UNKNOWN"),
             outcome,
             signal["pair"],
             signal["timeframe"],

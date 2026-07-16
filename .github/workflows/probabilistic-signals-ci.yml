@@ -33,10 +33,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install --upgrade pip -q
+          python -m pip install -r requirements.txt pytest -q
 
-      - name: Run compile and targeted tests
+      - name: Run compile and project tests
         id: checks
         continue-on-error: true
         shell: bash
@@ -46,32 +46,27 @@ jobs:
             echo "## compileall"
             python -m compileall -q project tests indicators.py
             echo "## pytest"
-            python -m pytest -q \
-              tests/project/test_probabilistic_strategy_engine.py \
-              tests/project/test_scheduler_operational_priority.py \
-              tests/project/test_operational_engines.py
+            python -m pytest -q tests/project
           } 2>&1 | tee ci-output.log
 
       - name: Report result on pull request
-        if: always() && github.event_name == 'push'
+        if: always() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
           CHECK_OUTCOME: ${{ steps.checks.outcome }}
         shell: bash
         run: |
-          PR_NUMBER=$(gh api "/repos/${REPOSITORY}/commits/${COMMIT_SHA}/pulls" --jq '.[0].number // empty')
-          if [ -n "$PR_NUMBER" ]; then
-            {
-              echo "Probabilistic Signals CI: **${CHECK_OUTCOME}** for commit \`${COMMIT_SHA}\`."
-              echo
-              echo '```text'
-              tail -n 120 ci-output.log 2>/dev/null || echo "ci-output.log unavailable"
-              echo '```'
-            } > ci-comment.md
-            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file ci-comment.md
-          fi
+          {
+            echo "Probabilistic Signals CI: **${CHECK_OUTCOME}** for commit \`${COMMIT_SHA}\`."
+            echo
+            echo '```text'
+            tail -n 160 ci-output.log 2>/dev/null || echo "ci-output.log unavailable"
+            echo '```'
+          } > ci-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file ci-comment.md
 
       - name: Fail workflow when checks failed
         if: steps.checks.outcome == 'failure'
