@@ -15,8 +15,8 @@ from project.notification_engine.service import NotificationEngine
 from project.database.migrations import run_migrations
 from project.database.postgres import PostgresClient, PostgresConfig, PostgresUnavailableError, parse_postgres_connection_info, sanitize_postgres_error
 from project.position_monitor.service import PositionMonitor
+from project.research_engine.memory_service import MemoryEfficientResearchEngine
 from project.research_engine.repository import ResearchRepository
-from project.research_engine.service import ProgressiveResearchEngine
 from project.scheduler import PlatformScheduler
 from project.strategy_engine.economic_guard import EconomicallyGuardedProbabilisticStrategyEngine
 from project.shared.events import EventBus
@@ -64,8 +64,8 @@ def build_data_collector(settings: PlatformSettings, event_bus: EventBus, postgr
     return DataCollectorService(kraken, repository, event_bus)
 
 
-def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postgres: PostgresClient) -> ProgressiveResearchEngine:
-    return ProgressiveResearchEngine(
+def build_research_engine(settings: PlatformSettings, event_bus: EventBus, postgres: PostgresClient) -> MemoryEfficientResearchEngine:
+    return MemoryEfficientResearchEngine(
         ResearchRepository(postgres),
         event_bus,
         batch_size=settings.research_batch_size,
@@ -195,7 +195,7 @@ def main() -> None:
         logger.info("BOOTSTRAP TEST SKIPPED")
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-16 PROBABILISTIC ECONOMIC GUARD BUILD")
+    logger.info("PROJECT MAIN VERSION: 2026-07-16 RAILWAY COST OPTIMIZED BUILD")
     logger.info("======================================")
     event_bus = EventBus()
     log_storage_startup(settings, logger)
@@ -207,6 +207,9 @@ def main() -> None:
         settings.enable_strategy_engine,
         settings.enable_position_monitor,
         settings.enable_notification_engine,
+    )
+    logger.info(
+        "Railway cost optimization | modular_entrypoint=true numerical_threads=1 memory_trim=true live_frame_cache=true"
     )
     logger.info(
         "Probabilistic signal settings | hard_negative_ev_block=%s live_setup_min=%.2f operative_score_min=%.2f watchlist_score_min=%.2f",
