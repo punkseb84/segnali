@@ -15,10 +15,28 @@ def test_platform_defaults_to_one_hour_timeframe(monkeypatch):
 
     settings = PlatformSettings()
 
-    assert settings.collector_timeframes == ["1h"]
-    assert settings.operational_timeframe == "1h"
+    assert settings.collector_timeframes == ["5m", "15m", "1h", "4h"]
+    assert settings.operational_timeframe == "15m"
+    assert len(settings.collector_pairs) == 20
+    assert "UNI/USD" in settings.collector_pairs
     assert settings.signal_classes == ["A", "B"]
+    assert settings.operative_signal_classes == ["A", "B"]
+    assert settings.watchlist_signal_classes == ["C"]
+    assert settings.enable_watchlist_alerts is True
+    assert settings.min_signal_profit_factor == 1.05
+    assert settings.min_tp1_net_profit_eur == 0.30
+    assert settings.min_net_rr == 1.05
+    assert settings.historical_ev_tolerance_eur == 0.05
     assert settings.strategy_ohlc_limit == 720
+    assert settings.strategy_candidate_limit == 100
+
+
+def test_platform_strategy_candidate_limit_is_configurable(monkeypatch):
+    monkeypatch.setenv("STRATEGY_CANDIDATE_LIMIT", "75")
+
+    settings = PlatformSettings()
+
+    assert settings.strategy_candidate_limit == 75
 
 
 def test_platform_signal_classes_are_configurable(monkeypatch):
@@ -85,6 +103,72 @@ def test_strategy_engine_generates_signal_event_when_candidate_enabled():
     assert events[-1].payload["signal_class"] in {"A", "B", "C"}
 
 
+
+
+def test_strategy_engine_uses_research_parameters_for_live_setup():
+    class ParameterizedResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return [{
+                "strategy": "Breakout",
+                "pair": "BTC/USD",
+                "timeframe": timeframe or "1h",
+                "profit_factor": 1.3,
+                "expectancy": 0.2,
+                "net_profit": 10.0,
+                "parameters": {"reward_risk": 2.0, "atr_multiplier": 0.5},
+                "validation": {"reward_risk": 2.0, "atr_multiplier": 0.5},
+            }]
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    events = []
+    bus.subscribe(EventType.NEW_SIGNAL, events.append)
+    strategy = StrategyEngine(
+        ParameterizedResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        allowed_signal_classes=["A", "B", "C"],
+        min_probability_sample_size=999,
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert any(reason == "reward_risk=2.0000" for reason in signal.reasons)
+    assert any(reason == "atr_multiplier=0.5000" for reason in signal.reasons)
+    assert signal.gross_rr == pytest.approx(2.0)
+
+def test_strategy_engine_logs_candidate_diagnostics_when_no_research_candidate():
+    class NoCandidateResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return []
+
+        def fetch_best_result(self, timeframe=None):
+            return None
+
+        def fetch_candidate_diagnostics(self, timeframe=None):
+            return {
+                "timeframe": timeframe,
+                "total_combinations": 100,
+                "done_combinations": 100,
+                "pending_combinations": 0,
+                "retryable_combinations": 0,
+                "running_combinations": 0,
+                "total_results": 100,
+                "filtered_live_aligned_results": 100,
+                "edge_results": 0,
+                "best_live_profit_factor": 0.98,
+                "best_live_expectancy": -0.01,
+            }
+
+    postgres = FakePostgres()
+    strategy = StrategyEngine(NoCandidateResearch(postgres), DecisionEngine(postgres))
+
+    signal = strategy.evaluate()
+
+    assert signal is None
+    assert strategy._candidate_rejection_reasons == {}
+
 def test_strategy_engine_uses_configured_ohlc_limit():
     class CapturingResearch(FakeResearchRepository):
         def __init__(self, postgres):
@@ -103,6 +187,138 @@ def test_strategy_engine_uses_configured_ohlc_limit():
 
     assert research.last_limit == 360
 
+
+def test_strategy_engine_uses_configured_candidate_limit():
+    class CapturingCandidateResearch(FakeResearchRepository):
+        def __init__(self, postgres):
+            super().__init__(postgres)
+            self.last_limit = None
+
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            self.last_limit = limit
+            return [self.fetch_best_result(timeframe)]
+
+    postgres = FakePostgres()
+    research = CapturingCandidateResearch(postgres)
+    strategy = StrategyEngine(research, DecisionEngine(postgres), max_candidate_evaluations=75)
+
+    strategy.evaluate()
+
+    assert research.last_limit == 75
+
+
+
+
+def test_historical_ev_gate_respects_confidence_and_tolerance():
+    strategy = StrategyEngine(FakeResearchRepository(FakePostgres()), DecisionEngine(FakePostgres()), historical_ev_tolerance_eur=0.05)
+
+    assert strategy.evaluate_historical_ev_gate(-10.0, {"confidence": "LOW"})["block"] is False
+    assert strategy.evaluate_historical_ev_gate(-0.01, {"confidence": "MEDIUM"})["block"] is False
+    assert strategy.evaluate_historical_ev_gate(-0.10, {"confidence": "MEDIUM"})["block"] is True
+    assert strategy.evaluate_historical_ev_gate(-0.01, {"confidence": "HIGH"})["block"] is True
+
+
+def test_strategy_engine_publishes_watchlist_for_class_c():
+    class LowQualityResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return [{
+                "strategy": "Breakout",
+                "pair": "BTC/USD",
+                "timeframe": timeframe or "15m",
+                "profit_factor": 1.01,
+                "expectancy": 0.01,
+                "net_profit": 1.0,
+                "parameters": {"reward_risk": 1.2, "atr_multiplier": 1.0},
+                "validation": {"reward_risk": 1.2, "atr_multiplier": 1.0},
+            }]
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    watchlist_events = []
+    new_signal_events = []
+    bus.subscribe(EventType.WATCHLIST, watchlist_events.append)
+    bus.subscribe(EventType.NEW_SIGNAL, new_signal_events.append)
+    strategy = StrategyEngine(
+        LowQualityResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        operational_timeframe="15m",
+        operative_signal_classes=["A", "B"],
+        watchlist_signal_classes=["C"],
+        min_probability_sample_size=999,
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.signal_class == "C"
+    assert watchlist_events
+    assert not new_signal_events
+
+
+
+
+def test_strategy_engine_continues_after_watchlist_to_find_operative_signal():
+    class WatchlistThenOperativeResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return [
+                {
+                    "strategy": "Breakout",
+                    "pair": "BTC/USD",
+                    "timeframe": timeframe or "15m",
+                    "profit_factor": 1.01,
+                    "expectancy": 0.01,
+                    "net_profit": 1.0,
+                    "parameters": {"reward_risk": 1.1, "atr_multiplier": 1.0},
+                    "validation": {"reward_risk": 1.1, "atr_multiplier": 1.0},
+                },
+                {
+                    "strategy": "Breakout",
+                    "pair": "ETH/USD",
+                    "timeframe": timeframe or "15m",
+                    "profit_factor": 1.25,
+                    "expectancy": 0.2,
+                    "net_profit": 10.0,
+                    "parameters": {"reward_risk": 2.0, "atr_multiplier": 1.0},
+                    "validation": {"reward_risk": 2.0, "atr_multiplier": 1.0},
+                },
+            ]
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    watchlist_events = []
+    new_signal_events = []
+    bus.subscribe(EventType.WATCHLIST, watchlist_events.append)
+    bus.subscribe(EventType.NEW_SIGNAL, new_signal_events.append)
+    strategy = StrategyEngine(
+        WatchlistThenOperativeResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        operational_timeframe="15m",
+        min_probability_sample_size=999,
+        min_tp1_net_profit_eur=0.01,
+        min_net_rr=1.0,
+        operative_signal_classes=["A", "B"],
+        watchlist_signal_classes=["C"],
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.signal_class == "B"
+    assert signal.pair == "ETH/USD"
+    assert new_signal_events
+    assert not watchlist_events
+
+def test_notification_engine_formats_watchlist_and_splits_long_messages():
+    notification = NotificationEngine(EventBus(), enabled=False, max_message_length=500)
+    payload = signal_payload() | {"signal_class": "C"}
+
+    message = notification.format_watchlist(payload)
+
+    assert "WATCHLIST" in message
+    assert "NON È UN SEGNALE" in message
+    assert len(notification.split_message("x" * 1200)) == 3
 
 def test_notification_engine_skips_when_disabled():
     bus = EventBus()
@@ -183,6 +399,7 @@ def test_strategy_engine_skips_active_duplicate_signal():
 
     assert signal is None
     assert postgres.inserted == []
+    assert strategy._candidate_rejection_reasons["duplicate_active_signal"] == 1
 
 
 def test_position_monitor_closes_target_hit_and_publishes_event():
@@ -309,7 +526,7 @@ def test_validation_rejects_target_too_far_for_atr():
     assert "TP_TOO_FAR_FOR_ATR" in validation["reason"]
 
 
-def test_strategy_engine_allows_low_net_rr_as_lower_class_signal():
+def test_strategy_engine_downgrades_low_net_rr_to_watchlist_class():
     strategy = StrategyEngine(
         FakeResearchRepository(FakePostgres()),
         DecisionEngine(FakePostgres()),
@@ -330,7 +547,7 @@ def test_strategy_engine_allows_low_net_rr_as_lower_class_signal():
 
     assert economics["net_profit_tp1_eur"] > 0
     assert economics["net_rr"] < strategy.min_net_rr
-    assert signal_class == "B"
+    assert signal_class == "C"
 
 
 def test_strategy_engine_respects_enabled_signal_classes():
@@ -373,6 +590,42 @@ def test_strategy_engine_does_not_hard_reject_positive_edge_below_class_b_pf():
     assert signal is not None
     assert signal.signal_class == "C"
     assert events[-1].payload["signal_class"] == "C"
+    assert signal.score_breakdown["profit_factor_score"] > 0
+    assert "score_breakdown=" in signal.reasons[-2]
+
+
+def test_strategy_engine_treats_weak_edge_as_watchlist_instead_of_hard_reject():
+    class WeakEdgeResearch(FakeResearchRepository):
+        def fetch_best_result(self, timeframe=None):
+            return {
+                "strategy": "Breakout",
+                "pair": "BTC/USD",
+                "timeframe": timeframe or "1h",
+                "profit_factor": 0.98,
+                "expectancy": -0.01,
+                "net_profit": -1.0,
+            }
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    watchlist_events = []
+    bus.subscribe(EventType.WATCHLIST, watchlist_events.append)
+    strategy = StrategyEngine(
+        WeakEdgeResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        operative_signal_classes=["A", "B"],
+        watchlist_signal_classes=["C"],
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.signal_class == "C"
+    assert signal.score_breakdown["profit_factor_score"] == 0.0
+    assert signal.score_breakdown["expectancy_score"] == 0.0
+    assert watchlist_events[-1].payload["signal_class"] == "C"
+    assert "no_statistical_edge" not in strategy._candidate_rejection_reasons
 
 
 def test_strategy_engine_rejects_high_confidence_negative_historical_ev():
@@ -412,6 +665,7 @@ def test_strategy_engine_rejects_high_confidence_negative_historical_ev():
     assert signal is None
     assert postgres.inserted == []
     assert events == []
+    assert strategy._candidate_rejection_reasons["negative_historical_expected_value"] == 1
 
 
 def test_strategy_engine_tries_next_candidate_after_negative_ev_rejection():
@@ -495,10 +749,24 @@ def test_daily_no_signal_report_is_report_not_trade_signal():
         enable_daily_signal_report=True,
         daily_signal_report_hours=24,
     )
+    strategy._last_cycle_summary = {
+        "candidates": 12,
+        "class_a": 0,
+        "class_b": 0,
+        "class_c": 3,
+        "rejected": 9,
+        "top_rejections": {"negative_historical_ev": 4, "net_rr_below_threshold": 5},
+        "best_candidate": "SOL/USD Pullback Trend score=68.00 class=C",
+    }
 
     published = strategy.publish_daily_signal_report()
 
     assert published is True
     assert reports
     assert trade_signals == []
+    message = reports[-1].payload["message"]
+    assert "candidati=12" in message
+    assert "A=0 B=0 C=3 rejected=9" in message
+    assert "SOL/USD Pullback Trend" in message
+    assert "negative_historical_ev" in message
     assert "Questo non è un segnale di ingresso" in reports[-1].payload["message"]

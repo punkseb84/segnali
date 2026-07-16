@@ -9,6 +9,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+DEFAULT_COLLECTOR_PAIRS = [
+    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "DOGE/USD", "LINK/USD", "AVAX/USD",
+    "AAVE/USD", "LTC/USD", "BCH/USD", "TAO/USD", "DOT/USD", "XLM/USD", "TRX/USD", "ATOM/USD",
+    "ETC/USD", "FIL/USD", "NEAR/USD", "UNI/USD",
+]
+DEFAULT_COLLECTOR_TIMEFRAMES = ["5m", "15m", "1h", "4h"]
+
+
 def _bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -77,10 +85,10 @@ class PlatformSettings:
     enable_strategy_engine: bool = _bool_env("ENABLE_STRATEGY_ENGINE", True)
     enable_position_monitor: bool = _bool_env("ENABLE_POSITION_MONITOR", True)
     enable_notification_engine: bool = field(default_factory=_notification_engine_enabled)
-    collector_pairs: list[str] = field(default_factory=lambda: _list_env("COLLECTOR_PAIRS", ["BTC/USD", "ETH/USD", "SOL/USD"]))
-    collector_timeframes: list[str] = field(default_factory=lambda: [item.strip().lower() for item in os.getenv("COLLECTOR_TIMEFRAMES", "1h").split(",") if item.strip()])
-    operational_timeframe: str = os.getenv("OPERATIONAL_TIMEFRAME", "1h").strip().lower()
-    min_signal_profit_factor: float = _float_env("MIN_SIGNAL_PROFIT_FACTOR", 1.10)
+    collector_pairs: list[str] = field(default_factory=lambda: _list_env("COLLECTOR_PAIRS", DEFAULT_COLLECTOR_PAIRS))
+    collector_timeframes: list[str] = field(default_factory=lambda: [item.strip().lower() for item in os.getenv("COLLECTOR_TIMEFRAMES", ",".join(DEFAULT_COLLECTOR_TIMEFRAMES)).split(",") if item.strip()])
+    operational_timeframe: str = os.getenv("OPERATIONAL_TIMEFRAME", "15m").strip().lower()
+    min_signal_profit_factor: float = _float_env("MIN_SIGNAL_PROFIT_FACTOR", 1.05)
     trade_notional_eur: float = _float_env("TRADE_NOTIONAL_EUR", 100.0)
     binance_buy_fee_rate: float = _float_env("BINANCE_BUY_FEE_RATE", 0.001)
     binance_sell_fee_rate: float = _float_env("BINANCE_SELL_FEE_RATE", 0.001)
@@ -89,8 +97,10 @@ class PlatformSettings:
     binance_quantity_step: float = _float_env("BINANCE_QUANTITY_STEP", 0.000001)
     binance_min_qty: float = _float_env("BINANCE_MIN_QTY", 0.0)
     binance_min_notional_eur: float = _float_env("BINANCE_MIN_NOTIONAL_EUR", 10.0)
-    min_tp1_net_profit_eur: float = _float_env("MIN_TP1_NET_PROFIT_EUR", 2.0)
-    min_net_rr: float = _float_env("MIN_NET_RR", 1.20)
+    min_tp1_net_profit_eur: float = _float_env("MIN_TP1_NET_PROFIT_EUR", 0.30)
+    min_net_rr: float = _float_env("MIN_NET_RR", 1.05)
+    min_historical_ev_eur: float = _float_env("MIN_HISTORICAL_EV_EUR", 0.0)
+    historical_ev_tolerance_eur: float = _float_env("HISTORICAL_EV_TOLERANCE_EUR", 0.05)
     max_take_profit_distance_pct: float = _float_env("MAX_TAKE_PROFIT_DISTANCE_PCT", 0.03)
     min_stop_atr_ratio: float = _float_env("MIN_STOP_ATR_RATIO", 0.75)
     min_stop_spread_multiple: float = _float_env("MIN_STOP_SPREAD_MULTIPLE", 2.0)
@@ -99,16 +109,28 @@ class PlatformSettings:
     min_probability_sample_size: int = _int_env("MIN_PROBABILITY_SAMPLE_SIZE", 30)
     probability_horizon_candles: int = _int_env("PROBABILITY_HORIZON_CANDLES", 8)
     signal_classes: list[str] = field(default_factory=lambda: _signal_classes_env("SIGNAL_CLASSES", ["A", "B"]))
+    operative_signal_classes: list[str] = field(default_factory=lambda: _signal_classes_env("OPERATIVE_SIGNAL_CLASSES", ["A", "B"]))
+    watchlist_signal_classes: list[str] = field(default_factory=lambda: _signal_classes_env("WATCHLIST_SIGNAL_CLASSES", ["C"]))
+    enable_watchlist_alerts: bool = _bool_env("ENABLE_WATCHLIST_ALERTS", True)
     strategy_ohlc_limit: int = _int_env("STRATEGY_OHLC_LIMIT", 720)
+    strategy_candidate_limit: int = field(default_factory=lambda: _int_env("STRATEGY_CANDIDATE_LIMIT", 100))
     ambiguous_candle_mode: str = os.getenv("AMBIGUOUS_CANDLE_MODE", "conservative").strip().lower()
     enable_daily_signal_report: bool = _bool_env("ENABLE_DAILY_SIGNAL_REPORT", True)
     daily_signal_report_hours: int = _int_env("DAILY_SIGNAL_REPORT_HOURS", 24)
+    daily_report_time: str = os.getenv("DAILY_REPORT_TIME", "09:00").strip()
+    daily_report_timezone: str = os.getenv("DAILY_REPORT_TIMEZONE", "Europe/Rome").strip()
+    dry_run: bool = _bool_env("DRY_RUN", True)
+    diagnostic_mode: bool = _bool_env("DIAGNOSTIC_MODE", True)
+    telegram_send_startup_message: bool = _bool_env("TELEGRAM_SEND_STARTUP_MESSAGE", True)
+    telegram_test_on_startup: bool = _bool_env("TELEGRAM_TEST_ON_STARTUP", False)
+    telegram_max_message_length: int = _int_env("TELEGRAM_MAX_MESSAGE_LENGTH", 3900)
+    telegram_max_retries: int = _int_env("TELEGRAM_MAX_RETRIES", 3)
     signal_cooldown_minutes: int = _int_env("SIGNAL_COOLDOWN_MINUTES", 45)
     ohlc_limit: int = _int_env("COLLECTOR_OHLC_LIMIT", 720)
     scheduler_collector_seconds: int = _int_env("SCHEDULER_COLLECTOR_SECONDS", 300)
     run_data_collector_on_startup: bool = _bool_env("RUN_DATA_COLLECTOR_ON_STARTUP", True)
     run_research_on_startup: bool = _bool_env("RUN_RESEARCH_ON_STARTUP", True)
-    scheduler_decision_seconds: int = _int_env("SCHEDULER_DECISION_SECONDS", 900)
+    scheduler_decision_seconds: int = _int_env("SCHEDULER_DECISION_SECONDS", 300)
     scheduler_strategy_seconds: int = _int_env("SCHEDULER_STRATEGY_SECONDS", 60)
     scheduler_position_monitor_seconds: int = _int_env("SCHEDULER_POSITION_MONITOR_SECONDS", 60)
     research_batch_size: int = _int_env("RESEARCH_BATCH_SIZE", 500)

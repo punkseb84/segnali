@@ -100,6 +100,8 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         min_tp1_net_profit_eur=settings.min_tp1_net_profit_eur,
         signal_cooldown_minutes=settings.signal_cooldown_minutes,
         min_net_rr=settings.min_net_rr,
+        min_historical_ev_eur=settings.min_historical_ev_eur,
+        historical_ev_tolerance_eur=settings.historical_ev_tolerance_eur,
         slippage_rate=settings.binance_slippage_rate,
         quantity_step=settings.binance_quantity_step,
         min_qty=settings.binance_min_qty,
@@ -113,13 +115,22 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         probability_horizon_candles=settings.probability_horizon_candles,
         ohlc_limit=settings.strategy_ohlc_limit,
         allowed_signal_classes=settings.signal_classes,
+        operative_signal_classes=settings.operative_signal_classes,
+        watchlist_signal_classes=settings.watchlist_signal_classes,
+        enable_watchlist_alerts=settings.enable_watchlist_alerts,
+        max_candidate_evaluations=settings.strategy_candidate_limit,
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
     )
 
 
 def build_notification_engine(settings: PlatformSettings, event_bus: EventBus) -> NotificationEngine:
-    notification = NotificationEngine(event_bus, enabled=settings.enable_notification_engine)
+    notification = NotificationEngine(
+        event_bus,
+        enabled=settings.enable_notification_engine,
+        max_message_length=settings.telegram_max_message_length,
+        max_retries=settings.telegram_max_retries,
+    )
     notification.subscribe()
     return notification
 

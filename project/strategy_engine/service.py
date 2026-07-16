@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -59,6 +60,8 @@ class GeneratedSignal:
     score: float
     probability: float | None
     reasons: list[str]
+    score_breakdown: dict[str, float] = field(default_factory=dict)
+    signal_id: int | None = None
 
 
 class StrategyEngine:
@@ -76,6 +79,8 @@ class StrategyEngine:
         min_tp1_net_profit_eur: float = 2.0,
         signal_cooldown_minutes: int = 45,
         min_net_rr: float = 1.20,
+        min_historical_ev_eur: float = 0.0,
+        historical_ev_tolerance_eur: float = 0.05,
         slippage_rate: float = 0.0,
         quantity_step: float = 0.000001,
         min_qty: float = 0.0,
@@ -89,8 +94,12 @@ class StrategyEngine:
         probability_horizon_candles: int = 8,
         ohlc_limit: int = 720,
         allowed_signal_classes: list[str] | None = None,
+        operative_signal_classes: list[str] | None = None,
+        watchlist_signal_classes: list[str] | None = None,
+        enable_watchlist_alerts: bool = True,
         enable_daily_signal_report: bool = True,
         daily_signal_report_hours: int = 24,
+        max_candidate_evaluations: int = 50,
     ) -> None:
         self.research_repository = research_repository
         self.decision_engine = decision_engine
@@ -104,6 +113,8 @@ class StrategyEngine:
         self.min_tp1_net_profit_eur = min_tp1_net_profit_eur
         self.signal_cooldown_minutes = signal_cooldown_minutes
         self.min_net_rr = min_net_rr
+        self.min_historical_ev_eur = min_historical_ev_eur
+        self.historical_ev_tolerance_eur = max(0.0, historical_ev_tolerance_eur)
         self.slippage_rate = slippage_rate
         self.quantity_step = quantity_step
         self.min_qty = min_qty
@@ -116,24 +127,93 @@ class StrategyEngine:
         self.min_probability_sample_size = min_probability_sample_size
         self.probability_horizon_candles = probability_horizon_candles
         self.ohlc_limit = ohlc_limit
-        self.allowed_signal_classes = allowed_signal_classes or ["A", "B"]
+        legacy_allowed = allowed_signal_classes or ["A", "B"]
+        self.operative_signal_classes = operative_signal_classes or legacy_allowed
+        self.watchlist_signal_classes = watchlist_signal_classes or []
+        self.allowed_signal_classes = sorted(set(self.operative_signal_classes + self.watchlist_signal_classes))
+        self.enable_watchlist_alerts = enable_watchlist_alerts
         self.enable_daily_signal_report = enable_daily_signal_report
         self.daily_signal_report_hours = daily_signal_report_hours
+        self.max_candidate_evaluations = max(1, max_candidate_evaluations)
+        self._candidate_rejection_reasons: Counter[str] = Counter()
+        self._last_cycle_summary: dict[str, Any] = {}
         self._last_no_trade_report_at: datetime | None = None
         self.logger = get_module_logger("strategy")
 
     def evaluate(self) -> GeneratedSignal | None:
+        self._candidate_rejection_reasons.clear()
         decision = self.decision_engine.latest_decision or self.decision_engine.evaluate_market()
-        candidates = self.fetch_strategy_candidates(limit=10)
+        candidates = self.fetch_strategy_candidates(limit=self.max_candidate_evaluations)
         if not candidates:
-            self.logger.info("STRATEGY no research candidate available timeframe=%s", self.operational_timeframe)
+            diagnostics = self.research_repository.fetch_candidate_diagnostics(timeframe=self.operational_timeframe)
+            self._last_cycle_summary = {
+                "timeframe": self.operational_timeframe,
+                "candidates": 0,
+                "class_a": 0,
+                "class_b": 0,
+                "class_c": 0,
+                "rejected": 0,
+                "top_rejections": {},
+                "best_candidate": "NONE",
+                "diagnostics": diagnostics,
+            }
+            self.logger.info(
+                "STRATEGY no research candidate available timeframe=%s diagnostics=%s",
+                self.operational_timeframe,
+                json.dumps(diagnostics, sort_keys=True),
+            )
             return None
+        best_watchlist: GeneratedSignal | None = None
+        class_counts = {"A": 0, "B": 0, "C": 0}
+        evaluated = 0
         for best in candidates:
-            signal = self.evaluate_candidate(decision, best)
-            if signal is not None:
+            evaluated += 1
+            signal = self.evaluate_candidate(decision, best, publish_event=False)
+            if signal is None:
+                continue
+            class_counts[signal.signal_class] = class_counts.get(signal.signal_class, 0) + 1
+            if signal.signal_class in self.operative_signal_classes:
+                self.log_cycle_summary(evaluated, class_counts, signal)
+                self.publish_signal_event(signal)
                 return signal
-        self.logger.info("STRATEGY no candidate passed validation timeframe=%s candidates=%s", self.operational_timeframe, len(candidates))
+            if best_watchlist is None or signal.score > best_watchlist.score:
+                best_watchlist = signal
+        self.log_cycle_summary(evaluated, class_counts, best_watchlist)
+        if best_watchlist is not None:
+            self.publish_signal_event(best_watchlist)
+            return best_watchlist
         return None
+
+    def log_cycle_summary(self, candidates_evaluated: int, class_counts: dict[str, int], best_signal: GeneratedSignal | None) -> None:
+        best_text = "NONE"
+        if best_signal is not None:
+            best_text = f"{best_signal.pair} {best_signal.strategy} score={best_signal.score:.2f} class={best_signal.signal_class}"
+        rejected = sum(self._candidate_rejection_reasons.values())
+        top_rejections = dict(self._candidate_rejection_reasons)
+        self._last_cycle_summary = {
+            "timeframe": self.operational_timeframe,
+            "candidates": candidates_evaluated,
+            "class_a": class_counts.get("A", 0),
+            "class_b": class_counts.get("B", 0),
+            "class_c": class_counts.get("C", 0),
+            "rejected": rejected,
+            "top_rejections": top_rejections,
+            "best_candidate": best_text,
+        }
+        self.logger.info(
+            "STRATEGY_CYCLE_SUMMARY timeframe=%s candidates=%s class_a=%s class_b=%s class_c=%s rejected=%s top_rejections=%s best_candidate=%s",
+            self.operational_timeframe,
+            candidates_evaluated,
+            class_counts.get("A", 0),
+            class_counts.get("B", 0),
+            class_counts.get("C", 0),
+            rejected,
+            json.dumps(top_rejections, sort_keys=True),
+            best_text,
+        )
+
+    def record_candidate_rejection(self, reason: str) -> None:
+        self._candidate_rejection_reasons[reason] += 1
 
     def fetch_strategy_candidates(self, limit: int = 10) -> list[dict[str, Any]]:
         candidates = self.research_repository.fetch_candidate_results(timeframe=self.operational_timeframe, limit=limit)
@@ -142,20 +222,20 @@ class StrategyEngine:
         best = self.research_repository.fetch_best_result(timeframe=self.operational_timeframe)
         return [best] if best else []
 
-    def evaluate_candidate(self, decision: Any, best: dict[str, Any]) -> GeneratedSignal | None:
+    def evaluate_candidate(self, decision: Any, best: dict[str, Any], publish_event: bool = True) -> GeneratedSignal | None:
         if best["timeframe"] != self.operational_timeframe:
+            self.record_candidate_rejection("non_operational_timeframe")
             self.logger.info("STRATEGY candidate rejected strategy=%s reason=non_operational_timeframe timeframe=%s required=%s", best["strategy"], best["timeframe"], self.operational_timeframe)
             return None
         profit_factor = float(best.get("profit_factor") or 0.0)
         expectancy = float(best.get("expectancy") or 0.0)
         if profit_factor <= 1.0 and expectancy <= 0:
             self.logger.info(
-                "STRATEGY candidate rejected strategy=%s reason=no_statistical_edge pf=%.4f expectancy=%.6f",
+                "STRATEGY candidate weak statistical edge strategy=%s pf=%.4f expectancy=%.6f action=continue_as_watchlist_candidate",
                 best["strategy"],
                 profit_factor,
                 expectancy,
             )
-            return None
         if profit_factor < self.min_profit_factor:
             self.logger.info(
                 "STRATEGY candidate below class_b_threshold strategy=%s pair=%s timeframe=%s pf=%.4f threshold=%.4f action=continue_as_class_c_candidate",
@@ -175,22 +255,28 @@ class StrategyEngine:
             )
         prices = self.research_repository.fetch_ohlc(best["pair"], best["timeframe"], limit=self.ohlc_limit)
         if len(prices) < 5:
+            self.record_candidate_rejection("no_recent_ohlc")
             self.logger.info("STRATEGY no recent OHLC for pair=%s timeframe=%s", best["pair"], best["timeframe"])
             return None
         latest = prices[0]
         entry = float(latest[4])
         reference_candle_time = latest[0]
         signal_time = datetime.now(timezone.utc)
-        ranges = [float(row[2]) - float(row[3]) for row in prices if float(row[2]) >= float(row[3])]
-        avg_range = sum(ranges) / len(ranges) if ranges else entry * 0.005
-        stop_loss = max(entry - avg_range, entry * 0.98)
-        technical_take_profit = entry + avg_range * 1.5
+        research_parameters = dict(best.get("parameters") or {})
+        reward_risk = float(research_parameters.get("reward_risk", best.get("validation", {}).get("reward_risk", 1.5)) or 1.5)
+        atr_multiplier = float(research_parameters.get("atr_multiplier", best.get("validation", {}).get("atr_multiplier", 1.0)) or 1.0)
+        atr_value = self.calculate_atr(prices)
+        stop_distance = max(atr_value * atr_multiplier, entry * 0.0001)
+        stop_loss = max(entry - stop_distance, entry * 0.98)
+        effective_stop_distance = entry - stop_loss
+        technical_take_profit = entry + effective_stop_distance * reward_risk
         take_profit = technical_take_profit
         economics = self.calculate_net_economics(entry, stop_loss, take_profit)
         volatility = self.calculate_volatility_context(prices, entry, stop_loss, take_profit)
         probability_context = self.estimate_probability_context(prices, entry, stop_loss, take_profit)
         validation = self.validate_signal_setup(best, entry, stop_loss, take_profit, economics, volatility, probability_context)
         if validation["status"] == "REJECTED":
+            self.record_candidate_rejection(validation["reason"])
             self.logger.info(
                 "SIGNAL_REJECTED reason=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f technical_tp=%.6f effective_tp=%.6f stop_distance=%.6f stop_pct=%.4f atr=%.6f stop_atr_ratio=%.4f tp_atr_ratio=%.4f gross_rr=%.4f net_rr=%.4f sample=%s win_rate=%s mfe_percentile=%.6f mae_percentile=%.6f",
                 validation["reason"],
@@ -215,6 +301,7 @@ class StrategyEngine:
             )
             return None
         if not economics["tradable"]:
+            self.record_candidate_rejection("not_tradable")
             self.logger.info(
                 "STRATEGY candidate rejected strategy=%s reason=not_tradable quantity=%.8f entry_notional=%.6f min_qty=%.8f min_notional=%.6f",
                 best["strategy"],
@@ -225,19 +312,24 @@ class StrategyEngine:
             )
             return None
         if economics["net_profit_tp1_eur"] <= 0:
+            self.record_candidate_rejection("tp1_net_profit_not_positive")
             self.logger.info(
                 "STRATEGY candidate rejected strategy=%s reason=tp1_net_profit_not_positive net_profit=%.6f",
                 best["strategy"], economics["net_profit_tp1_eur"],
             )
             return None
         historical_expected_value = self.calculate_historical_expected_value(economics, probability_context)
-        if historical_expected_value is not None and historical_expected_value <= 0:
+        ev_decision = self.evaluate_historical_ev_gate(historical_expected_value, probability_context)
+        if ev_decision["block"]:
+            self.record_candidate_rejection("negative_historical_expected_value")
             self.logger.info(
-                "STRATEGY candidate rejected strategy=%s pair=%s timeframe=%s reason=negative_historical_expected_value ev=%.6f win_rate=%.4f net_profit=%.6f net_loss=%.6f sample=%s confidence=%s",
+                "STRATEGY candidate rejected strategy=%s pair=%s timeframe=%s reason=negative_historical_expected_value ev=%.6f threshold=%.6f tolerance=%.6f win_rate=%.4f net_profit=%.6f net_loss=%.6f sample=%s confidence=%s",
                 best["strategy"],
                 best["pair"],
                 best["timeframe"],
-                historical_expected_value,
+                historical_expected_value or 0.0,
+                self.min_historical_ev_eur,
+                self.historical_ev_tolerance_eur,
                 probability_context["win_rate"],
                 economics["net_profit_tp1_eur"],
                 economics["net_loss_sl_eur"],
@@ -245,8 +337,11 @@ class StrategyEngine:
                 probability_context["confidence"],
             )
             return None
-        signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned)
+        score_breakdown = self.build_score_breakdown(best, economics, validation, probability_context, regime_aligned, ev_decision)
+        score = min(100.0, sum(score_breakdown.values()))
+        signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned, ev_decision, score)
         if signal_class not in self.allowed_signal_classes:
+            self.record_candidate_rejection("signal_class_not_enabled")
             self.logger.info(
                 "STRATEGY candidate rejected strategy=%s reason=signal_class_not_enabled class=%s allowed=%s pf=%.4f expectancy=%.6f net_rr=%.4f net_profit=%.6f validation=%s",
                 best["strategy"],
@@ -259,7 +354,6 @@ class StrategyEngine:
                 validation["status"],
             )
             return None
-        score = min(100.0, 50.0 + best["profit_factor"] * 20.0)
         probability = probability_context["probability"]
         signal = GeneratedSignal(
             strategy=best["strategy"], pair=best["pair"], timeframe=best["timeframe"], regime=decision.regime,
@@ -283,11 +377,16 @@ class StrategyEngine:
             reasons=[
                 f"profit_factor={best['profit_factor']:.4f}",
                 f"expectancy={best['expectancy']:.6f}",
+                f"reward_risk={reward_risk:.4f}",
+                f"atr_multiplier={atr_multiplier:.4f}",
                 f"regime={decision.regime}",
                 f"signal_class={signal_class}",
                 f"historical_ev={historical_expected_value:.6f}" if historical_expected_value is not None else "historical_ev=unavailable",
+                f"historical_ev_decision={ev_decision['reason']}",
+                f"score_breakdown={json.dumps(score_breakdown, sort_keys=True)}",
                 "regime_aligned=true" if regime_aligned else "regime_aligned=false",
             ],
+            score_breakdown=score_breakdown,
         )
         self.logger.info(
             "SIGNAL_CLASSIFIED class=%s strategy=%s pair=%s timeframe=%s pf=%.4f expectancy=%.6f net_profit=%.6f net_rr=%.4f validation=%s reason=%s regime_aligned=%s allowed=%s",
@@ -306,14 +405,24 @@ class StrategyEngine:
         )
         duplicate_id = self.find_active_duplicate(signal)
         if duplicate_id is not None:
+            self.record_candidate_rejection("duplicate_active_signal")
             self.logger.info("STRATEGY duplicate skipped existing_signal_id=%s cooldown_minutes=%s strategy=%s pair=%s timeframe=%s regime=%s", duplicate_id, self.signal_cooldown_minutes, signal.strategy, signal.pair, signal.timeframe, signal.regime)
             return None
         signal_id = self.save_signal(signal)
+        signal = replace(signal, signal_id=signal_id)
         self.log_economic_debug(signal_id, signal)
-        payload = {**signal.__dict__, "signal_id": signal_id}
-        self.logger.info("NEW SIGNAL id=%s class=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.signal_class, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
-        self.event_bus.publish(Event(EventType.NEW_SIGNAL, payload))
+        self.logger.info("SIGNAL_SAVED id=%s class=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.signal_class, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
+        if publish_event:
+            self.publish_signal_event(signal)
         return signal
+
+    def publish_signal_event(self, signal: GeneratedSignal) -> None:
+        payload = signal.__dict__.copy()
+        event_type = EventType.WATCHLIST if signal.signal_class in self.watchlist_signal_classes else EventType.NEW_SIGNAL
+        if event_type == EventType.WATCHLIST and not self.enable_watchlist_alerts:
+            self.logger.info("WATCHLIST saved notification disabled strategy=%s pair=%s timeframe=%s class=%s", signal.strategy, signal.pair, signal.timeframe, signal.signal_class)
+            return
+        self.event_bus.publish(Event(event_type, payload))
 
     def calculate_volatility_context(self, prices: list[tuple[Any, ...]], entry: float, stop_loss: float, take_profit: float) -> dict[str, float]:
         atr = self.calculate_atr(prices)
@@ -381,6 +490,19 @@ class StrategyEngine:
         net_profit = float(economics["net_profit_tp1_eur"])
         net_loss = float(economics["net_loss_sl_eur"])
         return (float(probability) * net_profit) - ((1.0 - float(probability)) * net_loss)
+
+    def evaluate_historical_ev_gate(self, historical_expected_value: float | None, probability_context: dict[str, Any]) -> dict[str, Any]:
+        confidence = str(probability_context.get("confidence", "LOW"))
+        if historical_expected_value is None:
+            return {"block": False, "reason": "ev_unavailable"}
+        threshold = self.min_historical_ev_eur
+        if confidence == "LOW":
+            return {"block": False, "reason": "low_confidence_no_block"}
+        if confidence == "MEDIUM":
+            block = historical_expected_value < (threshold - self.historical_ev_tolerance_eur)
+            return {"block": block, "reason": "medium_confidence_below_tolerance" if block else "medium_confidence_allowed"}
+        block = historical_expected_value < threshold
+        return {"block": block, "reason": "high_confidence_negative" if block else "high_confidence_allowed"}
 
     def build_historical_outcomes(self, prices: list[tuple[Any, ...]], stop_distance: float, tp_distance: float) -> list[dict[str, float | str]]:
         chronological = list(reversed(prices))
@@ -463,6 +585,8 @@ class StrategyEngine:
         validation: dict[str, str],
         probability_context: dict[str, Any],
         regime_aligned: bool,
+        ev_decision: dict[str, Any] | None = None,
+        score: float = 0.0,
     ) -> str:
         """Classify rather than over-filter a positive-expectancy setup.
 
@@ -475,9 +599,11 @@ class StrategyEngine:
         net_profit = float(economics.get("net_profit_tp1_eur") or 0.0)
         sample_size = int(probability_context.get("sample_size") or 0)
         has_warnings = validation["status"] != "PASSED"
+        ev_reason = (ev_decision or {}).get("reason", "")
 
         if (
-            profit_factor >= 1.40
+            score >= 75.0
+            and profit_factor >= 1.20
             and expectancy > 0
             and net_profit >= self.min_tp1_net_profit_eur
             and net_rr >= self.min_net_rr
@@ -486,9 +612,61 @@ class StrategyEngine:
             and sample_size >= self.min_probability_sample_size
         ):
             return "A"
-        if profit_factor >= self.min_profit_factor and expectancy > 0 and net_profit > 0 and regime_aligned:
+        if (
+            score >= 55.0
+            and profit_factor >= self.min_profit_factor
+            and expectancy > 0
+            and net_profit >= self.min_tp1_net_profit_eur
+            and net_rr >= self.min_net_rr
+            and regime_aligned
+            and ev_reason != "low_confidence_no_block"
+        ):
             return "B"
         return "C"
+
+    def build_score_breakdown(
+        self,
+        best: dict[str, Any],
+        economics: dict[str, float | bool],
+        validation: dict[str, str],
+        probability_context: dict[str, Any],
+        regime_aligned: bool,
+        ev_decision: dict[str, Any],
+    ) -> dict[str, float]:
+        """Build a transparent probabilistic quality score instead of relying on one hard threshold."""
+        profit_factor = float(best.get("profit_factor") or 0.0)
+        expectancy = float(best.get("expectancy") or 0.0)
+        net_rr = float(economics.get("net_rr") or 0.0)
+        net_profit = float(economics.get("net_profit_tp1_eur") or 0.0)
+        sample_size = int(probability_context.get("sample_size") or 0)
+        win_rate = probability_context.get("win_rate")
+        confidence = str(probability_context.get("confidence") or "LOW")
+        historical_ev = self.calculate_historical_expected_value(economics, probability_context)
+        ev_reason = str(ev_decision.get("reason") or "")
+
+        sample_ratio = min(1.0, sample_size / max(1, self.min_probability_sample_size * 3))
+        return {
+            "profit_factor_score": min(15.0, max(0.0, (profit_factor - 1.0) * 30.0)),
+            "expectancy_score": min(10.0, max(0.0, expectancy * 50.0)),
+            "historical_ev_score": self.score_historical_ev(historical_ev, ev_reason),
+            "sample_confidence_score": {"LOW": 3.0, "MEDIUM": 7.0, "HIGH": 10.0}.get(confidence, 3.0),
+            "sample_size_score": round(sample_ratio * 8.0, 4),
+            "win_rate_score": round((float(win_rate) * 10.0) if win_rate is not None else 4.0, 4),
+            "regime_score": 10.0 if regime_aligned else 4.0,
+            "rr_score": min(10.0, max(0.0, net_rr / max(self.min_net_rr, 0.000001) * 10.0)),
+            "net_profit_score": min(8.0, max(0.0, net_profit / max(self.min_tp1_net_profit_eur, 0.000001) * 8.0)),
+            "validation_score": 10.0 if validation["status"] == "PASSED" else 5.0,
+            "tradability_score": 9.0 if economics.get("tradable") else 0.0,
+        }
+
+    def score_historical_ev(self, historical_ev: float | None, ev_reason: str) -> float:
+        if historical_ev is None:
+            return 5.0
+        if "negative" in ev_reason or "below" in ev_reason:
+            return 0.0
+        if historical_ev >= self.min_historical_ev_eur:
+            return 10.0
+        return 5.0
 
     def publish_daily_signal_report(self) -> bool:
         if not self.enable_daily_signal_report:
@@ -507,11 +685,20 @@ class StrategyEngine:
         recent_count = int(recent[0][0] or 0) if recent else 0
         if recent_count > 0:
             return False
+        cycle_summary = self._last_cycle_summary or {}
+        top_rejections = cycle_summary.get("top_rejections") or {}
+        diagnostics = cycle_summary.get("diagnostics") or {}
         message = (
             "📊 Daily signal report\n"
             f"Nessun segnale operativo nelle ultime {self.daily_signal_report_hours}h.\n"
-            f"Motivo: nessun setup appartenente alle classi abilitate {','.join(self.allowed_signal_classes)} "
-            "è stato prodotto dal motore live.\n"
+            f"Ultimo ciclo Strategy Engine: candidati={cycle_summary.get('candidates', 0)} "
+            f"A={cycle_summary.get('class_a', 0)} B={cycle_summary.get('class_b', 0)} "
+            f"C={cycle_summary.get('class_c', 0)} rejected={cycle_summary.get('rejected', 0)}.\n"
+            f"Miglior candidato: {cycle_summary.get('best_candidate', 'NONE')}.\n"
+            f"Top motivi di rifiuto: {json.dumps(top_rejections, sort_keys=True) if top_rejections else '{}'}.\n"
+            f"Diagnostica ricerca: {json.dumps(diagnostics, sort_keys=True) if diagnostics else '{}'}.\n"
+            f"Classi abilitate: operative={','.join(self.operative_signal_classes)} "
+            f"watchlist={','.join(self.watchlist_signal_classes)}.\n"
             "Questo non è un segnale di ingresso: evita operazioni forzate e valuta il sistema su molte operazioni."
         )
         self.event_bus.publish(Event(EventType.REPORT_READY, {"message": message}))
@@ -589,9 +776,9 @@ class StrategyEngine:
                 gross_profit_tp1_eur, gross_loss_sl_eur, estimated_buy_fee_eur, estimated_sell_fee_eur,
                 estimated_sell_fee_sl_eur, estimated_spread_cost_eur, estimated_slippage_cost_eur,
                 net_profit_tp1_eur, net_loss_sl_eur, gross_rr, net_rr,
-                signal_class, historical_expected_value_eur, score, probability, reasons, created_at
+                signal_class, historical_expected_value_eur, score, score_breakdown, probability, reasons, created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s)
             RETURNING id""",
             (
                 signal.strategy, signal.pair, signal.timeframe, signal.regime, signal.entry, signal.stop_loss, signal.take_profit,
@@ -599,7 +786,8 @@ class StrategyEngine:
                 signal.tp_notional_eur, signal.sl_notional_eur, signal.gross_profit_tp1_eur, signal.gross_loss_sl_eur,
                 signal.estimated_buy_fee_eur, signal.estimated_sell_fee_eur, signal.estimated_sell_fee_sl_eur,
                 signal.estimated_spread_cost_eur, signal.estimated_slippage_cost_eur, signal.net_profit_tp1_eur,
-                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.signal_class, signal.historical_expected_value_eur, signal.score, signal.probability,
+                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.signal_class, signal.historical_expected_value_eur, signal.score,
+                json.dumps(signal.score_breakdown), signal.probability,
                 json.dumps(signal.reasons), signal.signal_time,
             ),
         )
