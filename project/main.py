@@ -18,7 +18,7 @@ from project.position_monitor.service import PositionMonitor
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
 from project.scheduler import PlatformScheduler
-from project.strategy_engine.probabilistic_service import ProbabilisticStrategyEngine
+from project.strategy_engine.economic_guard import EconomicallyGuardedProbabilisticStrategyEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 
@@ -91,8 +91,8 @@ def build_strategy_engine(
     research_repository: ResearchRepository,
     decision_engine: DecisionEngine,
     event_bus: EventBus,
-) -> ProbabilisticStrategyEngine:
-    return ProbabilisticStrategyEngine(
+) -> EconomicallyGuardedProbabilisticStrategyEngine:
+    return EconomicallyGuardedProbabilisticStrategyEngine(
         research_repository,
         decision_engine,
         event_bus,
@@ -195,7 +195,7 @@ def main() -> None:
         logger.info("BOOTSTRAP TEST SKIPPED")
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-16 PROBABILISTIC SIGNAL BUILD")
+    logger.info("PROJECT MAIN VERSION: 2026-07-16 PROBABILISTIC ECONOMIC GUARD BUILD")
     logger.info("======================================")
     event_bus = EventBus()
     log_storage_startup(settings, logger)
@@ -214,6 +214,11 @@ def main() -> None:
         settings.min_live_setup_score,
         settings.min_operative_signal_score,
         settings.min_watchlist_signal_score,
+    )
+    logger.info(
+        "Economic signal guard | min_net_profit=%.4f min_net_rr=%.4f",
+        settings.min_tp1_net_profit_eur,
+        settings.min_net_rr,
     )
     logger.info("Checkpoint A")
     try:
