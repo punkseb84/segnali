@@ -40,7 +40,8 @@ class PositionMonitor:
     def fetch_open_signals(self) -> list[dict[str, Any]]:
         rows = self.postgres.fetch_all(
             """SELECT id, strategy, pair, timeframe, regime, entry, stop_loss, take_profit,
-                      score, probability, signal_class, created_at
+                      score, probability, signal_class,
+                      net_profit_tp1_eur, net_loss_sl_eur, net_rr, created_at
             FROM signals.generated_signals
             WHERE status IN ('NEW', 'OPEN')
               AND signal_class IN ('A', 'B')
@@ -50,9 +51,27 @@ class PositionMonitor:
         )
         signals: list[dict[str, Any]] = []
         for row in rows:
-            # Older tests and transitional callers may still provide the previous
-            # 11-column projection without signal_class. Treat those rows as B.
-            has_signal_class = len(row) >= 12
+            # Backward compatibility for older tests/transitional projections:
+            # 11 columns: no class/economics; 12 columns: class but no economics.
+            if len(row) >= 15:
+                signal_class = row[10]
+                net_profit = float(row[11]) if row[11] is not None else None
+                net_loss = float(row[12]) if row[12] is not None else None
+                net_rr = float(row[13]) if row[13] is not None else None
+                created_at = row[14]
+            elif len(row) >= 12:
+                signal_class = row[10]
+                net_profit = None
+                net_loss = None
+                net_rr = None
+                created_at = row[11]
+            else:
+                signal_class = "B"
+                net_profit = None
+                net_loss = None
+                net_rr = None
+                created_at = row[10]
+
             signals.append(
                 {
                     "id": row[0],
@@ -65,8 +84,11 @@ class PositionMonitor:
                     "take_profit": float(row[7]),
                     "score": float(row[8]),
                     "probability": float(row[9]) if row[9] is not None else None,
-                    "signal_class": row[10] if has_signal_class else "B",
-                    "created_at": row[11] if has_signal_class else row[10],
+                    "signal_class": signal_class,
+                    "net_profit_tp1_eur": net_profit,
+                    "net_loss_sl_eur": net_loss,
+                    "net_rr": net_rr,
+                    "created_at": created_at,
                 }
             )
         return signals
