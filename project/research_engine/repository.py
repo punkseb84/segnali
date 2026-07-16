@@ -116,7 +116,7 @@ class ResearchRepository:
         )
 
 
-    def reset_stale_results(self, required_validation_status: str = "LIVE_ALIGNED_BACKTEST") -> int:
+    def reset_stale_results(self, required_validation_status: str = "FILTERED_LIVE_ALIGNED_BACKTEST") -> int:
         rows = self.client.fetch_all(
             """UPDATE research.strategy_combinations AS combination
             SET status = 'PENDING', error_message = NULL, updated_at = NOW()
@@ -156,15 +156,15 @@ class ResearchRepository:
         rows = self.client.fetch_all(
             f"""WITH best_per_market AS (
                 SELECT DISTINCT ON (strategy, pair, timeframe)
-                    strategy, pair, timeframe, profit_factor, expectancy, net_profit
+                    strategy, pair, timeframe, profit_factor, expectancy, net_profit, parameters, validation
                 FROM research.strategy_results
                 WHERE strategy <> 'BOOTSTRAP_TEST'
-                  AND COALESCE(validation->>'status', '') = 'LIVE_ALIGNED_BACKTEST'
+                  AND COALESCE(validation->>'status', '') = 'FILTERED_LIVE_ALIGNED_BACKTEST'
                   AND (profit_factor > 1.0 OR expectancy > 0)
                   {timeframe_filter}
                 ORDER BY strategy, pair, timeframe, profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             )
-            SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit
+            SELECT strategy, pair, timeframe, profit_factor, expectancy, net_profit, parameters, validation
             FROM best_per_market
             ORDER BY profit_factor DESC NULLS LAST, expectancy DESC NULLS LAST, net_profit DESC NULLS LAST
             LIMIT %s""",
@@ -178,9 +178,59 @@ class ResearchRepository:
                 "profit_factor": float(row[3] or 0),
                 "expectancy": float(row[4] or 0),
                 "net_profit": float(row[5] or 0),
+                "parameters": dict(row[6] or {}) if isinstance(row[6], dict) else json.loads(row[6] or "{}"),
+                "validation": dict(row[7] or {}) if isinstance(row[7], dict) else json.loads(row[7] or "{}"),
             }
             for row in rows
         ]
+
+
+    def fetch_candidate_diagnostics(self, timeframe: str | None = None) -> dict[str, Any]:
+        timeframe_filter = "WHERE timeframe = %s" if timeframe else ""
+        combination_params: tuple[Any, ...] = (timeframe,) if timeframe else ()
+        combination_rows = self.client.fetch_all(
+            f"""SELECT
+                    COUNT(*) AS total_combinations,
+                    COUNT(*) FILTER (WHERE status = 'DONE') AS done_combinations,
+                    COUNT(*) FILTER (WHERE status = 'PENDING') AS pending_combinations,
+                    COUNT(*) FILTER (WHERE status = 'FAILED_RETRYABLE') AS retryable_combinations,
+                    COUNT(*) FILTER (WHERE status = 'RUNNING') AS running_combinations
+                FROM research.strategy_combinations
+                {timeframe_filter}""",
+            combination_params,
+        )
+        result_filter = "AND timeframe = %s" if timeframe else ""
+        result_params: tuple[Any, ...] = (timeframe,) if timeframe else ()
+        result_rows = self.client.fetch_all(
+            f"""SELECT
+                    COUNT(*) AS total_results,
+                    COUNT(*) FILTER (WHERE COALESCE(validation->>'status', '') = 'FILTERED_LIVE_ALIGNED_BACKTEST') AS filtered_live_aligned_results,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(validation->>'status', '') = 'FILTERED_LIVE_ALIGNED_BACKTEST'
+                          AND (profit_factor > 1.0 OR expectancy > 0)
+                    ) AS edge_results,
+                    MAX(profit_factor) FILTER (WHERE COALESCE(validation->>'status', '') = 'FILTERED_LIVE_ALIGNED_BACKTEST') AS best_live_profit_factor,
+                    MAX(expectancy) FILTER (WHERE COALESCE(validation->>'status', '') = 'FILTERED_LIVE_ALIGNED_BACKTEST') AS best_live_expectancy
+                FROM research.strategy_results
+                WHERE strategy <> 'BOOTSTRAP_TEST'
+                {result_filter}""",
+            result_params,
+        )
+        combination = combination_rows[0] if combination_rows else (0, 0, 0, 0, 0)
+        result = result_rows[0] if result_rows else (0, 0, 0, None, None)
+        return {
+            "timeframe": timeframe or "ANY",
+            "total_combinations": int(combination[0] or 0),
+            "done_combinations": int(combination[1] or 0),
+            "pending_combinations": int(combination[2] or 0),
+            "retryable_combinations": int(combination[3] or 0),
+            "running_combinations": int(combination[4] or 0),
+            "total_results": int(result[0] or 0),
+            "filtered_live_aligned_results": int(result[1] or 0),
+            "edge_results": int(result[2] or 0),
+            "best_live_profit_factor": float(result[3]) if result[3] is not None else None,
+            "best_live_expectancy": float(result[4]) if result[4] is not None else None,
+        }
 
     def save_result(self, combination: ResearchCombination, metrics: dict[str, Any], batch_id: int) -> None:
         self.client.execute(

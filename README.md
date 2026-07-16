@@ -852,17 +852,29 @@ In `RAILWAY_LIGHT` il default `RAILWAY_LIGHT_RESEARCH_SECONDS` è ora 60 secondi
 
 Nota: i record diagnostici `BOOTSTRAP_TEST` sono esclusi dal log `RESEARCH BEST`, così il miglior risultato provvisorio mostra solo risultati research reali e non righe create per verificare PostgreSQL.
 
+
+### Filtri logici nel Research Engine progressivo
+
+Il Research Engine progressivo applica ora i parametri della combinazione alla generazione dei trade simulati: range RSI, soglia ADX, volume relativo minimo, regime di mercato e regola specifica della strategia concorrono a costruire la maschera dei segnali prima del calcolo TP/SL. Questo evita che centinaia di migliaia di combinazioni nominalmente diverse producano lo stesso backtest perché entrano su ogni candela disponibile. La validazione usa lo status `FILTERED_LIVE_ALIGNED_BACKTEST` e salva anche `filters_applied`, `strategy_filter` e il numero di `signals` candidati prima dei trade effettivamente simulati.
+
 ### Backtest research allineato al motore live
 
 Il Research Engine progressivo non classifica più le combinazioni con un semplice rendimento close-to-close. Ogni combinazione viene simulata come una serie di trade LONG con stop tecnico, take profit tecnico, orizzonte temporale configurabile, risoluzione prudenziale quando TP e SL sono colpiti nella stessa candela, capitale per trade e costi Binance stimati.
 
 Questo rende `profit_factor`, `expectancy`, `net_profit`, `average_win` e `average_loss` confrontabili con i valori che lo Strategy Engine usa prima dell'invio Telegram: un candidato research positivo deve quindi essere positivo dopo fee, spread e slippage, non solo positivo sul movimento grezzo del prezzo.
 
-Quando viene introdotta una nuova logica di backtest, le vecchie combinazioni `DONE` salvate con validazioni precedenti vengono rimesse in `PENDING` una sola volta e i candidati live leggono solo risultati `LIVE_ALIGNED_BACKTEST`. In questo modo Railway non continua a proporre sempre gli stessi valori storici stale dopo un deploy.
+Quando viene introdotta una nuova logica di backtest, le vecchie combinazioni `DONE` salvate con validazioni precedenti vengono rimesse in `PENDING` una sola volta e i candidati live leggono solo risultati `FILTERED_LIVE_ALIGNED_BACKTEST`. In questo modo Railway non continua a proporre sempre gli stessi valori storici stale dopo un deploy.
 
 I candidati con `profit_factor <= 1.0` e `expectancy <= 0` non vengono più proposti allo Strategy Engine: restano salvati per analisi research, ma non generano log live ripetitivi perché non hanno edge statistico minimo.
 
 I batch pending non seguono più il solo ordine crescente degli ID: vengono distribuiti per bucket tra strategia, pair e timeframe. In questo modo i primi batch non testano migliaia di varianti della stessa strategia/pair prima di passare alle altre, ma esplorano più rapidamente strategie diverse.
+
+
+### Configurazione Railway modulare consigliata
+
+Il runtime effettivo Railway avvia `python -m project.main`; i default modulari ora usano 20 coppie Kraken, raccolgono `5m,15m,1h,4h` e generano segnali operativi su `15m`. Le soglie iniziali sono meno restrittive per intraday: `MIN_SIGNAL_PROFIT_FACTOR=1.05`, `MIN_TP1_NET_PROFIT_EUR=0.30`, `MIN_NET_RR=1.05`. Le classi operative sono separate dalla watchlist diagnostica: `OPERATIVE_SIGNAL_CLASSES=A,B`, `WATCHLIST_SIGNAL_CLASSES=C`, `ENABLE_WATCHLIST_ALERTS=true`. L'EV storico usa `MIN_HISTORICAL_EV_EUR` e `HISTORICAL_EV_TOLERANCE_EUR` per evitare blocchi su valori marginali con confidenza non alta.
+
+Lo Strategy Engine continua a valutare i candidati anche dopo aver trovato una classe C: pubblica il primo candidato operativo A/B valido se presente; solo se non trova A/B pubblica la migliore watchlist C. Ogni ciclo emette `STRATEGY_CYCLE_SUMMARY` con candidati valutati, conteggio classi A/B/C, rifiuti aggregati e miglior candidato.
 
 ## Operational engines enabled
 
@@ -985,3 +997,9 @@ Il default `1.10` ora separa principalmente Classe B da Classe C. Il blocco hard
 Quando il miglior candidato viene scartato dai controlli live, lo Strategy Engine non resta più bloccato su quello stesso risultato a ogni minuto: valuta una lista dei migliori candidati `1h` e passa al successivo finché trova un setup valido oppure esaurisce la lista.
 
 I candidati vengono deduplicati per `strategy/pair/timeframe`: se la ricerca contiene molte combinazioni diverse della stessa strategia sullo stesso mercato, il live engine valuta solo la migliore di quel gruppo. Questo evita log ripetuti con valori identici quando più righe research producono lo stesso setup operativo.
+
+`STRATEGY_CANDIDATE_LIMIT` controlla quanti candidati research deduplicati lo Strategy Engine valuta a ogni ciclo live. Il default è `50`: se i primi candidati vengono scartati per costi netti, expected value storico negativo, classe non abilitata o duplicati, il motore prova i candidati successivi prima di concludere che non ci sono segnali operativi. Nei log finali vengono riportati `candidates_evaluated`, `candidate_limit` e `rejection_summary` per distinguere assenza di candidati research da candidati presenti ma non tradabili, includendo il conteggio aggregato dei motivi di scarto del ciclo live.
+
+Quando non esiste alcun candidato research eleggibile per il timeframe operativo, il log `STRATEGY no research candidate available` include anche `diagnostics` con combinazioni totali, combinazioni completate/pendenti, risultati totali, risultati `FILTERED_LIVE_ALIGNED_BACKTEST`, risultati con edge minimo (`profit_factor > 1.0 OR expectancy > 0`) e migliori valori live di profit factor/expectancy. Questo consente di capire se il problema è assenza di risultati, validazione stale/non allineata, zero edge positivo o timeframe operativo senza candidati.
+
+I candidati research includono anche `parameters` e `validation`: lo Strategy Engine usa `reward_risk` e `atr_multiplier` della combinazione selezionata per costruire stop e take profit live. Questo mantiene coerente il setup operativo con il backtest filtrato, invece di ricostruire il trade con distanze generiche non legate alla combinazione che ha prodotto il candidato.
