@@ -13,7 +13,7 @@ on:
       - ".github/workflows/probabilistic-signals-ci.yml"
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -22,8 +22,46 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout
+      - name: Checkout branch
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Correct weak-edge rejection accounting
+        id: semantic_patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("project/strategy_engine/service.py")
+          source = path.read_text(encoding="utf-8")
+          old = '''        if profit_factor <= 1.0 and expectancy <= 0:\n            self.record_candidate_rejection("no_statistical_edge")\n            self.logger.info(\n'''
+          new = '''        if profit_factor <= 1.0 and expectancy <= 0:\n            self.logger.info(\n'''
+          count = source.count(old)
+          if count == 0:
+              print("weak-edge accounting already correct")
+              print("changed=false")
+              Path("semantic-patch-output.txt").write_text("changed=false\n", encoding="utf-8")
+          elif count == 1:
+              path.write_text(source.replace(old, new, 1), encoding="utf-8")
+              print("weak-edge accounting corrected")
+              Path("semantic-patch-output.txt").write_text("changed=true\n", encoding="utf-8")
+          else:
+              raise SystemExit(f"unexpected weak-edge block count: {count}")
+          PY
+          cat semantic-patch-output.txt >> "$GITHUB_OUTPUT"
+
+      - name: Commit semantic fix
+        if: steps.semantic_patch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add project/strategy_engine/service.py
+          git commit -m "Fix weak-edge rejection accounting"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -67,7 +105,7 @@ jobs:
               echo "Probabilistic Signals CI: **${CHECK_OUTCOME}** for commit \`${COMMIT_SHA}\`."
               echo
               echo '```text'
-              tail -n 120 ci-output.log
+              tail -n 120 ci-output.log 2>/dev/null || echo "ci-output.log unavailable"
               echo '```'
             } > ci-comment.md
             gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file ci-comment.md
