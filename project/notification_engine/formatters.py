@@ -300,7 +300,7 @@ def format_watchlist_message(payload: dict[str, Any]) -> str:
         f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
         f"Strategia: <b>{_escape(payload.get('strategy'))}</b>\n"
         f"Regime: <b>{_escape(payload.get('regime'))}</b>\n\n"
-        "👀 <b>SETUP NON ANCORA OPERATIVO</b>\n\n"
+        "👀 <b>SETUP NON ANCORA OPERATIVO · NON È UN SEGNALE DI INGRESSO</b>\n\n"
         "💰 <b>Livelli teorici</b>\n"
         f"• Entry: <code>{_price(payload.get('entry'))}</code>\n"
         f"• Stop: <code>{_price(payload.get('stop_loss'))}</code>\n"
