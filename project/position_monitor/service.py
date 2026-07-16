@@ -11,8 +11,9 @@ from project.shared.logging import get_module_logger
 class PositionMonitor:
     """Monitor only operative A/B signals and publish TP/SL events.
 
-    Watchlist C rows are observations, not trades. They must never be closed as TP or
-    SL and must not generate position-outcome notifications.
+    The entry candle is evaluated with its updated close only.  Its high/low may include
+    price action that happened before the Telegram signal, so using the full range could
+    create false outcomes.  Later candles use normal high/low barrier detection.
     """
 
     def __init__(
@@ -41,7 +42,8 @@ class PositionMonitor:
         rows = self.postgres.fetch_all(
             """SELECT id, strategy, pair, timeframe, regime, entry, stop_loss, take_profit,
                       score, probability, signal_class,
-                      net_profit_tp1_eur, net_loss_sl_eur, net_rr, created_at
+                      net_profit_tp1_eur, net_loss_sl_eur, net_rr,
+                      reference_candle_time, created_at
             FROM signals.generated_signals
             WHERE status IN ('NEW', 'OPEN')
               AND signal_class IN ('A', 'B')
@@ -51,25 +53,35 @@ class PositionMonitor:
         )
         signals: list[dict[str, Any]] = []
         for row in rows:
-            # Backward compatibility for older tests/transitional projections:
-            # 11 columns: no class/economics; 12 columns: class but no economics.
-            if len(row) >= 15:
+            # Backward compatibility for old tests and rows created before the newer
+            # projections: 11=no class/economics; 12=class; 15=economics no reference.
+            if len(row) >= 16:
                 signal_class = row[10]
                 net_profit = float(row[11]) if row[11] is not None else None
                 net_loss = float(row[12]) if row[12] is not None else None
                 net_rr = float(row[13]) if row[13] is not None else None
+                reference_candle_time = row[14]
+                created_at = row[15]
+            elif len(row) >= 15:
+                signal_class = row[10]
+                net_profit = float(row[11]) if row[11] is not None else None
+                net_loss = float(row[12]) if row[12] is not None else None
+                net_rr = float(row[13]) if row[13] is not None else None
+                reference_candle_time = None
                 created_at = row[14]
             elif len(row) >= 12:
                 signal_class = row[10]
                 net_profit = None
                 net_loss = None
                 net_rr = None
+                reference_candle_time = None
                 created_at = row[11]
             else:
                 signal_class = "B"
                 net_profit = None
                 net_loss = None
                 net_rr = None
+                reference_candle_time = None
                 created_at = row[10]
 
             signals.append(
@@ -88,39 +100,79 @@ class PositionMonitor:
                     "net_profit_tp1_eur": net_profit,
                     "net_loss_sl_eur": net_loss,
                     "net_rr": net_rr,
+                    "reference_candle_time": reference_candle_time,
                     "created_at": created_at,
                 }
             )
         return signals
 
     def check_signal(self, signal: dict[str, Any]) -> bool:
+        reference_time = signal.get("reference_candle_time")
+        start_time = reference_time or signal["created_at"]
+        comparison = ">=" if reference_time is not None else ">"
         candles = self.postgres.fetch_all(
-            """SELECT timestamp, high, low, close
+            f"""SELECT timestamp, high, low, close
             FROM market_data.ohlc
-            WHERE pair = %s AND timeframe = %s AND timestamp > %s
+            WHERE pair = %s AND timeframe = %s AND timestamp {comparison} %s
             ORDER BY timestamp ASC
             LIMIT 200""",
-            (signal["pair"], signal["timeframe"], signal["created_at"]),
+            (signal["pair"], signal["timeframe"], start_time),
         )
         for timestamp, high, low, close in candles:
             high_f = float(high)
             low_f = float(low)
             close_f = float(close)
-            outcome = self.resolve_candle_outcome(
-                "LONG",
-                high_f,
-                low_f,
-                signal["take_profit"],
-                signal["stop_loss"],
-                self.ambiguous_candle_mode,
-            )
+            entry_candle = reference_time is not None and timestamp == reference_time
+            if entry_candle:
+                outcome = self.resolve_close_outcome(
+                    "LONG", close_f, signal["take_profit"], signal["stop_loss"]
+                )
+                resolution = "ENTRY_CANDLE_CLOSE"
+                ambiguous = False
+            else:
+                outcome = self.resolve_candle_outcome(
+                    "LONG",
+                    high_f,
+                    low_f,
+                    signal["take_profit"],
+                    signal["stop_loss"],
+                    self.ambiguous_candle_mode,
+                )
+                resolution = "FULL_CANDLE_RANGE"
+                ambiguous = high_f >= signal["take_profit"] and low_f <= signal["stop_loss"]
             if outcome is None:
                 continue
             outcome_price = signal["stop_loss"] if outcome == "STOP_LOSS" else signal["take_profit"]
-            ambiguous = high_f >= signal["take_profit"] and low_f <= signal["stop_loss"]
-            self.close_signal(signal, outcome, outcome_price, timestamp, close_f, ambiguous=ambiguous)
+            self.close_signal(
+                signal,
+                outcome,
+                outcome_price,
+                timestamp,
+                close_f,
+                ambiguous=ambiguous,
+                resolution=resolution,
+            )
             return True
         return False
+
+    @staticmethod
+    def resolve_close_outcome(
+        direction: str,
+        close: float,
+        take_profit: float,
+        stop_loss: float,
+    ) -> str | None:
+        if direction.upper() == "SHORT":
+            if close <= take_profit:
+                return "TARGET_HIT"
+            if close >= stop_loss:
+                return "STOP_LOSS"
+            return None
+        if close >= take_profit:
+            return "TARGET_HIT"
+        if close <= stop_loss:
+            return "STOP_LOSS"
+        return None
 
     @staticmethod
     def resolve_candle_outcome(
@@ -156,12 +208,28 @@ class PositionMonitor:
         timestamp: Any,
         close_price: float,
         ambiguous: bool = False,
+        resolution: str = "FULL_CANDLE_RANGE",
     ) -> None:
         self.postgres.execute(
             """UPDATE signals.generated_signals
-            SET status = %s
-            WHERE id = %s""",
-            (outcome, signal["id"]),
+            SET status = %s,
+                outcome_price = %s,
+                outcome_close_price = %s,
+                outcome_candle_time = %s,
+                closed_at = NOW(),
+                outcome_ambiguous = %s,
+                outcome_resolution = %s
+            WHERE id = %s
+              AND status IN ('NEW', 'OPEN')""",
+            (
+                outcome,
+                outcome_price,
+                close_price,
+                timestamp,
+                ambiguous,
+                resolution,
+                signal["id"],
+            ),
         )
         event_type = EventType.STOP_LOSS if outcome == "STOP_LOSS" else EventType.TARGET_HIT
         payload = {
@@ -172,15 +240,20 @@ class PositionMonitor:
             "close_price": close_price,
             "closed_at": str(timestamp),
             "ambiguous": ambiguous,
+            "outcome_resolution": resolution,
         }
         self.logger.info(
-            "POSITION CLOSED id=%s class=%s outcome=%s pair=%s timeframe=%s outcome_price=%.6f ambiguous=%s",
+            "POSITION CLOSED id=%s class=%s outcome=%s pair=%s timeframe=%s "
+            "outcome_price=%.6f close_price=%.6f candle=%s resolution=%s ambiguous=%s",
             signal["id"],
             signal.get("signal_class", "UNKNOWN"),
             outcome,
             signal["pair"],
             signal["timeframe"],
             outcome_price,
+            close_price,
+            timestamp,
+            resolution,
             ambiguous,
         )
         self.event_bus.publish(Event(event_type, payload))
