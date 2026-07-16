@@ -12,8 +12,8 @@ class SynchronizedPlatformScheduler(PlatformScheduler):
     """Run decision and strategy after the operational collector finishes.
 
     The base scheduler starts the collector in a background thread and then immediately
-    evaluates the strategy on the previous snapshot.  That race can publish stale and
-    repeated entries.  In Railway Light the recurring decision/strategy jobs are removed
+    evaluates the strategy on the previous snapshot. That race can publish stale and
+    repeated entries. In Railway Light the recurring decision/strategy jobs are removed
     and triggered after the 15m batch has completed.
     """
 
@@ -48,6 +48,27 @@ class SynchronizedPlatformScheduler(PlatformScheduler):
             "Operational cycle synchronized after collector cancelled_independent_jobs=%s",
             cancelled,
         )
+
+        # A new versioned robust research set would otherwise wait up to one hour before
+        # processing its first batch. Start exactly one background batch on deployment;
+        # the normal lock prevents overlap with RUN_RESEARCH_ON_STARTUP or another batch.
+        if self.research_engine is not None and not self.settings.run_research_on_startup:
+            repository = getattr(self.research_engine, "repository", None)
+            diagnostics = None
+            if repository is not None and hasattr(repository, "fetch_candidate_diagnostics"):
+                try:
+                    diagnostics = repository.fetch_candidate_diagnostics(
+                        timeframe=self.settings.operational_timeframe
+                    )
+                except Exception:
+                    self.logger.exception("Robust research startup diagnostics failed")
+            if diagnostics and diagnostics.get("pending_combinations", 0) > 0:
+                started = self.start_research_batch()
+                self.logger.info(
+                    "ROBUST_RESEARCH startup_batch_started=%s diagnostics=%s",
+                    started,
+                    diagnostics,
+                )
 
     def _run_data_collector_sync(self, timeframes: list[str]) -> None:
         try:
