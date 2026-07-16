@@ -27,9 +27,26 @@ CREATE INDEX IF NOT EXISTS idx_generated_signals_telegram_message
     WHERE telegram_message_id IS NOT NULL;
 """
 
+SIGNAL_LIFECYCLE_INTEGRITY_MIGRATION = """
+ALTER TABLE signals.generated_signals
+    ADD COLUMN IF NOT EXISTS outcome_price NUMERIC,
+    ADD COLUMN IF NOT EXISTS outcome_close_price NUMERIC,
+    ADD COLUMN IF NOT EXISTS outcome_candle_time TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS outcome_ambiguous BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS outcome_resolution TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_generated_signals_pair_lifecycle
+    ON signals.generated_signals(pair, timeframe, signal_class, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_generated_signals_reference_candle
+    ON signals.generated_signals(pair, timeframe, reference_candle_time, signal_class);
+"""
+
 
 def run_migrations(client: PostgresClient) -> None:
     for statement in ALL_SCHEMAS:
         client.execute(statement)
     client.execute(WATCHLIST_ISOLATION_MIGRATION)
     client.execute(TELEGRAM_MESSAGE_REFERENCE_MIGRATION)
+    client.execute(SIGNAL_LIFECYCLE_INTEGRITY_MIGRATION)
