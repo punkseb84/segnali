@@ -20,6 +20,9 @@ def build_engine() -> PairRegimeEconomicsFirstStrategyEngine:
         DummyDecision(),
         operational_timeframe="15m",
         min_research_trades=0,
+        min_watchlist_net_profit_eur=0.20,
+        min_watchlist_net_rr=0.85,
+        min_watchlist_live_score=45.0,
         allowed_signal_classes=["A", "B", "C"],
         operative_signal_classes=["A", "B"],
         watchlist_signal_classes=["C"],
@@ -85,3 +88,21 @@ def test_unknown_pair_regime_falls_back_to_global_decision() -> None:
 
     assert engine._pair_regime(candidate, decision) == "COMPRESSION"
     assert engine._is_pair_regime_aligned(candidate, decision) is True
+
+
+def test_near_b_watchlist_has_priority_over_higher_score_but_weak_economics() -> None:
+    engine = build_engine()
+    high_score_weak = SimpleNamespace(
+        net_profit_tp1_eur=0.05,
+        net_rr=0.20,
+        score=78.0,
+        score_breakdown={"live_setup_raw": 80.0, "regime_aligned_flag": 1.0},
+    )
+    lower_score_near_b = SimpleNamespace(
+        net_profit_tp1_eur=0.25,
+        net_rr=0.90,
+        score=64.0,
+        score_breakdown={"live_setup_raw": 55.0, "regime_aligned_flag": 1.0},
+    )
+
+    assert engine._watchlist_priority(lower_score_near_b) > engine._watchlist_priority(high_score_weak)
