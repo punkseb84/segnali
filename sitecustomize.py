@@ -12,6 +12,6 @@ for variable in (
     "NUMEXPR_NUM_THREADS",
     "VECLIB_MAXIMUM_THREADS",
 ):
-    os.environ.setdefault(variable, "1")
+    os.environ[variable] = "1"
 
-os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ["MALLOC_ARENA_MAX"] = "2"
