@@ -12,6 +12,10 @@ on:
       - "requirements.txt"
       - ".github/workflows/probabilistic-signals-ci.yml"
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -41,3 +45,16 @@ jobs:
           tests/project/test_probabilistic_strategy_engine.py
           tests/project/test_scheduler_operational_priority.py
           tests/project/test_operational_engines.py
+
+      - name: Report result on pull request
+        if: always() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          PR_NUMBER=$(gh api "/repos/${REPOSITORY}/commits/${COMMIT_SHA}/pulls" --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "Probabilistic Signals CI: **${JOB_STATUS}** for commit \`${COMMIT_SHA}\`. Checks: compileall + probabilistic engine tests + scheduler priority tests + operational engine tests."
+          fi
