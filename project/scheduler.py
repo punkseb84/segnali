@@ -34,7 +34,15 @@ class PositionMonitorProtocol(Protocol):
 
 
 class PlatformScheduler:
-    def __init__(self, settings: PlatformSettings, data_collector: DataCollectorService | None = None, research_engine: ResearchEngineProtocol | None = None, decision_engine: DecisionEngineProtocol | None = None, strategy_engine: StrategyEngineProtocol | None = None, position_monitor: PositionMonitorProtocol | None = None) -> None:
+    def __init__(
+        self,
+        settings: PlatformSettings,
+        data_collector: DataCollectorService | None = None,
+        research_engine: ResearchEngineProtocol | None = None,
+        decision_engine: DecisionEngineProtocol | None = None,
+        strategy_engine: StrategyEngineProtocol | None = None,
+        position_monitor: PositionMonitorProtocol | None = None,
+    ) -> None:
         self.settings = settings
         self.data_collector = data_collector
         self.research_engine = research_engine
@@ -42,53 +50,98 @@ class PlatformScheduler:
         self.strategy_engine = strategy_engine
         self.position_monitor = position_monitor
         self.logger = get_module_logger("system")
+        self._collector_lock = threading.Lock()
+        self._collector_thread: threading.Thread | None = None
         self._research_lock = threading.Lock()
         self._research_thread: threading.Thread | None = None
 
     def configure(self) -> None:
-        """Configure operational jobs before starting non-blocking research.
+        """Start the operational path before long collector/research work.
 
-        The previous order executed a research batch synchronously before the first
-        Decision/Strategy cycle. A long research batch could therefore prevent the
-        bot from generating and delivering signals for most of its runtime.
+        Only the operational timeframe is refreshed synchronously at startup. The
+        remaining collector timeframes and all research work run in background so
+        Strategy Engine, Position Monitor and Telegram delivery are not starved.
         """
+        startup_remaining_timeframes: list[str] = []
         if self.settings.enable_data_collector and self.data_collector is not None:
             schedule.every(self.settings.scheduler_collector_seconds).seconds.do(
-                self.data_collector.sync_all_pairs,
-                self.settings.collector_pairs,
-                self.settings.collector_timeframes,
+                self.start_data_collector_sync
             )
-            self.logger.info("Data Collector scheduled every %ss", self.settings.scheduler_collector_seconds)
+            self.logger.info(
+                "Data Collector scheduled every %ss in background",
+                self.settings.scheduler_collector_seconds,
+            )
             if self.settings.run_data_collector_on_startup:
-                self.logger.info("Data Collector startup sync requested")
-                self.data_collector.sync_all_pairs(self.settings.collector_pairs, self.settings.collector_timeframes)
+                operational_timeframe = self.settings.operational_timeframe
+                self.logger.info(
+                    "Data Collector startup operational sync requested timeframe=%s",
+                    operational_timeframe,
+                )
+                self.data_collector.sync_all_pairs(
+                    self.settings.collector_pairs,
+                    [operational_timeframe],
+                )
+                startup_remaining_timeframes = [
+                    timeframe
+                    for timeframe in self.settings.collector_timeframes
+                    if timeframe != operational_timeframe
+                ]
 
-        # The live operational path must be ready before research is allowed to
-        # consume CPU. Notification subscriptions are already installed in main.
+        # Notification subscriptions are already installed in main.
         if self.settings.enable_decision_engine and self.decision_engine is not None:
-            schedule.every(self.settings.scheduler_decision_seconds).seconds.do(self.decision_engine.evaluate_market)
-            self.logger.info("Decision Engine scheduled every %ss", self.settings.scheduler_decision_seconds)
+            schedule.every(self.settings.scheduler_decision_seconds).seconds.do(
+                self.decision_engine.evaluate_market
+            )
+            self.logger.info(
+                "Decision Engine scheduled every %ss",
+                self.settings.scheduler_decision_seconds,
+            )
             self.decision_engine.evaluate_market()
 
         if self.settings.enable_strategy_engine and self.strategy_engine is not None:
-            schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(self.strategy_engine.evaluate)
-            schedule.every(1).hours.do(self.strategy_engine.publish_daily_signal_report)
-            self.logger.info("Strategy Engine scheduled every %ss", self.settings.scheduler_strategy_seconds)
+            schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(
+                self.strategy_engine.evaluate
+            )
+            schedule.every(1).hours.do(
+                self.strategy_engine.publish_daily_signal_report
+            )
+            self.logger.info(
+                "Strategy Engine scheduled every %ss",
+                self.settings.scheduler_strategy_seconds,
+            )
             self.strategy_engine.evaluate()
             self.strategy_engine.publish_daily_signal_report()
 
         if self.settings.enable_position_monitor and self.position_monitor is not None:
-            schedule.every(self.settings.scheduler_position_monitor_seconds).seconds.do(self.position_monitor.monitor_open_signals)
-            self.logger.info("Position Monitor scheduled every %ss", self.settings.scheduler_position_monitor_seconds)
+            schedule.every(self.settings.scheduler_position_monitor_seconds).seconds.do(
+                self.position_monitor.monitor_open_signals
+            )
+            self.logger.info(
+                "Position Monitor scheduled every %ss",
+                self.settings.scheduler_position_monitor_seconds,
+            )
             self.position_monitor.monitor_open_signals()
 
+        if startup_remaining_timeframes:
+            self.logger.info(
+                "Data Collector startup background sync requested timeframes=%s",
+                startup_remaining_timeframes,
+            )
+            self.start_data_collector_sync(startup_remaining_timeframes)
+
         if self.settings.enable_research_engine and self.research_engine is not None:
-            self.research_engine.seed_combinations(self.settings.collector_pairs, self.settings.collector_timeframes)
+            self.research_engine.seed_combinations(
+                self.settings.collector_pairs,
+                self.settings.collector_timeframes,
+            )
             if self.settings.run_mode == "RESEARCH":
                 interval = self.settings.research_sleep_between_batches_seconds
             elif self.settings.run_mode == "RAILWAY_LIGHT":
                 requested_interval = self.settings.railway_light_research_seconds
-                interval = max(MIN_RAILWAY_LIGHT_RESEARCH_SECONDS, requested_interval)
+                interval = max(
+                    MIN_RAILWAY_LIGHT_RESEARCH_SECONDS,
+                    requested_interval,
+                )
                 if requested_interval < MIN_RAILWAY_LIGHT_RESEARCH_SECONDS:
                     self.logger.warning(
                         "Research Engine interval clamped requested=%ss effective=%ss reason=protect_operational_runtime_and_railway_costs",
@@ -100,7 +153,9 @@ class PlatformScheduler:
 
             if interval is None:
                 schedule.every().day.at("02:00").do(self.start_research_batch)
-                self.logger.info("Research Engine scheduled nightly at 02:00 in background")
+                self.logger.info(
+                    "Research Engine scheduled nightly at 02:00 in background"
+                )
             else:
                 schedule.every(interval).seconds.do(self.start_research_batch)
                 self.logger.info(
@@ -111,18 +166,67 @@ class PlatformScheduler:
                 )
 
             if self.settings.run_research_on_startup:
-                self.logger.info("Research Engine startup batch requested after operational startup")
+                self.logger.info(
+                    "Research Engine startup batch requested after operational startup"
+                )
                 self.start_research_batch()
 
         if self.settings.enable_notification_engine:
             self.logger.info("Notification Engine enabled and subscribed to EventBus")
+
+    def start_data_collector_sync(
+        self,
+        timeframes: list[str] | None = None,
+    ) -> bool:
+        """Start one collector sync unless a previous sync is still running."""
+        if self.data_collector is None:
+            return False
+        if not self._collector_lock.acquire(blocking=False):
+            self.logger.info(
+                "Data Collector sync skipped: previous background sync still running"
+            )
+            return False
+
+        selected_timeframes = list(timeframes or self.settings.collector_timeframes)
+        self._collector_thread = threading.Thread(
+            target=self._run_data_collector_sync,
+            args=(selected_timeframes,),
+            name="data-collector-sync",
+            daemon=True,
+        )
+        self._collector_thread.start()
+        return True
+
+    def _run_data_collector_sync(self, timeframes: list[str]) -> None:
+        try:
+            self.logger.info(
+                "Data Collector background sync started timeframes=%s",
+                timeframes,
+            )
+            self.data_collector.sync_all_pairs(
+                self.settings.collector_pairs,
+                timeframes,
+            )
+            self.logger.info(
+                "Data Collector background sync completed timeframes=%s",
+                timeframes,
+            )
+        except Exception:
+            self.logger.exception(
+                "Data Collector background sync failed timeframes=%s",
+                timeframes,
+            )
+        finally:
+            self._collector_lock.release()
 
     def start_research_batch(self) -> bool:
         """Start one daemon research batch unless another batch is still running."""
         if self.research_engine is None:
             return False
         if not self._research_lock.acquire(blocking=False):
-            self.logger.info("Research Engine batch skipped: previous background batch still running")
+            self.logger.info(
+                "Research Engine batch skipped: previous background batch still running"
+            )
             return False
 
         self._research_thread = threading.Thread(
