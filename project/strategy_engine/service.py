@@ -135,6 +135,7 @@ class StrategyEngine:
         self.daily_signal_report_hours = daily_signal_report_hours
         self.max_candidate_evaluations = max(1, max_candidate_evaluations)
         self._candidate_rejection_reasons: Counter[str] = Counter()
+        self._last_cycle_summary: dict[str, Any] = {}
         self._last_no_trade_report_at: datetime | None = None
         self.logger = get_module_logger("strategy")
 
@@ -144,6 +145,17 @@ class StrategyEngine:
         candidates = self.fetch_strategy_candidates(limit=self.max_candidate_evaluations)
         if not candidates:
             diagnostics = self.research_repository.fetch_candidate_diagnostics(timeframe=self.operational_timeframe)
+            self._last_cycle_summary = {
+                "timeframe": self.operational_timeframe,
+                "candidates": 0,
+                "class_a": 0,
+                "class_b": 0,
+                "class_c": 0,
+                "rejected": 0,
+                "top_rejections": {},
+                "best_candidate": "NONE",
+                "diagnostics": diagnostics,
+            }
             self.logger.info(
                 "STRATEGY no research candidate available timeframe=%s diagnostics=%s",
                 self.operational_timeframe,
@@ -176,6 +188,17 @@ class StrategyEngine:
         if best_signal is not None:
             best_text = f"{best_signal.pair} {best_signal.strategy} score={best_signal.score:.2f} class={best_signal.signal_class}"
         rejected = sum(self._candidate_rejection_reasons.values())
+        top_rejections = dict(self._candidate_rejection_reasons)
+        self._last_cycle_summary = {
+            "timeframe": self.operational_timeframe,
+            "candidates": candidates_evaluated,
+            "class_a": class_counts.get("A", 0),
+            "class_b": class_counts.get("B", 0),
+            "class_c": class_counts.get("C", 0),
+            "rejected": rejected,
+            "top_rejections": top_rejections,
+            "best_candidate": best_text,
+        }
         self.logger.info(
             "STRATEGY_CYCLE_SUMMARY timeframe=%s candidates=%s class_a=%s class_b=%s class_c=%s rejected=%s top_rejections=%s best_candidate=%s",
             self.operational_timeframe,
@@ -184,7 +207,7 @@ class StrategyEngine:
             class_counts.get("B", 0),
             class_counts.get("C", 0),
             rejected,
-            json.dumps(dict(self._candidate_rejection_reasons), sort_keys=True),
+            json.dumps(top_rejections, sort_keys=True),
             best_text,
         )
 
@@ -613,11 +636,20 @@ class StrategyEngine:
         recent_count = int(recent[0][0] or 0) if recent else 0
         if recent_count > 0:
             return False
+        cycle_summary = self._last_cycle_summary or {}
+        top_rejections = cycle_summary.get("top_rejections") or {}
+        diagnostics = cycle_summary.get("diagnostics") or {}
         message = (
             "📊 Daily signal report\n"
             f"Nessun segnale operativo nelle ultime {self.daily_signal_report_hours}h.\n"
-            f"Motivo: nessun setup appartenente alle classi abilitate {','.join(self.allowed_signal_classes)} "
-            "è stato prodotto dal motore live.\n"
+            f"Ultimo ciclo Strategy Engine: candidati={cycle_summary.get('candidates', 0)} "
+            f"A={cycle_summary.get('class_a', 0)} B={cycle_summary.get('class_b', 0)} "
+            f"C={cycle_summary.get('class_c', 0)} rejected={cycle_summary.get('rejected', 0)}.\n"
+            f"Miglior candidato: {cycle_summary.get('best_candidate', 'NONE')}.\n"
+            f"Top motivi di rifiuto: {json.dumps(top_rejections, sort_keys=True) if top_rejections else '{}'}.\n"
+            f"Diagnostica ricerca: {json.dumps(diagnostics, sort_keys=True) if diagnostics else '{}'}.\n"
+            f"Classi abilitate: operative={','.join(self.operative_signal_classes)} "
+            f"watchlist={','.join(self.watchlist_signal_classes)}.\n"
             "Questo non è un segnale di ingresso: evita operazioni forzate e valuta il sistema su molte operazioni."
         )
         self.event_bus.publish(Event(EventType.REPORT_READY, {"message": message}))

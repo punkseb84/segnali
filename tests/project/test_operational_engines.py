@@ -713,10 +713,24 @@ def test_daily_no_signal_report_is_report_not_trade_signal():
         enable_daily_signal_report=True,
         daily_signal_report_hours=24,
     )
+    strategy._last_cycle_summary = {
+        "candidates": 12,
+        "class_a": 0,
+        "class_b": 0,
+        "class_c": 3,
+        "rejected": 9,
+        "top_rejections": {"negative_historical_ev": 4, "net_rr_below_threshold": 5},
+        "best_candidate": "SOL/USD Pullback Trend score=68.00 class=C",
+    }
 
     published = strategy.publish_daily_signal_report()
 
     assert published is True
     assert reports
     assert trade_signals == []
+    message = reports[-1].payload["message"]
+    assert "candidati=12" in message
+    assert "A=0 B=0 C=3 rejected=9" in message
+    assert "SOL/USD Pullback Trend" in message
+    assert "negative_historical_ev" in message
     assert "Questo non è un segnale di ingresso" in reports[-1].payload["message"]
