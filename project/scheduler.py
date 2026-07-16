@@ -12,6 +12,9 @@ from project.data_collector.service import DataCollectorService
 from project.shared.logging import get_module_logger
 
 
+MIN_RAILWAY_LIGHT_RESEARCH_SECONDS = 3600
+
+
 class ResearchEngineProtocol(Protocol):
     def seed_combinations(self, pairs: list[str], timeframes: list[str], chunk_size: int = 1000) -> int: ...
     def process_one_batch(self, sleep_after: bool = True): ...
@@ -84,7 +87,14 @@ class PlatformScheduler:
             if self.settings.run_mode == "RESEARCH":
                 interval = self.settings.research_sleep_between_batches_seconds
             elif self.settings.run_mode == "RAILWAY_LIGHT":
-                interval = self.settings.railway_light_research_seconds
+                requested_interval = self.settings.railway_light_research_seconds
+                interval = max(MIN_RAILWAY_LIGHT_RESEARCH_SECONDS, requested_interval)
+                if requested_interval < MIN_RAILWAY_LIGHT_RESEARCH_SECONDS:
+                    self.logger.warning(
+                        "Research Engine interval clamped requested=%ss effective=%ss reason=protect_operational_runtime_and_railway_costs",
+                        requested_interval,
+                        interval,
+                    )
             else:
                 interval = None
 
