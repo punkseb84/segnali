@@ -36,7 +36,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
-      - name: Run compile and targeted tests
+      - name: Run compile and project tests
         id: checks
         continue-on-error: true
         shell: bash
@@ -46,10 +46,7 @@ jobs:
             echo "## compileall"
             python -m compileall -q project tests indicators.py
             echo "## pytest"
-            python -m pytest -q \
-              tests/project/test_probabilistic_strategy_engine.py \
-              tests/project/test_scheduler_operational_priority.py \
-              tests/project/test_operational_engines.py
+            python -m pytest -q tests/project
           } 2>&1 | tee ci-output.log
 
       - name: Report result on pull request
