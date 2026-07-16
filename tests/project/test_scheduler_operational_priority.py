@@ -28,6 +28,23 @@ class FakeStrategyEngine:
         return False
 
 
+class BlockingDataCollector:
+    def __init__(self, order):
+        self.order = order
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls = []
+
+    def sync_all_pairs(self, pairs, timeframes):
+        selected = list(timeframes)
+        self.calls.append(selected)
+        label = f"collector:{','.join(selected)}"
+        self.order.append(label)
+        if selected != ["15m"]:
+            self.started.set()
+            self.release.wait(timeout=2)
+
+
 class BlockingResearchEngine:
     def __init__(self, order):
         self.order = order
@@ -46,12 +63,13 @@ class BlockingResearchEngine:
         self.release.wait(timeout=2)
 
 
-def settings():
-    return SimpleNamespace(
+def settings(**overrides):
+    values = dict(
         enable_data_collector=False,
         scheduler_collector_seconds=300,
         collector_pairs=["BTC/USD"],
-        collector_timeframes=["15m"],
+        collector_timeframes=["5m", "15m", "1h", "4h"],
+        operational_timeframe="15m",
         run_data_collector_on_startup=False,
         enable_decision_engine=True,
         scheduler_decision_seconds=300,
@@ -68,6 +86,60 @@ def settings():
         run_research_on_startup=True,
         enable_notification_engine=False,
     )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_operational_timeframe_sync_runs_before_strategy_and_full_sync_is_background():
+    schedule.clear()
+    order = []
+    collector = BlockingDataCollector(order)
+    scheduler = PlatformScheduler(
+        settings(
+            enable_data_collector=True,
+            run_data_collector_on_startup=True,
+            enable_research_engine=False,
+        ),
+        data_collector=collector,
+        decision_engine=FakeDecisionEngine(order),
+        strategy_engine=FakeStrategyEngine(order),
+    )
+
+    scheduler.configure()
+
+    assert collector.started.wait(timeout=0.5)
+    assert order[0] == "collector:15m"
+    assert order.index("collector:15m") < order.index("decision")
+    assert order.index("decision") < order.index("strategy")
+    assert order.index("strategy") < order.index("collector:5m,1h,4h")
+    assert collector.calls == [["15m"], ["5m", "1h", "4h"]]
+    assert scheduler._collector_thread is not None
+    assert scheduler._collector_thread.is_alive()
+    assert any(job.interval == 300 and job.unit == "seconds" for job in schedule.jobs)
+
+    collector.release.set()
+    scheduler._collector_thread.join(timeout=1)
+    schedule.clear()
+
+
+def test_collector_syncs_cannot_overlap():
+    schedule.clear()
+    order = []
+    collector = BlockingDataCollector(order)
+    scheduler = PlatformScheduler(
+        settings(enable_research_engine=False),
+        data_collector=collector,
+    )
+
+    assert scheduler.start_data_collector_sync(["5m", "1h"]) is True
+    assert collector.started.wait(timeout=0.5)
+    assert scheduler.start_data_collector_sync(["4h"]) is False
+    assert collector.calls == [["5m", "1h"]]
+
+    collector.release.set()
+    assert scheduler._collector_thread is not None
+    scheduler._collector_thread.join(timeout=1)
+    schedule.clear()
 
 
 def test_operational_engines_run_before_non_blocking_research():
