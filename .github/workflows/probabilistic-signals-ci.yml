@@ -39,4 +39,5 @@ jobs:
         run: >-
           python -m pytest -q
           tests/project/test_probabilistic_strategy_engine.py
+          tests/project/test_scheduler_operational_priority.py
           tests/project/test_operational_engines.py
