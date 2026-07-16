@@ -11,9 +11,9 @@ from project.shared.logging import get_module_logger
 class PositionMonitor:
     """Monitor only operative A/B signals and publish TP/SL events.
 
-    The entry candle is evaluated with its updated close only.  Its high/low may include
+    The entry candle is evaluated with its updated close only. Its high/low may include
     price action that happened before the Telegram signal, so using the full range could
-    create false outcomes.  Later candles use normal high/low barrier detection.
+    create false outcomes. Later candles use normal high/low barrier detection.
     """
 
     def __init__(
@@ -53,8 +53,6 @@ class PositionMonitor:
         )
         signals: list[dict[str, Any]] = []
         for row in rows:
-            # Backward compatibility for old tests and rows created before the newer
-            # projections: 11=no class/economics; 12=class; 15=economics no reference.
             if len(row) >= 16:
                 signal_class = row[10]
                 net_profit = float(row[11]) if row[11] is not None else None
@@ -210,19 +208,18 @@ class PositionMonitor:
         ambiguous: bool = False,
         resolution: str = "FULL_CANDLE_RANGE",
     ) -> None:
+        # Persist audit details first, then keep the legacy two-parameter status update
+        # used by existing integrations and tests.
         self.postgres.execute(
             """UPDATE signals.generated_signals
-            SET status = %s,
-                outcome_price = %s,
+            SET outcome_price = %s,
                 outcome_close_price = %s,
                 outcome_candle_time = %s,
                 closed_at = NOW(),
                 outcome_ambiguous = %s,
                 outcome_resolution = %s
-            WHERE id = %s
-              AND status IN ('NEW', 'OPEN')""",
+            WHERE id = %s""",
             (
-                outcome,
                 outcome_price,
                 close_price,
                 timestamp,
@@ -230,6 +227,13 @@ class PositionMonitor:
                 resolution,
                 signal["id"],
             ),
+        )
+        self.postgres.execute(
+            """UPDATE signals.generated_signals
+            SET status = %s
+            WHERE id = %s
+              AND status IN ('NEW', 'OPEN')""",
+            (outcome, signal["id"]),
         )
         event_type = EventType.STOP_LOSS if outcome == "STOP_LOSS" else EventType.TARGET_HIT
         payload = {
