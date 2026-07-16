@@ -86,6 +86,7 @@ def test_operational_engines_run_before_non_blocking_research():
     assert research.started.wait(timeout=0.5)
     assert order.index("decision") < order.index("research_seed")
     assert order.index("strategy") < order.index("research_seed")
+    assert any(job.interval == 3600 and job.unit == "seconds" for job in schedule.jobs)
     assert scheduler._research_thread is not None
     assert scheduler._research_thread.is_alive()
 
