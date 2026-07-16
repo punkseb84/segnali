@@ -1,6 +1,7 @@
 """Centralized configuration loader for the modular quant platform."""
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -25,13 +26,7 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _notification_engine_enabled() -> bool:
-    """Prefer the modular flag, but accept the legacy Railway live-signal flag.
-
-    Some Railway deployments already expose ENABLE_LIVE_SIGNALS, or only have
-    Telegram credentials configured, but do not yet have ENABLE_NOTIFICATION_ENGINE.
-    The fallback keeps the modular platform compatible without requiring users
-    to rename existing variables.
-    """
+    """Prefer the modular flag, but accept the legacy Railway live-signal flag."""
     if os.getenv("ENABLE_NOTIFICATION_ENGINE") is not None:
         return _bool_env("ENABLE_NOTIFICATION_ENGINE", False)
     if os.getenv("ENABLE_LIVE_SIGNALS") is not None:
@@ -68,6 +63,33 @@ def _signal_classes_env(name: str, default: list[str]) -> list[str]:
     return configured or default
 
 
+def _float_map_env(name: str) -> dict[str, float]:
+    """Parse either JSON or PAIR=rate comma-separated mappings."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return {
+                str(key).strip().upper(): max(0.0, float(value))
+                for key, value in parsed.items()
+            }
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+
+    result: dict[str, float] = {}
+    for item in raw.split(","):
+        if "=" not in item:
+            continue
+        pair, value = item.split("=", maxsplit=1)
+        try:
+            result[pair.strip().upper()] = max(0.0, float(value.strip()))
+        except ValueError:
+            continue
+    return result
+
+
 @dataclass(frozen=True)
 class PlatformSettings:
     run_mode: str = os.getenv("RUN_MODE", "RAILWAY_LIGHT").strip().upper()
@@ -93,6 +115,7 @@ class PlatformSettings:
     binance_buy_fee_rate: float = _float_env("BINANCE_BUY_FEE_RATE", 0.001)
     binance_sell_fee_rate: float = _float_env("BINANCE_SELL_FEE_RATE", 0.001)
     binance_spread_rate: float = _float_env("BINANCE_SPREAD_RATE", 0.0005)
+    binance_pair_spread_rates: dict[str, float] = field(default_factory=lambda: _float_map_env("BINANCE_PAIR_SPREAD_RATES"))
     binance_slippage_rate: float = _float_env("BINANCE_SLIPPAGE_RATE", 0.0)
     binance_quantity_step: float = _float_env("BINANCE_QUANTITY_STEP", 0.000001)
     binance_min_qty: float = _float_env("BINANCE_MIN_QTY", 0.0)
@@ -105,6 +128,12 @@ class PlatformSettings:
     min_live_setup_score: float = _float_env("MIN_LIVE_SETUP_SCORE", 45.0)
     min_operative_signal_score: float = _float_env("MIN_OPERATIVE_SIGNAL_SCORE", 55.0)
     min_watchlist_signal_score: float = _float_env("MIN_WATCHLIST_SIGNAL_SCORE", 30.0)
+    min_research_trades: int = _int_env("MIN_RESEARCH_TRADES", 40)
+    require_regime_alignment_for_operative: bool = _bool_env("REQUIRE_REGIME_ALIGNMENT_FOR_OPERATIVE", True)
+    dynamic_economic_target: bool = _bool_env("DYNAMIC_ECONOMIC_TARGET", True)
+    min_watchlist_notification_net_profit_eur: float = _float_env("MIN_WATCHLIST_NOTIFICATION_NET_PROFIT_EUR", 0.20)
+    min_watchlist_notification_net_rr: float = _float_env("MIN_WATCHLIST_NOTIFICATION_NET_RR", 0.85)
+    min_watchlist_notification_live_score: float = _float_env("MIN_WATCHLIST_NOTIFICATION_LIVE_SCORE", 45.0)
     max_take_profit_distance_pct: float = _float_env("MAX_TAKE_PROFIT_DISTANCE_PCT", 0.03)
     min_stop_atr_ratio: float = _float_env("MIN_STOP_ATR_RATIO", 0.75)
     min_stop_spread_multiple: float = _float_env("MIN_STOP_SPREAD_MULTIPLE", 2.0)

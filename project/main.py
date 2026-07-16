@@ -18,7 +18,7 @@ from project.position_monitor.service import PositionMonitor
 from project.research_engine.memory_service import MemoryEfficientResearchEngine
 from project.research_engine.repository import ResearchRepository
 from project.scheduler import PlatformScheduler
-from project.strategy_engine.economic_guard import EconomicallyGuardedProbabilisticStrategyEngine
+from project.strategy_engine.pair_regime import PairRegimeEconomicsFirstStrategyEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 
@@ -91,8 +91,8 @@ def build_strategy_engine(
     research_repository: ResearchRepository,
     decision_engine: DecisionEngine,
     event_bus: EventBus,
-) -> EconomicallyGuardedProbabilisticStrategyEngine:
-    return EconomicallyGuardedProbabilisticStrategyEngine(
+) -> PairRegimeEconomicsFirstStrategyEngine:
+    return PairRegimeEconomicsFirstStrategyEngine(
         research_repository,
         decision_engine,
         event_bus,
@@ -102,6 +102,7 @@ def build_strategy_engine(
         buy_fee_rate=settings.binance_buy_fee_rate,
         sell_fee_rate=settings.binance_sell_fee_rate,
         spread_rate=settings.binance_spread_rate,
+        pair_spread_rates=settings.binance_pair_spread_rates,
         min_tp1_net_profit_eur=settings.min_tp1_net_profit_eur,
         signal_cooldown_minutes=settings.signal_cooldown_minutes,
         min_net_rr=settings.min_net_rr,
@@ -111,6 +112,12 @@ def build_strategy_engine(
         min_live_setup_score=settings.min_live_setup_score,
         min_operative_signal_score=settings.min_operative_signal_score,
         min_watchlist_signal_score=settings.min_watchlist_signal_score,
+        min_research_trades=settings.min_research_trades,
+        require_regime_alignment_for_operative=settings.require_regime_alignment_for_operative,
+        dynamic_economic_target=settings.dynamic_economic_target,
+        min_watchlist_net_profit_eur=settings.min_watchlist_notification_net_profit_eur,
+        min_watchlist_net_rr=settings.min_watchlist_notification_net_rr,
+        min_watchlist_live_score=settings.min_watchlist_notification_live_score,
         slippage_rate=settings.binance_slippage_rate,
         quantity_step=settings.binance_quantity_step,
         min_qty=settings.binance_min_qty,
@@ -195,7 +202,7 @@ def main() -> None:
         logger.info("BOOTSTRAP TEST SKIPPED")
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-16 RAILWAY COST OPTIMIZED BUILD")
+    logger.info("PROJECT MAIN VERSION: 2026-07-16 PAIR REGIME ECONOMICS FIRST BUILD")
     logger.info("======================================")
     event_bus = EventBus()
     log_storage_startup(settings, logger)
@@ -219,9 +226,17 @@ def main() -> None:
         settings.min_watchlist_signal_score,
     )
     logger.info(
-        "Economic signal guard | min_net_profit=%.4f min_net_rr=%.4f",
+        "Regime/economics signal selection | pair_specific_regime=true min_research_trades=%s require_regime_alignment=%s dynamic_target=%s",
+        settings.min_research_trades,
+        settings.require_regime_alignment_for_operative,
+        settings.dynamic_economic_target,
+    )
+    logger.info(
+        "Economic signal guard | min_net_profit=%.4f min_net_rr=%.4f near_b_profit=%.4f near_b_rr=%.4f",
         settings.min_tp1_net_profit_eur,
         settings.min_net_rr,
+        settings.min_watchlist_notification_net_profit_eur,
+        settings.min_watchlist_notification_net_rr,
     )
     logger.info("Checkpoint A")
     try:
