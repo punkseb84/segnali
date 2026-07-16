@@ -55,6 +55,13 @@ class MarketDataRepository:
         return rows[0][0] if rows and rows[0][0] is not None else None
 
     def insert_ohlc(self, pair: str, timeframe: str, frame: pd.DataFrame) -> int:
+        """Insert closed candles and refresh the mutable current Kraken candle.
+
+        Kraken includes the still-open candle in every OHLC response.  Using
+        ``DO NOTHING`` froze that candle at the first snapshot, so entries, highs and
+        lows could remain stale until the next candle.  Updating on conflict keeps the
+        current candle accurate while leaving historical candles unchanged in practice.
+        """
         if frame.empty:
             return 0
         rows: list[Sequence[object]] = [
@@ -64,7 +71,12 @@ class MarketDataRepository:
         return self.client.executemany(
             """INSERT INTO market_data.ohlc(exchange, pair, timeframe, timestamp, open, high, low, close, volume)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT(exchange, pair, timeframe, timestamp) DO NOTHING""",
+            ON CONFLICT(exchange, pair, timeframe, timestamp) DO UPDATE SET
+                open = EXCLUDED.open,
+                high = EXCLUDED.high,
+                low = EXCLUDED.low,
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume""",
             rows,
         )
 
