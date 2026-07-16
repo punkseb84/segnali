@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -60,6 +60,7 @@ class GeneratedSignal:
     score: float
     probability: float | None
     reasons: list[str]
+    score_breakdown: dict[str, float] = field(default_factory=dict)
     signal_id: int | None = None
 
 
@@ -231,12 +232,11 @@ class StrategyEngine:
         if profit_factor <= 1.0 and expectancy <= 0:
             self.record_candidate_rejection("no_statistical_edge")
             self.logger.info(
-                "STRATEGY candidate rejected strategy=%s reason=no_statistical_edge pf=%.4f expectancy=%.6f",
+                "STRATEGY candidate weak statistical edge strategy=%s pf=%.4f expectancy=%.6f action=continue_as_watchlist_candidate",
                 best["strategy"],
                 profit_factor,
                 expectancy,
             )
-            return None
         if profit_factor < self.min_profit_factor:
             self.logger.info(
                 "STRATEGY candidate below class_b_threshold strategy=%s pair=%s timeframe=%s pf=%.4f threshold=%.4f action=continue_as_class_c_candidate",
@@ -338,7 +338,9 @@ class StrategyEngine:
                 probability_context["confidence"],
             )
             return None
-        signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned, ev_decision)
+        score_breakdown = self.build_score_breakdown(best, economics, validation, probability_context, regime_aligned, ev_decision)
+        score = min(100.0, sum(score_breakdown.values()))
+        signal_class = self.classify_signal(best, economics, validation, probability_context, regime_aligned, ev_decision, score)
         if signal_class not in self.allowed_signal_classes:
             self.record_candidate_rejection("signal_class_not_enabled")
             self.logger.info(
@@ -353,7 +355,6 @@ class StrategyEngine:
                 validation["status"],
             )
             return None
-        score = min(100.0, 50.0 + best["profit_factor"] * 20.0)
         probability = probability_context["probability"]
         signal = GeneratedSignal(
             strategy=best["strategy"], pair=best["pair"], timeframe=best["timeframe"], regime=decision.regime,
@@ -383,8 +384,10 @@ class StrategyEngine:
                 f"signal_class={signal_class}",
                 f"historical_ev={historical_expected_value:.6f}" if historical_expected_value is not None else "historical_ev=unavailable",
                 f"historical_ev_decision={ev_decision['reason']}",
+                f"score_breakdown={json.dumps(score_breakdown, sort_keys=True)}",
                 "regime_aligned=true" if regime_aligned else "regime_aligned=false",
             ],
+            score_breakdown=score_breakdown,
         )
         self.logger.info(
             "SIGNAL_CLASSIFIED class=%s strategy=%s pair=%s timeframe=%s pf=%.4f expectancy=%.6f net_profit=%.6f net_rr=%.4f validation=%s reason=%s regime_aligned=%s allowed=%s",
@@ -584,6 +587,7 @@ class StrategyEngine:
         probability_context: dict[str, Any],
         regime_aligned: bool,
         ev_decision: dict[str, Any] | None = None,
+        score: float = 0.0,
     ) -> str:
         """Classify rather than over-filter a positive-expectancy setup.
 
@@ -599,7 +603,8 @@ class StrategyEngine:
         ev_reason = (ev_decision or {}).get("reason", "")
 
         if (
-            profit_factor >= 1.40
+            score >= 75.0
+            and profit_factor >= 1.20
             and expectancy > 0
             and net_profit >= self.min_tp1_net_profit_eur
             and net_rr >= self.min_net_rr
@@ -609,7 +614,8 @@ class StrategyEngine:
         ):
             return "A"
         if (
-            profit_factor >= self.min_profit_factor
+            score >= 55.0
+            and profit_factor >= self.min_profit_factor
             and expectancy > 0
             and net_profit >= self.min_tp1_net_profit_eur
             and net_rr >= self.min_net_rr
@@ -618,6 +624,50 @@ class StrategyEngine:
         ):
             return "B"
         return "C"
+
+    def build_score_breakdown(
+        self,
+        best: dict[str, Any],
+        economics: dict[str, float | bool],
+        validation: dict[str, str],
+        probability_context: dict[str, Any],
+        regime_aligned: bool,
+        ev_decision: dict[str, Any],
+    ) -> dict[str, float]:
+        """Build a transparent probabilistic quality score instead of relying on one hard threshold."""
+        profit_factor = float(best.get("profit_factor") or 0.0)
+        expectancy = float(best.get("expectancy") or 0.0)
+        net_rr = float(economics.get("net_rr") or 0.0)
+        net_profit = float(economics.get("net_profit_tp1_eur") or 0.0)
+        sample_size = int(probability_context.get("sample_size") or 0)
+        win_rate = probability_context.get("win_rate")
+        confidence = str(probability_context.get("confidence") or "LOW")
+        historical_ev = self.calculate_historical_expected_value(economics, probability_context)
+        ev_reason = str(ev_decision.get("reason") or "")
+
+        sample_ratio = min(1.0, sample_size / max(1, self.min_probability_sample_size * 3))
+        return {
+            "profit_factor_score": min(15.0, max(0.0, (profit_factor - 1.0) * 30.0)),
+            "expectancy_score": min(10.0, max(0.0, expectancy * 50.0)),
+            "historical_ev_score": self.score_historical_ev(historical_ev, ev_reason),
+            "sample_confidence_score": {"LOW": 3.0, "MEDIUM": 7.0, "HIGH": 10.0}.get(confidence, 3.0),
+            "sample_size_score": round(sample_ratio * 8.0, 4),
+            "win_rate_score": round((float(win_rate) * 10.0) if win_rate is not None else 4.0, 4),
+            "regime_score": 10.0 if regime_aligned else 4.0,
+            "rr_score": min(10.0, max(0.0, net_rr / max(self.min_net_rr, 0.000001) * 10.0)),
+            "net_profit_score": min(8.0, max(0.0, net_profit / max(self.min_tp1_net_profit_eur, 0.000001) * 8.0)),
+            "validation_score": 10.0 if validation["status"] == "PASSED" else 5.0,
+            "tradability_score": 9.0 if economics.get("tradable") else 0.0,
+        }
+
+    def score_historical_ev(self, historical_ev: float | None, ev_reason: str) -> float:
+        if historical_ev is None:
+            return 5.0
+        if "negative" in ev_reason or "below" in ev_reason:
+            return 0.0
+        if historical_ev >= self.min_historical_ev_eur:
+            return 10.0
+        return 5.0
 
     def publish_daily_signal_report(self) -> bool:
         if not self.enable_daily_signal_report:
@@ -727,9 +777,9 @@ class StrategyEngine:
                 gross_profit_tp1_eur, gross_loss_sl_eur, estimated_buy_fee_eur, estimated_sell_fee_eur,
                 estimated_sell_fee_sl_eur, estimated_spread_cost_eur, estimated_slippage_cost_eur,
                 net_profit_tp1_eur, net_loss_sl_eur, gross_rr, net_rr,
-                signal_class, historical_expected_value_eur, score, probability, reasons, created_at
+                signal_class, historical_expected_value_eur, score, score_breakdown, probability, reasons, created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s)
             RETURNING id""",
             (
                 signal.strategy, signal.pair, signal.timeframe, signal.regime, signal.entry, signal.stop_loss, signal.take_profit,
@@ -737,7 +787,8 @@ class StrategyEngine:
                 signal.tp_notional_eur, signal.sl_notional_eur, signal.gross_profit_tp1_eur, signal.gross_loss_sl_eur,
                 signal.estimated_buy_fee_eur, signal.estimated_sell_fee_eur, signal.estimated_sell_fee_sl_eur,
                 signal.estimated_spread_cost_eur, signal.estimated_slippage_cost_eur, signal.net_profit_tp1_eur,
-                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.signal_class, signal.historical_expected_value_eur, signal.score, signal.probability,
+                signal.net_loss_sl_eur, signal.gross_rr, signal.net_rr, signal.signal_class, signal.historical_expected_value_eur, signal.score,
+                json.dumps(signal.score_breakdown), signal.probability,
                 json.dumps(signal.reasons), signal.signal_time,
             ),
         )

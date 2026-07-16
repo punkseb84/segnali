@@ -590,6 +590,42 @@ def test_strategy_engine_does_not_hard_reject_positive_edge_below_class_b_pf():
     assert signal is not None
     assert signal.signal_class == "C"
     assert events[-1].payload["signal_class"] == "C"
+    assert signal.score_breakdown["profit_factor_score"] > 0
+    assert "score_breakdown=" in signal.reasons[-2]
+
+
+def test_strategy_engine_treats_weak_edge_as_watchlist_instead_of_hard_reject():
+    class WeakEdgeResearch(FakeResearchRepository):
+        def fetch_best_result(self, timeframe=None):
+            return {
+                "strategy": "Breakout",
+                "pair": "BTC/USD",
+                "timeframe": timeframe or "1h",
+                "profit_factor": 0.98,
+                "expectancy": -0.01,
+                "net_profit": -1.0,
+            }
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    watchlist_events = []
+    bus.subscribe(EventType.WATCHLIST, watchlist_events.append)
+    strategy = StrategyEngine(
+        WeakEdgeResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        operative_signal_classes=["A", "B"],
+        watchlist_signal_classes=["C"],
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.signal_class == "C"
+    assert signal.score_breakdown["profit_factor_score"] == 0.0
+    assert signal.score_breakdown["expectancy_score"] == 0.0
+    assert watchlist_events[-1].payload["signal_class"] == "C"
+    assert "no_statistical_edge" not in strategy._candidate_rejection_reasons
 
 
 def test_strategy_engine_rejects_high_confidence_negative_historical_ev():
