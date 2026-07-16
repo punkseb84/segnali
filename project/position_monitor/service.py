@@ -48,23 +48,28 @@ class PositionMonitor:
             LIMIT %s""",
             (self.max_signals_per_cycle,),
         )
-        return [
-            {
-                "id": row[0],
-                "strategy": row[1],
-                "pair": row[2],
-                "timeframe": row[3],
-                "regime": row[4],
-                "entry": float(row[5]),
-                "stop_loss": float(row[6]),
-                "take_profit": float(row[7]),
-                "score": float(row[8]),
-                "probability": float(row[9]) if row[9] is not None else None,
-                "signal_class": row[10],
-                "created_at": row[11],
-            }
-            for row in rows
-        ]
+        signals: list[dict[str, Any]] = []
+        for row in rows:
+            # Older tests and transitional callers may still provide the previous
+            # 11-column projection without signal_class. Treat those rows as B.
+            has_signal_class = len(row) >= 12
+            signals.append(
+                {
+                    "id": row[0],
+                    "strategy": row[1],
+                    "pair": row[2],
+                    "timeframe": row[3],
+                    "regime": row[4],
+                    "entry": float(row[5]),
+                    "stop_loss": float(row[6]),
+                    "take_profit": float(row[7]),
+                    "score": float(row[8]),
+                    "probability": float(row[9]) if row[9] is not None else None,
+                    "signal_class": row[10] if has_signal_class else "B",
+                    "created_at": row[11] if has_signal_class else row[10],
+                }
+            )
+        return signals
 
     def check_signal(self, signal: dict[str, Any]) -> bool:
         candles = self.postgres.fetch_all(
