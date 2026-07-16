@@ -1,0 +1,78 @@
+name: Probabilistic Signals CI
+
+on:
+  push:
+    branches:
+      - agent/probabilistic-operational-signals
+  pull_request:
+    paths:
+      - "project/**"
+      - "tests/project/**"
+      - "indicators.py"
+      - "requirements.txt"
+      - ".github/workflows/probabilistic-signals-ci.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Run compile and targeted tests
+        id: checks
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            echo "## compileall"
+            python -m compileall -q project tests indicators.py
+            echo "## pytest"
+            python -m pytest -q \
+              tests/project/test_probabilistic_strategy_engine.py \
+              tests/project/test_scheduler_operational_priority.py \
+              tests/project/test_operational_engines.py
+          } 2>&1 | tee ci-output.log
+
+      - name: Report result on pull request
+        if: always() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          CHECK_OUTCOME: ${{ steps.checks.outcome }}
+        shell: bash
+        run: |
+          PR_NUMBER=$(gh api "/repos/${REPOSITORY}/commits/${COMMIT_SHA}/pulls" --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ]; then
+            {
+              echo "Probabilistic Signals CI: **${CHECK_OUTCOME}** for commit \`${COMMIT_SHA}\`."
+              echo
+              echo '```text'
+              tail -n 120 ci-output.log 2>/dev/null || echo "ci-output.log unavailable"
+              echo '```'
+            } > ci-comment.md
+            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file ci-comment.md
+          fi
+
+      - name: Fail workflow when checks failed
+        if: steps.checks.outcome == 'failure'
+        run: exit 1

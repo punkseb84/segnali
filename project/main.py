@@ -18,7 +18,7 @@ from project.position_monitor.service import PositionMonitor
 from project.research_engine.repository import ResearchRepository
 from project.research_engine.service import ProgressiveResearchEngine
 from project.scheduler import PlatformScheduler
-from project.strategy_engine.service import StrategyEngine
+from project.strategy_engine.probabilistic_service import ProbabilisticStrategyEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 
@@ -86,8 +86,13 @@ def build_decision_engine(settings: PlatformSettings, event_bus: EventBus, postg
     return DecisionEngine(postgres, event_bus, timeframe=settings.operational_timeframe)
 
 
-def build_strategy_engine(settings: PlatformSettings, research_repository: ResearchRepository, decision_engine: DecisionEngine, event_bus: EventBus) -> StrategyEngine:
-    return StrategyEngine(
+def build_strategy_engine(
+    settings: PlatformSettings,
+    research_repository: ResearchRepository,
+    decision_engine: DecisionEngine,
+    event_bus: EventBus,
+) -> ProbabilisticStrategyEngine:
+    return ProbabilisticStrategyEngine(
         research_repository,
         decision_engine,
         event_bus,
@@ -102,6 +107,10 @@ def build_strategy_engine(settings: PlatformSettings, research_repository: Resea
         min_net_rr=settings.min_net_rr,
         min_historical_ev_eur=settings.min_historical_ev_eur,
         historical_ev_tolerance_eur=settings.historical_ev_tolerance_eur,
+        hard_block_negative_historical_ev=settings.hard_block_negative_historical_ev,
+        min_live_setup_score=settings.min_live_setup_score,
+        min_operative_signal_score=settings.min_operative_signal_score,
+        min_watchlist_signal_score=settings.min_watchlist_signal_score,
         slippage_rate=settings.binance_slippage_rate,
         quantity_step=settings.binance_quantity_step,
         min_qty=settings.binance_min_qty,
@@ -186,7 +195,7 @@ def main() -> None:
         logger.info("BOOTSTRAP TEST SKIPPED")
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-09 BUILD 1")
+    logger.info("PROJECT MAIN VERSION: 2026-07-16 PROBABILISTIC SIGNAL BUILD")
     logger.info("======================================")
     event_bus = EventBus()
     log_storage_startup(settings, logger)
@@ -198,6 +207,13 @@ def main() -> None:
         settings.enable_strategy_engine,
         settings.enable_position_monitor,
         settings.enable_notification_engine,
+    )
+    logger.info(
+        "Probabilistic signal settings | hard_negative_ev_block=%s live_setup_min=%.2f operative_score_min=%.2f watchlist_score_min=%.2f",
+        settings.hard_block_negative_historical_ev,
+        settings.min_live_setup_score,
+        settings.min_operative_signal_score,
+        settings.min_watchlist_signal_score,
     )
     logger.info("Checkpoint A")
     try:
