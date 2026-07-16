@@ -55,6 +55,14 @@ class PlatformScheduler:
         self._research_lock = threading.Lock()
         self._research_thread: threading.Thread | None = None
 
+    def effective_strategy_interval(self) -> int:
+        requested = max(1, int(self.settings.scheduler_strategy_seconds))
+        if self.settings.run_mode != "RAILWAY_LIGHT":
+            return requested
+        # A strategy evaluation cannot see fresher candles than the collector. Running
+        # it five times on the same 15m data only repeats pandas work and duplicate SQL.
+        return max(requested, int(self.settings.scheduler_collector_seconds))
+
     def configure(self) -> None:
         """Start the operational path before long collector/research work.
 
@@ -99,15 +107,22 @@ class PlatformScheduler:
             self.decision_engine.evaluate_market()
 
         if self.settings.enable_strategy_engine and self.strategy_engine is not None:
-            schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(
+            strategy_interval = self.effective_strategy_interval()
+            schedule.every(strategy_interval).seconds.do(
                 self.strategy_engine.evaluate
             )
             schedule.every(1).hours.do(
                 self.strategy_engine.publish_daily_signal_report
             )
+            if strategy_interval != self.settings.scheduler_strategy_seconds:
+                self.logger.info(
+                    "Strategy Engine interval optimized requested=%ss effective=%ss reason=no_new_candles_before_collector",
+                    self.settings.scheduler_strategy_seconds,
+                    strategy_interval,
+                )
             self.logger.info(
                 "Strategy Engine scheduled every %ss",
-                self.settings.scheduler_strategy_seconds,
+                strategy_interval,
             )
             self.strategy_engine.evaluate()
             self.strategy_engine.publish_daily_signal_report()
@@ -258,7 +273,7 @@ class PlatformScheduler:
         while True:
             schedule.run_pending()
             now = time.monotonic()
-            if now - last_heartbeat >= 30:
+            if now - last_heartbeat >= 300:
                 self.logger.info("Heartbeat")
                 last_heartbeat = now
             time.sleep(1)
