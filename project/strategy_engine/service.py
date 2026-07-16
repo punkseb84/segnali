@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -60,6 +60,7 @@ class GeneratedSignal:
     score: float
     probability: float | None
     reasons: list[str]
+    signal_id: int | None = None
 
 
 class StrategyEngine:
@@ -149,18 +150,43 @@ class StrategyEngine:
                 json.dumps(diagnostics, sort_keys=True),
             )
             return None
+        best_watchlist: GeneratedSignal | None = None
+        class_counts = {"A": 0, "B": 0, "C": 0}
+        evaluated = 0
         for best in candidates:
-            signal = self.evaluate_candidate(decision, best)
-            if signal is not None:
+            evaluated += 1
+            signal = self.evaluate_candidate(decision, best, publish_event=False)
+            if signal is None:
+                continue
+            class_counts[signal.signal_class] = class_counts.get(signal.signal_class, 0) + 1
+            if signal.signal_class in self.operative_signal_classes:
+                self.log_cycle_summary(evaluated, class_counts, signal)
+                self.publish_signal_event(signal)
                 return signal
-        self.logger.info(
-            "STRATEGY no candidate passed validation timeframe=%s candidates_evaluated=%s candidate_limit=%s rejection_summary=%s",
-            self.operational_timeframe,
-            len(candidates),
-            self.max_candidate_evaluations,
-            json.dumps(dict(self._candidate_rejection_reasons), sort_keys=True),
-        )
+            if best_watchlist is None or signal.score > best_watchlist.score:
+                best_watchlist = signal
+        self.log_cycle_summary(evaluated, class_counts, best_watchlist)
+        if best_watchlist is not None:
+            self.publish_signal_event(best_watchlist)
+            return best_watchlist
         return None
+
+    def log_cycle_summary(self, candidates_evaluated: int, class_counts: dict[str, int], best_signal: GeneratedSignal | None) -> None:
+        best_text = "NONE"
+        if best_signal is not None:
+            best_text = f"{best_signal.pair} {best_signal.strategy} score={best_signal.score:.2f} class={best_signal.signal_class}"
+        rejected = sum(self._candidate_rejection_reasons.values())
+        self.logger.info(
+            "STRATEGY_CYCLE_SUMMARY timeframe=%s candidates=%s class_a=%s class_b=%s class_c=%s rejected=%s top_rejections=%s best_candidate=%s",
+            self.operational_timeframe,
+            candidates_evaluated,
+            class_counts.get("A", 0),
+            class_counts.get("B", 0),
+            class_counts.get("C", 0),
+            rejected,
+            json.dumps(dict(self._candidate_rejection_reasons), sort_keys=True),
+            best_text,
+        )
 
     def record_candidate_rejection(self, reason: str) -> None:
         self._candidate_rejection_reasons[reason] += 1
@@ -172,7 +198,7 @@ class StrategyEngine:
         best = self.research_repository.fetch_best_result(timeframe=self.operational_timeframe)
         return [best] if best else []
 
-    def evaluate_candidate(self, decision: Any, best: dict[str, Any]) -> GeneratedSignal | None:
+    def evaluate_candidate(self, decision: Any, best: dict[str, Any], publish_event: bool = True) -> GeneratedSignal | None:
         if best["timeframe"] != self.operational_timeframe:
             self.record_candidate_rejection("non_operational_timeframe")
             self.logger.info("STRATEGY candidate rejected strategy=%s reason=non_operational_timeframe timeframe=%s required=%s", best["strategy"], best["timeframe"], self.operational_timeframe)
@@ -358,15 +384,20 @@ class StrategyEngine:
             self.logger.info("STRATEGY duplicate skipped existing_signal_id=%s cooldown_minutes=%s strategy=%s pair=%s timeframe=%s regime=%s", duplicate_id, self.signal_cooldown_minutes, signal.strategy, signal.pair, signal.timeframe, signal.regime)
             return None
         signal_id = self.save_signal(signal)
+        signal = replace(signal, signal_id=signal_id)
         self.log_economic_debug(signal_id, signal)
-        payload = {**signal.__dict__, "signal_id": signal_id}
-        self.logger.info("NEW SIGNAL id=%s class=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.signal_class, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
+        self.logger.info("SIGNAL_SAVED id=%s class=%s strategy=%s pair=%s timeframe=%s entry=%.6f stop=%.6f take_profit=%.6f score=%.2f", signal_id, signal.signal_class, signal.strategy, signal.pair, signal.timeframe, signal.entry, signal.stop_loss, signal.take_profit, signal.score)
+        if publish_event:
+            self.publish_signal_event(signal)
+        return signal
+
+    def publish_signal_event(self, signal: GeneratedSignal) -> None:
+        payload = signal.__dict__.copy()
         event_type = EventType.WATCHLIST if signal.signal_class in self.watchlist_signal_classes else EventType.NEW_SIGNAL
         if event_type == EventType.WATCHLIST and not self.enable_watchlist_alerts:
             self.logger.info("WATCHLIST saved notification disabled strategy=%s pair=%s timeframe=%s class=%s", signal.strategy, signal.pair, signal.timeframe, signal.signal_class)
-        else:
-            self.event_bus.publish(Event(event_type, payload))
-        return signal
+            return
+        self.event_bus.publish(Event(event_type, payload))
 
     def calculate_volatility_context(self, prices: list[tuple[Any, ...]], entry: float, stop_loss: float, take_profit: float) -> dict[str, float]:
         atr = self.calculate_atr(prices)
@@ -554,7 +585,14 @@ class StrategyEngine:
             and sample_size >= self.min_probability_sample_size
         ):
             return "A"
-        if profit_factor >= self.min_profit_factor and expectancy > 0 and net_profit > 0 and regime_aligned and ev_reason != "low_confidence_no_block":
+        if (
+            profit_factor >= self.min_profit_factor
+            and expectancy > 0
+            and net_profit >= self.min_tp1_net_profit_eur
+            and net_rr >= self.min_net_rr
+            and regime_aligned
+            and ev_reason != "low_confidence_no_block"
+        ):
             return "B"
         return "C"
 

@@ -874,6 +874,8 @@ I batch pending non seguono più il solo ordine crescente degli ID: vengono dist
 
 Il runtime effettivo Railway avvia `python -m project.main`; i default modulari ora usano 20 coppie Kraken, raccolgono `5m,15m,1h,4h` e generano segnali operativi su `15m`. Le soglie iniziali sono meno restrittive per intraday: `MIN_SIGNAL_PROFIT_FACTOR=1.05`, `MIN_TP1_NET_PROFIT_EUR=0.30`, `MIN_NET_RR=1.05`. Le classi operative sono separate dalla watchlist diagnostica: `OPERATIVE_SIGNAL_CLASSES=A,B`, `WATCHLIST_SIGNAL_CLASSES=C`, `ENABLE_WATCHLIST_ALERTS=true`. L'EV storico usa `MIN_HISTORICAL_EV_EUR` e `HISTORICAL_EV_TOLERANCE_EUR` per evitare blocchi su valori marginali con confidenza non alta.
 
+Lo Strategy Engine continua a valutare i candidati anche dopo aver trovato una classe C: pubblica il primo candidato operativo A/B valido se presente; solo se non trova A/B pubblica la migliore watchlist C. Ogni ciclo emette `STRATEGY_CYCLE_SUMMARY` con candidati valutati, conteggio classi A/B/C, rifiuti aggregati e miglior candidato.
+
 ## Operational engines enabled
 
 Dopo la ricerca progressiva, la piattaforma ora collega anche i moduli operativi:

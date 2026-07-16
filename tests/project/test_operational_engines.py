@@ -256,6 +256,60 @@ def test_strategy_engine_publishes_watchlist_for_class_c():
     assert not new_signal_events
 
 
+
+
+def test_strategy_engine_continues_after_watchlist_to_find_operative_signal():
+    class WatchlistThenOperativeResearch(FakeResearchRepository):
+        def fetch_candidate_results(self, timeframe=None, limit=10):
+            return [
+                {
+                    "strategy": "Breakout",
+                    "pair": "BTC/USD",
+                    "timeframe": timeframe or "15m",
+                    "profit_factor": 1.01,
+                    "expectancy": 0.01,
+                    "net_profit": 1.0,
+                    "parameters": {"reward_risk": 1.1, "atr_multiplier": 1.0},
+                    "validation": {"reward_risk": 1.1, "atr_multiplier": 1.0},
+                },
+                {
+                    "strategy": "Breakout",
+                    "pair": "ETH/USD",
+                    "timeframe": timeframe or "15m",
+                    "profit_factor": 1.25,
+                    "expectancy": 0.2,
+                    "net_profit": 10.0,
+                    "parameters": {"reward_risk": 2.0, "atr_multiplier": 1.0},
+                    "validation": {"reward_risk": 2.0, "atr_multiplier": 1.0},
+                },
+            ]
+
+    postgres = FakePostgres()
+    bus = EventBus()
+    watchlist_events = []
+    new_signal_events = []
+    bus.subscribe(EventType.WATCHLIST, watchlist_events.append)
+    bus.subscribe(EventType.NEW_SIGNAL, new_signal_events.append)
+    strategy = StrategyEngine(
+        WatchlistThenOperativeResearch(postgres),
+        DecisionEngine(postgres, bus),
+        bus,
+        operational_timeframe="15m",
+        min_probability_sample_size=999,
+        min_tp1_net_profit_eur=0.01,
+        min_net_rr=1.0,
+        operative_signal_classes=["A", "B"],
+        watchlist_signal_classes=["C"],
+    )
+
+    signal = strategy.evaluate()
+
+    assert signal is not None
+    assert signal.signal_class == "B"
+    assert signal.pair == "ETH/USD"
+    assert new_signal_events
+    assert not watchlist_events
+
 def test_notification_engine_formats_watchlist_and_splits_long_messages():
     notification = NotificationEngine(EventBus(), enabled=False, max_message_length=500)
     payload = signal_payload() | {"signal_class": "C"}
@@ -472,7 +526,7 @@ def test_validation_rejects_target_too_far_for_atr():
     assert "TP_TOO_FAR_FOR_ATR" in validation["reason"]
 
 
-def test_strategy_engine_allows_low_net_rr_as_lower_class_signal():
+def test_strategy_engine_downgrades_low_net_rr_to_watchlist_class():
     strategy = StrategyEngine(
         FakeResearchRepository(FakePostgres()),
         DecisionEngine(FakePostgres()),
@@ -493,7 +547,7 @@ def test_strategy_engine_allows_low_net_rr_as_lower_class_signal():
 
     assert economics["net_profit_tp1_eur"] > 0
     assert economics["net_rr"] < strategy.min_net_rr
-    assert signal_class == "B"
+    assert signal_class == "C"
 
 
 def test_strategy_engine_respects_enabled_signal_classes():
