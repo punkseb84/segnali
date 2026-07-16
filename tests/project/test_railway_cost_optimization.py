@@ -57,6 +57,21 @@ def test_non_railway_strategy_interval_is_preserved() -> None:
     assert scheduler.effective_strategy_interval() == 60
 
 
+def test_collector_timeframes_use_cost_aware_frequencies() -> None:
+    settings = SimpleNamespace(
+        operational_timeframe="15m",
+        collector_timeframes=["5m", "15m", "1h", "4h"],
+    )
+
+    scheduler = PlatformScheduler(settings)
+
+    assert scheduler.collector_timeframe_groups() == (
+        ["15m"],
+        ["5m"],
+        ["1h", "4h"],
+    )
+
+
 class CandidateRepository:
     def __init__(self) -> None:
         self.ohlc_calls = 0
