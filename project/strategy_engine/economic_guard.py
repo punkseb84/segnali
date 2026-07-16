@@ -1,22 +1,21 @@
-"""Economic and lifecycle guards for probabilistic signals.
-
-Technical and statistical evidence remains probabilistic. Operative A/B signals must
-satisfy the configured economic minimums, while class C candidates are persisted as
-WATCHLIST observations and never treated as open positions.
-"""
+"""Economic, lifecycle and memory guards for probabilistic signals."""
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
 from typing import Any
 
+import pandas as pd
+
+from indicators import add_indicators
 from project.shared.events import Event, EventType
+from project.shared.memory import release_unused_memory
 from project.strategy_engine.probabilistic_service import ProbabilisticStrategyEngine as _ProbabilisticStrategyEngine
-from project.strategy_engine.service import GeneratedSignal
+from project.strategy_engine.service import GeneratedSignal, StrategyEngine
 
 
 class EconomicallyGuardedProbabilisticStrategyEngine(_ProbabilisticStrategyEngine):
-    """Keep probabilistic scoring while separating watchlists from trades."""
+    """Keep probabilistic scoring while separating watchlists and limiting RSS."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -25,6 +24,157 @@ class EconomicallyGuardedProbabilisticStrategyEngine(_ProbabilisticStrategyEngin
             self.operative_signal_classes,
             self.watchlist_signal_classes,
         )
+        self.logger.info("Strategy live-frame cache enabled")
+
+    def evaluate(self) -> GeneratedSignal | None:
+        try:
+            return super().evaluate()
+        finally:
+            rss_mb = release_unused_memory()
+            if rss_mb is not None:
+                self.logger.info("MEMORY_RELEASE phase=strategy rss_mb=%.1f", rss_mb)
+
+    def fetch_strategy_candidates(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Build indicators once per pair/timeframe instead of once per candidate."""
+        candidates = StrategyEngine.fetch_strategy_candidates(self, limit)
+        price_cache: dict[tuple[str, str], list[tuple[Any, ...]]] = {}
+        frame_cache: dict[tuple[str, str], pd.DataFrame | None] = {}
+        enriched: list[dict[str, Any]] = []
+
+        for candidate in candidates:
+            key = (str(candidate["pair"]), str(candidate["timeframe"]))
+            if key not in price_cache:
+                price_cache[key] = self.research_repository.fetch_ohlc(
+                    key[0], key[1], limit=self.ohlc_limit
+                )
+            if key not in frame_cache:
+                frame_cache[key] = self._build_live_frame(price_cache[key])
+
+            frame = frame_cache[key]
+            live_context = (
+                self._score_prebuilt_frame(frame, candidate)
+                if frame is not None
+                else {
+                    "score": 0.0,
+                    "regime": "INSUFFICIENT_DATA",
+                    "breakdown": {"data_quality": 0.0},
+                }
+            )
+            item = dict(candidate)
+            item["live_setup_score"] = live_context["score"]
+            item["live_setup_breakdown"] = live_context["breakdown"]
+            item["live_setup_regime"] = live_context["regime"]
+            enriched.append(item)
+
+        self.logger.info(
+            "STRATEGY_FRAME_CACHE candidates=%s unique_frames=%s",
+            len(candidates),
+            len(frame_cache),
+        )
+        return sorted(
+            enriched,
+            key=lambda item: (
+                float(item.get("live_setup_score") or 0.0),
+                float(item.get("profit_factor") or 0.0),
+                float(item.get("expectancy") or 0.0),
+            ),
+            reverse=True,
+        )
+
+    @staticmethod
+    def _build_live_frame(prices: list[tuple[Any, ...]]) -> pd.DataFrame | None:
+        if len(prices) < 60:
+            return None
+        frame = pd.DataFrame(
+            list(reversed(prices)),
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        numeric = ["open", "high", "low", "close", "volume"]
+        frame[numeric] = frame[numeric].apply(pd.to_numeric, errors="coerce")
+        return add_indicators(frame).reset_index(drop=True)
+
+    def _score_prebuilt_frame(
+        self,
+        frame: pd.DataFrame,
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        latest = frame.iloc[-1]
+        previous = frame.iloc[-2]
+        prior_window = frame.iloc[-21:-1]
+        required = [
+            "close", "open", "high", "low", "volume", "ema20", "ema50",
+            "ema200", "rsi14", "macd_hist", "atr14", "adx14",
+            "relative_volume", "support",
+        ]
+        if prior_window.empty or any(pd.isna(latest.get(name)) for name in required):
+            return {
+                "score": 0.0,
+                "regime": "INDICATORS_NOT_READY",
+                "breakdown": {"data_quality": 0.0},
+            }
+
+        parameters = dict(candidate.get("parameters") or {})
+        rsi_low, rsi_high = self._parse_rsi_range(
+            str(parameters.get("rsi_range", "0-100"))
+        )
+        adx_min = float(parameters.get("adx_min", 0.0) or 0.0)
+        relative_volume_min = float(
+            parameters.get("relative_volume_min", 0.0) or 0.0
+        )
+        requested_regime = str(parameters.get("market_regime", "ANY"))
+
+        close = float(latest["close"])
+        rsi = float(latest["rsi14"])
+        adx_value = float(latest["adx14"])
+        relative_volume = float(latest["relative_volume"])
+        prior_high = float(prior_window["high"].max())
+        prior_low = float(prior_window["low"].min())
+        actual_regime = self._infer_regime(frame, prior_high)
+
+        breakdown: dict[str, float] = {"data_quality": 5.0}
+        if rsi_low <= rsi <= rsi_high:
+            breakdown["rsi_fit"] = 15.0
+        else:
+            distance = min(abs(rsi - rsi_low), abs(rsi - rsi_high))
+            breakdown["rsi_fit"] = round(
+                max(0.0, 8.0 * (1.0 - distance / 20.0)), 4
+            )
+
+        breakdown["adx_strength"] = 10.0 if adx_min <= 0 else round(
+            min(10.0, max(0.0, adx_value / adx_min * 10.0)), 4
+        )
+        breakdown["relative_volume"] = 10.0 if relative_volume_min <= 0 else round(
+            min(10.0, max(0.0, relative_volume / relative_volume_min * 10.0)), 4
+        )
+
+        trend_points = 0.0
+        if close > float(latest["ema200"]):
+            trend_points += 5.0
+        if float(latest["ema20"]) > float(latest["ema50"]):
+            trend_points += 5.0
+        breakdown["trend"] = trend_points
+
+        momentum_points = 0.0
+        macd_now = float(latest["macd_hist"])
+        if macd_now > 0:
+            momentum_points += 5.0
+        if macd_now > float(previous["macd_hist"]):
+            momentum_points += 5.0
+        breakdown["momentum"] = momentum_points
+        breakdown["regime_fit"] = self._regime_points(
+            requested_regime, actual_regime
+        )
+        breakdown["pattern"] = self._pattern_points(
+            str(candidate.get("strategy") or ""),
+            frame,
+            prior_high,
+            prior_low,
+        )
+        return {
+            "score": round(min(100.0, sum(breakdown.values())), 4),
+            "regime": actual_regime,
+            "breakdown": breakdown,
+        }
 
     def classify_signal(
         self,
@@ -37,42 +187,28 @@ class EconomicallyGuardedProbabilisticStrategyEngine(_ProbabilisticStrategyEngin
         score: float = 0.0,
     ) -> str:
         signal_class = super().classify_signal(
-            best,
-            economics,
-            validation,
-            probability_context,
-            regime_aligned,
-            ev_decision,
-            score,
+            best, economics, validation, probability_context,
+            regime_aligned, ev_decision, score,
         )
         if signal_class not in self.operative_signal_classes:
             return signal_class
 
         net_profit = float(economics.get("net_profit_tp1_eur") or 0.0)
         net_rr = float(economics.get("net_rr") or 0.0)
-        profit_ok = net_profit >= self.min_tp1_net_profit_eur
-        rr_ok = net_rr >= self.min_net_rr
-        if profit_ok and rr_ok:
+        if net_profit >= self.min_tp1_net_profit_eur and net_rr >= self.min_net_rr:
             return signal_class
 
         self.logger.info(
             "SIGNAL_DOWNGRADED class_from=%s class_to=C reason=economic_minimums "
             "net_profit=%.6f min_net_profit=%.6f net_rr=%.4f min_net_rr=%.4f",
-            signal_class,
-            net_profit,
-            self.min_tp1_net_profit_eur,
-            net_rr,
-            self.min_net_rr,
+            signal_class, net_profit, self.min_tp1_net_profit_eur,
+            net_rr, self.min_net_rr,
         )
         return "C"
 
     def find_active_duplicate(self, signal: GeneratedSignal) -> int | None:
-        """Keep watchlist cooldown separate from active operative positions."""
         common_params = (
-            signal.strategy,
-            signal.pair,
-            signal.timeframe,
-            signal.regime,
+            signal.strategy, signal.pair, signal.timeframe, signal.regime,
         )
         if signal.signal_class in self.watchlist_signal_classes:
             rows = self.research_repository.client.fetch_all(
@@ -103,7 +239,6 @@ class EconomicallyGuardedProbabilisticStrategyEngine(_ProbabilisticStrategyEngin
         return int(rows[0][0]) if rows else None
 
     def save_signal(self, signal: GeneratedSignal) -> int:
-        """Persist C as WATCHLIST so the position monitor cannot close it as a trade."""
         signal_id = super().save_signal(signal)
         if signal.signal_class in self.watchlist_signal_classes:
             self.research_repository.client.execute(
@@ -114,15 +249,11 @@ class EconomicallyGuardedProbabilisticStrategyEngine(_ProbabilisticStrategyEngin
             )
             self.logger.info(
                 "WATCHLIST_STATUS_SET id=%s class=%s pair=%s strategy=%s",
-                signal_id,
-                signal.signal_class,
-                signal.pair,
-                signal.strategy,
+                signal_id, signal.signal_class, signal.pair, signal.strategy,
             )
         return signal_id
 
     def publish_daily_signal_report(self) -> bool:
-        """Count only operative A/B signals in the no-signal report."""
         if not self.enable_daily_signal_report:
             return False
         now = datetime.now(timezone.utc)

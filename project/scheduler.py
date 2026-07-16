@@ -13,6 +13,8 @@ from project.shared.logging import get_module_logger
 
 
 MIN_RAILWAY_LIGHT_RESEARCH_SECONDS = 3600
+MIN_FAST_CONTEXT_COLLECTOR_SECONDS = 900
+MIN_SLOW_CONTEXT_COLLECTOR_SECONDS = 3600
 
 
 class ResearchEngineProtocol(Protocol):
@@ -55,22 +57,86 @@ class PlatformScheduler:
         self._research_lock = threading.Lock()
         self._research_thread: threading.Thread | None = None
 
-    def configure(self) -> None:
-        """Start the operational path before long collector/research work.
+    @staticmethod
+    def timeframe_minutes(timeframe: str) -> int:
+        raw = str(timeframe).strip().lower()
+        try:
+            if raw.endswith("m"):
+                return int(raw[:-1])
+            if raw.endswith("h"):
+                return int(raw[:-1]) * 60
+            if raw.endswith("d"):
+                return int(raw[:-1]) * 1440
+        except ValueError:
+            pass
+        return 10_000
 
-        Only the operational timeframe is refreshed synchronously at startup. The
-        remaining collector timeframes and all research work run in background so
-        Strategy Engine, Position Monitor and Telegram delivery are not starved.
-        """
+    def collector_timeframe_groups(self) -> tuple[list[str], list[str], list[str]]:
+        operational = self.settings.operational_timeframe
+        configured = list(dict.fromkeys(self.settings.collector_timeframes))
+        operational_group = [operational]
+        remaining = [item for item in configured if item != operational]
+        fast_context = [item for item in remaining if self.timeframe_minutes(item) < 60]
+        slow_context = [item for item in remaining if self.timeframe_minutes(item) >= 60]
+        return operational_group, fast_context, slow_context
+
+    def effective_strategy_interval(self) -> int:
+        requested = max(1, int(self.settings.scheduler_strategy_seconds))
+        if self.settings.run_mode != "RAILWAY_LIGHT":
+            return requested
+        # A strategy evaluation cannot see fresher candles than the collector. Running
+        # it five times on the same 15m data only repeats pandas work and duplicate SQL.
+        return max(requested, int(self.settings.scheduler_collector_seconds))
+
+    def configure(self) -> None:
+        """Start the operational path before long collector/research work."""
         startup_remaining_timeframes: list[str] = []
         if self.settings.enable_data_collector and self.data_collector is not None:
-            schedule.every(self.settings.scheduler_collector_seconds).seconds.do(
-                self.start_data_collector_sync
-            )
-            self.logger.info(
-                "Data Collector scheduled every %ss in background",
-                self.settings.scheduler_collector_seconds,
-            )
+            if self.settings.run_mode == "RAILWAY_LIGHT":
+                operational_group, fast_context, slow_context = self.collector_timeframe_groups()
+                schedule.every(self.settings.scheduler_collector_seconds).seconds.do(
+                    self.start_data_collector_sync, operational_group
+                )
+                self.logger.info(
+                    "Data Collector operational scheduled every %ss timeframes=%s",
+                    self.settings.scheduler_collector_seconds,
+                    operational_group,
+                )
+                if fast_context:
+                    fast_interval = max(
+                        MIN_FAST_CONTEXT_COLLECTOR_SECONDS,
+                        self.settings.scheduler_collector_seconds,
+                    )
+                    schedule.every(fast_interval).seconds.do(
+                        self.start_data_collector_sync, fast_context
+                    )
+                    self.logger.info(
+                        "Data Collector fast context scheduled every %ss timeframes=%s",
+                        fast_interval,
+                        fast_context,
+                    )
+                if slow_context:
+                    slow_interval = max(
+                        MIN_SLOW_CONTEXT_COLLECTOR_SECONDS,
+                        self.settings.scheduler_collector_seconds,
+                    )
+                    schedule.every(slow_interval).seconds.do(
+                        self.start_data_collector_sync, slow_context
+                    )
+                    self.logger.info(
+                        "Data Collector slow context scheduled every %ss timeframes=%s",
+                        slow_interval,
+                        slow_context,
+                    )
+            else:
+                schedule.every(self.settings.scheduler_collector_seconds).seconds.do(
+                    self.start_data_collector_sync
+                )
+                self.logger.info(
+                    "Data Collector scheduled every %ss in background",
+                    self.settings.scheduler_collector_seconds,
+                )
+
             if self.settings.run_data_collector_on_startup:
                 operational_timeframe = self.settings.operational_timeframe
                 self.logger.info(
@@ -87,7 +153,6 @@ class PlatformScheduler:
                     if timeframe != operational_timeframe
                 ]
 
-        # Notification subscriptions are already installed in main.
         if self.settings.enable_decision_engine and self.decision_engine is not None:
             schedule.every(self.settings.scheduler_decision_seconds).seconds.do(
                 self.decision_engine.evaluate_market
@@ -99,15 +164,22 @@ class PlatformScheduler:
             self.decision_engine.evaluate_market()
 
         if self.settings.enable_strategy_engine and self.strategy_engine is not None:
-            schedule.every(self.settings.scheduler_strategy_seconds).seconds.do(
+            strategy_interval = self.effective_strategy_interval()
+            schedule.every(strategy_interval).seconds.do(
                 self.strategy_engine.evaluate
             )
             schedule.every(1).hours.do(
                 self.strategy_engine.publish_daily_signal_report
             )
+            if strategy_interval != self.settings.scheduler_strategy_seconds:
+                self.logger.info(
+                    "Strategy Engine interval optimized requested=%ss effective=%ss reason=no_new_candles_before_collector",
+                    self.settings.scheduler_strategy_seconds,
+                    strategy_interval,
+                )
             self.logger.info(
                 "Strategy Engine scheduled every %ss",
-                self.settings.scheduler_strategy_seconds,
+                strategy_interval,
             )
             self.strategy_engine.evaluate()
             self.strategy_engine.publish_daily_signal_report()
@@ -258,7 +330,7 @@ class PlatformScheduler:
         while True:
             schedule.run_pending()
             now = time.monotonic()
-            if now - last_heartbeat >= 30:
+            if now - last_heartbeat >= 300:
                 self.logger.info("Heartbeat")
                 last_heartbeat = now
             time.sleep(1)
