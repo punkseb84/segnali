@@ -15,7 +15,7 @@ from project.strategy_engine.economic_guard import EconomicallyGuardedProbabilis
 def test_railway_config_uses_direct_modular_entrypoint() -> None:
     config = json.loads(Path("railway.json").read_text(encoding="utf-8"))
 
-    assert config["deploy"]["startCommand"] == "python -m project.main"
+    assert config["deploy"]["startCommand"] == "python -m project.synchronized_main"
     assert config["deploy"]["restartPolicyType"] == "ON_FAILURE"
 
 
