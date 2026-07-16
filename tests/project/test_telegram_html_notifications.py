@@ -36,6 +36,7 @@ def signal_payload() -> dict[str, Any]:
         "historical_expected_value_eur": 0.11,
         "probability_confidence": "HIGH",
         "validation_status": "PASSED",
+        "validation_reason": "OK",
         "estimated_buy_fee_eur": 0.10,
         "estimated_sell_fee_eur": 0.10,
         "estimated_sell_fee_sl_eur": 0.10,
@@ -43,11 +44,26 @@ def signal_payload() -> dict[str, Any]:
         "estimated_slippage_cost_eur": 0.0,
         "score": 67.4,
         "probability": 0.58,
+        "score_breakdown": {
+            "live_setup_raw": 58.0,
+            "research_trades_raw": 25.0,
+            "research_trades_missing_flag": 0.0,
+            "probability_sample_raw": 90.0,
+            "historical_reliability_raw": 0.85,
+            "min_net_profit_required_raw": 0.30,
+            "min_net_rr_required_raw": 1.05,
+            "min_total_score_required_raw": 55.0,
+            "min_live_score_required_raw": 45.0,
+            "regime_aligned_flag": 1.0,
+        },
         "reasons": [
             "profit_factor=1.2400",
             "expectancy=0.080000",
             "regime=COMPRESSION",
             "regime_aligned=true",
+            "classification_primary_reason=OPERATIVE_REQUIREMENTS_MET",
+            "classification_blockers=NONE",
+            "classification_confidence_notes=NONE",
             "score_breakdown={\"too\": \"long\"}",
         ],
     }
@@ -84,23 +100,59 @@ class FakeTelegramResponse:
         }
 
 
-def test_signal_formatter_is_html_and_readable() -> None:
+def test_signal_formatter_is_html_readable_and_reports_confidence() -> None:
     message = format_signal_message(signal_payload())
 
     assert "<b>NUOVO SEGNALE LONG</b>" in message
     assert "Livelli operativi" in message
     assert "Rischio e rendimento" in message
-    assert "Score: <b>67.4/100</b>" in message
+    assert "Score totale: <b>67.4/100</b>" in message
+    assert "Score setup live: <b>58.0/100</b>" in message
+    assert "Trade ricerca specifica: <b>25</b>" in message
+    assert "R/R netto: <b>1.2400</b>" in message
     assert "score breakdown" not in message.lower()
     assert len(message) < 3900
 
 
-def test_watchlist_is_visually_distinct_and_explicitly_not_operative() -> None:
-    message = format_watchlist_message(signal_payload() | {"signal_class": "C"})
+def test_watchlist_is_distinct_and_explains_the_real_reason() -> None:
+    payload = signal_payload() | {
+        "signal_class": "C",
+        "reasons": signal_payload()["reasons"][:-3]
+        + [
+            "classification_primary_reason=LIVE_SCORE_BELOW_MINIMUM",
+            "classification_blockers=LIVE_SCORE_BELOW_MINIMUM",
+            "classification_confidence_notes=RESEARCH_SAMPLE_LIMITED",
+        ],
+        "score_breakdown": signal_payload()["score_breakdown"]
+        | {"live_setup_raw": 42.0},
+    }
+    message = format_watchlist_message(payload)
 
     assert "🟡 <b>WATCHLIST</b>" in message
-    assert "NON È UN SEGNALE DI INGRESSO" in message
+    assert "SETUP NON ANCORA OPERATIVO" in message
+    assert "Motivo effettivo della classe C" in message
+    assert "qualità del setup corrente insufficiente" in message
+    assert "campione specifico della strategia limitato" in message
+    assert "Score setup live: <b>42.0/100</b>" in message
     assert "Solo monitoraggio" in message
+
+
+def test_watchlist_shows_exact_rr_instead_of_misleading_rounding() -> None:
+    payload = signal_payload() | {
+        "signal_class": "C",
+        "net_rr": 1.0478,
+        "reasons": signal_payload()["reasons"][:-3]
+        + [
+            "classification_primary_reason=NET_RR_BELOW_MINIMUM",
+            "classification_blockers=NET_RR_BELOW_MINIMUM",
+            "classification_confidence_notes=NONE",
+        ],
+    }
+    message = format_watchlist_message(payload)
+
+    assert "R/R netto: <b>1.0478</b>" in message
+    assert "soglia ≥ 1.0500" in message
+    assert "R/R netto inferiore alla soglia" in message
 
 
 def test_outcome_id_links_to_original_signal() -> None:
