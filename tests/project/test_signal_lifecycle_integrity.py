@@ -48,7 +48,6 @@ class CaptureBus:
         self.events.append(event)
 
 
-
 def test_current_kraken_candle_is_updated_instead_of_frozen() -> None:
     client = CaptureClient()
     repository = MarketDataRepository(client, "KRAKEN")
@@ -74,7 +73,6 @@ def test_current_kraken_candle_is_updated_instead_of_frozen() -> None:
     assert "low = EXCLUDED.low" in query
 
 
-
 def make_integrity_engine(client: CaptureClient) -> OperationalIntegrityStrategyEngine:
     engine = object.__new__(OperationalIntegrityStrategyEngine)
     engine.watchlist_signal_classes = ["C"]
@@ -85,11 +83,10 @@ def make_integrity_engine(client: CaptureClient) -> OperationalIntegrityStrategy
     return engine
 
 
-
 def test_operational_duplicate_is_pair_level_not_strategy_level() -> None:
     client = CaptureClient(rows=[(321,)])
     engine = make_integrity_engine(client)
-    signal = SimpleNamespace(
+    generated = SimpleNamespace(
         signal_class="B",
         pair="BTC/USD",
         timeframe="15m",
@@ -98,14 +95,13 @@ def test_operational_duplicate_is_pair_level_not_strategy_level() -> None:
         reference_candle_time=datetime(2026, 7, 16, 18, 0, tzinfo=timezone.utc),
     )
 
-    assert engine.find_active_duplicate(signal) == 321
+    assert engine.find_active_duplicate(generated) == 321
     query, params = client.fetch_calls[0]
     assert "strategy =" not in query
     assert "pair = %s" in query
     assert "status IN ('NEW', 'OPEN')" in query
     assert "reference_candle_time = %s" in query
     assert params[0:2] == ("BTC/USD", "15m")
-
 
 
 def signal(reference: datetime) -> dict:
@@ -129,7 +125,6 @@ def signal(reference: datetime) -> dict:
     }
 
 
-
 def test_entry_candle_uses_close_and_can_record_target() -> None:
     reference = datetime(2026, 7, 16, 18, 0, tzinfo=timezone.utc)
     # Both barriers appear in the full candle range, but the close is above target.
@@ -139,13 +134,13 @@ def test_entry_candle_uses_close_and_can_record_target() -> None:
     monitor = PositionMonitor(postgres, bus)
 
     assert monitor.check_signal(signal(reference)) is True
-    update_query, update_params = postgres.execute_calls[0]
-    assert "outcome_resolution" in update_query
-    assert update_params[0] == "TARGET_HIT"
-    assert update_params[5] == "ENTRY_CANDLE_CLOSE"
+    audit_query, audit_params = postgres.execute_calls[0]
+    assert "outcome_resolution" in audit_query
+    assert audit_params[0] == 102.0
+    assert audit_params[4] == "ENTRY_CANDLE_CLOSE"
+    assert postgres.execute_calls[1][1] == ("TARGET_HIT", 7)
     assert bus.events[0].payload["outcome"] == "TARGET_HIT"
     assert bus.events[0].payload["outcome_resolution"] == "ENTRY_CANDLE_CLOSE"
-
 
 
 def test_entry_candle_wick_before_signal_does_not_create_false_stop() -> None:
@@ -185,7 +180,6 @@ class FakeStrategy:
         return False
 
 
-
 def test_operational_cycle_runs_after_fresh_collector_data() -> None:
     order: list[str] = []
     settings = SimpleNamespace(
@@ -206,7 +200,6 @@ def test_operational_cycle_runs_after_fresh_collector_data() -> None:
     assert order == ["collector", "decision", "strategy"]
     assert scheduler._collector_lock.acquire(blocking=False) is True
     scheduler._collector_lock.release()
-
 
 
 def test_lifecycle_migration_persists_auditable_outcomes() -> None:
