@@ -230,6 +230,7 @@ class StrategyEngine:
         profit_factor = float(best.get("profit_factor") or 0.0)
         expectancy = float(best.get("expectancy") or 0.0)
         if profit_factor <= 1.0 and expectancy <= 0:
+            self.record_candidate_rejection("no_statistical_edge")
             self.logger.info(
                 "STRATEGY candidate weak statistical edge strategy=%s pf=%.4f expectancy=%.6f action=continue_as_watchlist_candidate",
                 best["strategy"],
