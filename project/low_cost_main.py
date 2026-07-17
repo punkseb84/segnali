@@ -54,9 +54,9 @@ def apply_low_cost_policy(settings: PlatformSettings) -> PlatformSettings:
         ),
         strategy_candidate_limit=min(25, max(1, settings.strategy_candidate_limit)),
         strategy_ohlc_limit=min(500, max(220, settings.strategy_ohlc_limit)),
-        research_batch_size=min(8, max(1, settings.research_batch_size)),
+        research_batch_size=min(60, max(1, settings.research_batch_size)),
         max_research_runtime_minutes=min(
-            3, max(1, settings.max_research_runtime_minutes)
+            6, max(1, settings.max_research_runtime_minutes)
         ),
     )
 
@@ -149,7 +149,7 @@ def main() -> None:
     settings = apply_low_cost_policy(load_settings())
     logger = get_module_logger("system")
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-17 RAILWAY UNDER-10 BUILD")
+    logger.info("PROJECT MAIN VERSION: 2026-07-17 TELEGRAM RECOVERY BUILD")
     logger.info("======================================")
     logger.info(
         "LOW_COST_POLICY research_in_parent=false collector_seconds=%s "
@@ -217,6 +217,13 @@ def main() -> None:
             postgres=postgres,
         )
         notification.subscribe()
+        notification.send_telegram(
+            "🟦 <b>BOT ATTIVO</b>\n\n"
+            "Il collegamento Telegram funziona.\n"
+            "La ricerca robusta iniziale partirà entro circa 45 secondi e verrà eseguita "
+            "in un processo separato per contenere i costi Railway.\n\n"
+            "⚠️ Questo è un messaggio di stato, non un segnale di ingresso."
+        )
 
     scheduler = LowCostPlatformScheduler(
         settings,
