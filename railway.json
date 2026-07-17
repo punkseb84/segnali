@@ -1,7 +1,7 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "startCommand": "python -m project.synchronized_main",
+    "startCommand": "python -m project.low_cost_main",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5
   }
