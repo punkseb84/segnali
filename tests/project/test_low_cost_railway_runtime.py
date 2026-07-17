@@ -49,16 +49,11 @@ def test_low_cost_policy_preserves_operational_timeframe_without_unused_context(
     assert optimized.collector_timeframes == ["15m"]
 
 
-def test_isolated_research_defaults_are_fast_enough_to_avoid_multiweek_bootstrap(
-    monkeypatch,
-) -> None:
-    for variable in (
-        "LOW_COST_RESEARCH_INTERVAL_HOURS",
-        "LOW_COST_RESEARCH_STARTUP_DELAY_SECONDS",
-    ):
-        monkeypatch.delenv(variable, raising=False)
+def test_isolated_research_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("LOW_COST_RESEARCH_INTERVAL_HOURS", raising=False)
+    monkeypatch.delenv("LOW_COST_RESEARCH_STARTUP_DELAY_SECONDS", raising=False)
 
     scheduler = LowCostPlatformScheduler(SimpleNamespace())
 
-    assert scheduler.research_interval_hours == 3
-    assert scheduler.startup_research_delay_seconds == 45
+    assert scheduler.research_interval_hours == 6
+    assert scheduler.startup_research_delay_seconds == 30
