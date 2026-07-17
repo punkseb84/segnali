@@ -1,7 +1,7 @@
-"""Stable Railway entrypoint delegating to the low-memory runtime."""
+"""Stable Railway entrypoint with isolated historical research backfill."""
 from __future__ import annotations
 
-from project.low_cost_main import main
+from project.fixed_history_main import main
 
 
 if __name__ == "__main__":
