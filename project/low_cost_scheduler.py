@@ -1,7 +1,8 @@
-"""Low-cost Railway scheduler with fast isolated research bootstrap.
+"""Low-cost Railway scheduler with an immediate isolated research bootstrap.
 
-Research still runs outside the always-on process, but the bootstrap is large enough to
-produce usable candidates quickly instead of taking weeks to traverse the robust grid.
+The always-on process stays light. A short-lived worker evaluates a broad first layer of
+profiles at deploy, then smaller periodic batches continue the robust search. When the
+worker exits, its pandas/numpy memory is returned to the operating system.
 """
 from __future__ import annotations
 
@@ -26,12 +27,12 @@ class LowCostPlatformScheduler(SynchronizedPlatformScheduler):
         self._research_process: subprocess.Popen[str] | None = None
         self._startup_research_timer: threading.Timer | None = None
         self.research_interval_hours = max(
-            2,
-            int(os.getenv("LOW_COST_RESEARCH_INTERVAL_HOURS", "3")),
+            3,
+            int(os.getenv("LOW_COST_RESEARCH_INTERVAL_HOURS", "6")),
         )
         self.startup_research_delay_seconds = max(
             20,
-            int(os.getenv("LOW_COST_RESEARCH_STARTUP_DELAY_SECONDS", "45")),
+            int(os.getenv("LOW_COST_RESEARCH_STARTUP_DELAY_SECONDS", "30")),
         )
 
     def configure(self) -> None:
@@ -51,9 +52,9 @@ class LowCostPlatformScheduler(SynchronizedPlatformScheduler):
             "LOW_COST_RESEARCH isolated=true startup=true startup_delay_seconds=%s "
             "startup_batch_size=%s interval_hours=%s periodic_batch_size=%s",
             self.startup_research_delay_seconds,
-            os.getenv("LOW_COST_RESEARCH_STARTUP_BATCH_SIZE", "60"),
+            os.getenv("LOW_COST_RESEARCH_STARTUP_BATCH_SIZE", "200"),
             self.research_interval_hours,
-            os.getenv("LOW_COST_RESEARCH_BATCH_SIZE", "40"),
+            os.getenv("LOW_COST_RESEARCH_BATCH_SIZE", "80"),
         )
 
         cancelled = 0
@@ -124,12 +125,16 @@ class LowCostPlatformScheduler(SynchronizedPlatformScheduler):
 
             mode = "startup" if startup else "periodic"
             batch_size = os.getenv(
-                "LOW_COST_RESEARCH_STARTUP_BATCH_SIZE" if startup else "LOW_COST_RESEARCH_BATCH_SIZE",
-                "60" if startup else "40",
+                "LOW_COST_RESEARCH_STARTUP_BATCH_SIZE"
+                if startup
+                else "LOW_COST_RESEARCH_BATCH_SIZE",
+                "200" if startup else "80",
             )
             runtime_minutes = os.getenv(
-                "LOW_COST_RESEARCH_STARTUP_RUNTIME_MINUTES" if startup else "LOW_COST_RESEARCH_RUNTIME_MINUTES",
-                "6" if startup else "4",
+                "LOW_COST_RESEARCH_STARTUP_RUNTIME_MINUTES"
+                if startup
+                else "LOW_COST_RESEARCH_RUNTIME_MINUTES",
+                "10" if startup else "5",
             )
             env = os.environ.copy()
             env.update(
