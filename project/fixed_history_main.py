@@ -19,7 +19,7 @@ def main() -> None:
     os.environ.setdefault("ROBUST_RESEARCH_OHLC_LIMIT", "3000")
     os.environ.setdefault("ROBUST_MIN_CANDLES", "1800")
 
-    live_exchange = os.getenv("EXCHANGE_NAME", "KRAKEN")
+    live_exchange = os.getenv("EXCHANGE_NAME", "Kraken")
     low_cost_main.RobustResearchRepository = partial(
         SourcedRobustResearchRepository,
         market_exchange=live_exchange,
