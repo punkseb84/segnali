@@ -18,6 +18,12 @@ def main() -> None:
     os.environ.setdefault("LOW_COST_RESEARCH_INTERVAL_HOURS", "6")
     os.environ.setdefault("ROBUST_RESEARCH_OHLC_LIMIT", "3000")
     os.environ.setdefault("ROBUST_MIN_CANDLES", "1800")
+    os.environ.setdefault("ROBUST_MIN_TOTAL_TRADES", "30")
+    os.environ.setdefault("ROBUST_MIN_TRAIN_TRADES", "18")
+    os.environ.setdefault("ROBUST_MIN_TEST_TRADES", "10")
+    os.environ.setdefault("ROBUST_MIN_TRAIN_PROFIT_FACTOR", "1.05")
+    os.environ.setdefault("ROBUST_MIN_TEST_PROFIT_FACTOR", "1.15")
+    os.environ.setdefault("ROBUST_MIN_TEST_EXPECTANCY_EUR", "0.02")
 
     live_exchange = os.getenv("EXCHANGE_NAME", "Kraken")
     low_cost_main.RobustResearchRepository = partial(
