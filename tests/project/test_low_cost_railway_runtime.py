@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from project.config.settings import PlatformSettings
 from project.low_cost_main import apply_low_cost_policy
+from project.low_cost_scheduler import LowCostPlatformScheduler
 
 
 def test_low_cost_policy_removes_research_from_parent_and_reduces_cadence() -> None:
@@ -31,8 +34,8 @@ def test_low_cost_policy_removes_research_from_parent_and_reduces_cadence() -> N
     assert optimized.scheduler_position_monitor_seconds == 900
     assert optimized.strategy_candidate_limit == 25
     assert optimized.strategy_ohlc_limit == 500
-    assert optimized.research_batch_size == 8
-    assert optimized.max_research_runtime_minutes == 3
+    assert optimized.research_batch_size == 60
+    assert optimized.max_research_runtime_minutes == 6
 
 
 def test_low_cost_policy_preserves_operational_timeframe_without_unused_context() -> None:
@@ -44,3 +47,13 @@ def test_low_cost_policy_preserves_operational_timeframe_without_unused_context(
     optimized = apply_low_cost_policy(original)
 
     assert optimized.collector_timeframes == ["15m"]
+
+
+def test_isolated_research_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("LOW_COST_RESEARCH_INTERVAL_HOURS", raising=False)
+    monkeypatch.delenv("LOW_COST_RESEARCH_STARTUP_DELAY_SECONDS", raising=False)
+
+    scheduler = LowCostPlatformScheduler(SimpleNamespace())
+
+    assert scheduler.research_interval_hours == 6
+    assert scheduler.startup_research_delay_seconds == 30
