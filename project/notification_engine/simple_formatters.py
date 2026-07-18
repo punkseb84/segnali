@@ -1,7 +1,8 @@
-"""Telegram formatter for the simplified rule-based scanner."""
+"""Telegram formatters for the simplified LONG-only scanner."""
 from __future__ import annotations
 
 import html
+import json
 from typing import Any
 
 
@@ -33,6 +34,13 @@ def format_simple_signal_message(payload: dict[str, Any]) -> str:
         if len(reasons) >= 4:
             break
     reason_lines = "\n".join(f"• {_escape(item)}" for item in reasons) or "• Regole della strategia soddisfatte"
+    forward_completed = int(_float((payload.get("score_breakdown") or {}).get("forward_completed"), 0.0))
+    forward_pf = _float((payload.get("score_breakdown") or {}).get("forward_profit_factor"), 0.0)
+    forward_line = (
+        f"• Storico forward strategia: <b>{forward_completed} trade · PF {forward_pf:.2f}</b>\n"
+        if forward_completed
+        else "• Storico forward strategia: <b>in costruzione</b>\n"
+    )
     return (
         "🟢 <b>SEGNALE LONG</b>\n"
         f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
@@ -48,8 +56,39 @@ def format_simple_signal_message(payload: dict[str, Any]) -> str:
         f"• Score setup: <b>{_float(payload.get('score')):.1f}/100</b>\n"
         f"• R/R netto: <b>{_float(payload.get('net_rr')):.2f}</b>\n"
         f"• Profitto netto stimato TP: <b>€{_float(payload.get('net_profit_tp1_eur')):.2f}</b>\n"
-        f"• Perdita netta stimata SL: <b>€{_float(payload.get('net_loss_sl_eur')):.2f}</b>\n\n"
+        f"• Perdita netta stimata SL: <b>€{_float(payload.get('net_loss_sl_eur')):.2f}</b>\n"
+        f"{forward_line}\n"
         "✅ <b>Perché è stato selezionato</b>\n"
         f"{reason_lines}\n\n"
         "⚠️ Segnale sperimentale in paper trading: nessun metodo garantisce profitto."
+    )
+
+
+def format_simple_report_message(payload: dict[str, Any]) -> str:
+    """Preserve HTML only for reports generated internally by the scanner."""
+    raw = payload.get("message")
+    if raw is None:
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if payload.get("trusted_html") is True:
+        return str(raw)
+    return "📊 <b>REPORT SCANNER</b>\n\n" + _escape(raw)
+
+
+def format_simple_outcome_message(payload: dict[str, Any]) -> str:
+    is_stop = str(payload.get("outcome")) == "STOP_LOSS"
+    title = "🔴 <b>STOP LOSS RAGGIUNTO</b>" if is_stop else "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
+    signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
+    result = -abs(_float(payload.get("net_loss_sl_eur"))) if is_stop else _float(payload.get("net_profit_tp1_eur"))
+    return (
+        f"{title}\n"
+        f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
+        f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
+        f"Strategia: <b>{_escape(payload.get('strategy'))}</b>\n\n"
+        "📍 <b>Esito</b>\n"
+        f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
+        f"• Livello raggiunto: <b>{_price(payload.get('outcome_price'))}</b>\n"
+        f"• Risultato netto stimato: <b>€{result:+.2f}</b>\n"
+        f"• R/R iniziale: <b>{_float(payload.get('net_rr')):.2f}</b>\n\n"
+        f"• Candela di chiusura: <b>{_escape(payload.get('closed_at'))}</b>\n"
+        f"• Risoluzione: <b>{_escape(payload.get('outcome_resolution'))}</b>"
     )
