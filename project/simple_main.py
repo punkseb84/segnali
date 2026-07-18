@@ -1,4 +1,4 @@
-"""Railway entrypoint for the optimized LONG-only 20-crypto Telegram scanner."""
+"""Railway entrypoint for the enhanced LONG-only 20-crypto Telegram scanner."""
 from __future__ import annotations
 
 import os
@@ -17,13 +17,16 @@ from project.database.postgres import (
     parse_postgres_connection_info,
     sanitize_postgres_error,
 )
+from project.enhanced_long_scanner import (
+    ENHANCED_LONG_STRATEGIES,
+    EnhancedLongStrategyScanner,
+)
 from project.notification_engine.service import NotificationEngine
 from project.notification_engine.simple_formatters import (
     format_simple_outcome_message,
     format_simple_report_message,
     format_simple_signal_message,
 )
-from project.optimized_long_scanner import OptimizedLongStrategyScanner, SIMPLE_STRATEGIES
 from project.position_monitor.service import PositionMonitor
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
@@ -82,15 +85,17 @@ def main() -> None:
     settings = apply_simple_policy(load_settings())
     logger = get_module_logger("system")
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-18 OPTIMIZED LONG SCANNER V2")
+    logger.info("PROJECT MAIN VERSION: 2026-07-18 ENHANCED LONG SCANNER V3")
     logger.info("======================================")
     logger.info(
-        "OPTIMIZED_LONG_MODE pairs=%s timeframes=%s interval_seconds=%s "
-        "strategies=%s research=false short_signals=false classes_hidden=true",
+        "ENHANCED_LONG_MODE pairs=%s timeframes=%s interval_seconds=%s "
+        "strategies=%s max_signals=%s max_correlated=%s research=false short_signals=false",
         len(settings.collector_pairs),
         settings.collector_timeframes,
         settings.scheduler_collector_seconds,
-        list(SIMPLE_STRATEGIES),
+        list(ENHANCED_LONG_STRATEGIES),
+        int(os.getenv("SIMPLE_MAX_SIGNALS_PER_CYCLE", "3")),
+        int(os.getenv("SIMPLE_MAX_CORRELATED_PER_CYCLE", "2")),
     )
 
     try:
@@ -115,7 +120,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_simple_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = OptimizedLongStrategyScanner(
+    scanner = EnhancedLongStrategyScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -132,13 +137,29 @@ def main() -> None:
         min_signal_score=float(os.getenv("SIMPLE_MIN_SIGNAL_SCORE", "68")),
         min_net_rr=float(os.getenv("SIMPLE_MIN_NET_RR", "1.10")),
         min_net_profit_eur=float(os.getenv("SIMPLE_MIN_NET_PROFIT_EUR", "0.25")),
-        max_signals_per_cycle=int(os.getenv("SIMPLE_MAX_SIGNALS_PER_CYCLE", "2")),
+        max_signals_per_cycle=int(os.getenv("SIMPLE_MAX_SIGNALS_PER_CYCLE", "3")),
+        max_correlated_per_cycle=int(
+            os.getenv("SIMPLE_MAX_CORRELATED_PER_CYCLE", "2")
+        ),
+        correlation_threshold=float(
+            os.getenv("SIMPLE_CORRELATION_THRESHOLD", "0.85")
+        ),
         performance_guard_min_trades=int(
             os.getenv("SIMPLE_PERFORMANCE_GUARD_MIN_TRADES", "20")
         ),
         performance_guard_min_pf=float(
             os.getenv("SIMPLE_PERFORMANCE_GUARD_MIN_PF", "0.85")
         ),
+        performance_pause_hours=int(
+            os.getenv("SIMPLE_PERFORMANCE_PAUSE_HOURS", "72")
+        ),
+        probation_interval_hours=int(
+            os.getenv("SIMPLE_PROBATION_INTERVAL_HOURS", "24")
+        ),
+        probation_min_score=float(
+            os.getenv("SIMPLE_PROBATION_MIN_SCORE", "76")
+        ),
+        probation_min_rr=float(os.getenv("SIMPLE_PROBATION_MIN_RR", "1.25")),
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
     )
@@ -160,13 +181,14 @@ def main() -> None:
         notification.subscribe()
         if settings.telegram_send_startup_message:
             notification.send_telegram(
-                "🟦 <b>SCANNER LONG V2 ATTIVO</b>\n\n"
+                "🟦 <b>SCANNER LONG V3 ATTIVO</b>\n\n"
                 "Monitoraggio: <b>20 coppie</b>\n"
                 "Timeframe: <b>15m</b> con conferma <b>1h</b>\n"
-                "Strategie: <b>Trend Pullback, Breakout 20, Range Bounce, Reversal confermato</b>\n"
-                "Segnali SHORT: <b>disattivati</b>\n"
-                "Ricerca a combinazioni: <b>disattivata</b>\n\n"
-                "Il report mostrerà i setup più vicini e i risultati forward reali."
+                "Strategie: <b>6 LONG</b>, incluse forza relativa e squeeze breakout\n"
+                "Massimo segnali per ciclo: <b>3</b>\n"
+                "Massimo esposizioni fortemente correlate: <b>2</b>\n"
+                "Segnali SHORT: <b>disattivati</b>\n\n"
+                "Strategie deboli: pausa temporanea, poi riattivazione automatica in probation."
             )
 
     scheduler = SimpleMarketScheduler(
