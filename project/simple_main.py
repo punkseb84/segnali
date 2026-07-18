@@ -1,4 +1,4 @@
-"""Railway entrypoint for the enhanced LONG-only 20-crypto Telegram scanner."""
+"""Railway entrypoint for the operational LONG-only 20-crypto Telegram scanner."""
 from __future__ import annotations
 
 import os
@@ -17,20 +17,20 @@ from project.database.postgres import (
     parse_postgres_connection_info,
     sanitize_postgres_error,
 )
-from project.enhanced_long_scanner import (
-    ENHANCED_LONG_STRATEGIES,
-    EnhancedLongStrategyScanner,
-)
 from project.notification_engine.service import NotificationEngine
 from project.notification_engine.simple_formatters import (
     format_simple_outcome_message,
     format_simple_report_message,
     format_simple_signal_message,
 )
+from project.operational_long_scanner import (
+    OPERATIONAL_LONG_STRATEGIES,
+    OperationalLongStrategyScanner,
+)
+from project.operational_scheduler import OperationalMarketScheduler
 from project.position_monitor.service import PositionMonitor
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
-from project.simple_scheduler import SimpleMarketScheduler
 
 
 RAILWAY_LIGHT_MISSING_DATABASE_URL = (
@@ -85,16 +85,18 @@ def main() -> None:
     settings = apply_simple_policy(load_settings())
     logger = get_module_logger("system")
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-18 ENHANCED LONG SCANNER V3")
+    logger.info("PROJECT MAIN VERSION: 2026-07-18 OPERATIONAL LONG SCANNER V4")
     logger.info("======================================")
     logger.info(
-        "ENHANCED_LONG_MODE pairs=%s timeframes=%s interval_seconds=%s "
-        "strategies=%s max_signals=%s max_correlated=%s research=false short_signals=false",
+        "OPERATIONAL_LONG_MODE pairs=%s timeframes=%s interval_seconds=%s "
+        "strategies=%s max_signals=%s max_open=%s max_correlated=%s "
+        "adaptive_confirmations=true economic_target_rescue=true research=false short_signals=false",
         len(settings.collector_pairs),
         settings.collector_timeframes,
         settings.scheduler_collector_seconds,
-        list(ENHANCED_LONG_STRATEGIES),
+        list(OPERATIONAL_LONG_STRATEGIES),
         int(os.getenv("SIMPLE_MAX_SIGNALS_PER_CYCLE", "3")),
+        int(os.getenv("SIMPLE_MAX_OPEN_POSITIONS", "5")),
         int(os.getenv("SIMPLE_MAX_CORRELATED_PER_CYCLE", "2")),
     )
 
@@ -120,7 +122,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_simple_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = EnhancedLongStrategyScanner(
+    scanner = OperationalLongStrategyScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -138,6 +140,7 @@ def main() -> None:
         min_net_rr=float(os.getenv("SIMPLE_MIN_NET_RR", "1.10")),
         min_net_profit_eur=float(os.getenv("SIMPLE_MIN_NET_PROFIT_EUR", "0.25")),
         max_signals_per_cycle=int(os.getenv("SIMPLE_MAX_SIGNALS_PER_CYCLE", "3")),
+        max_open_signals=int(os.getenv("SIMPLE_MAX_OPEN_POSITIONS", "5")),
         max_correlated_per_cycle=int(
             os.getenv("SIMPLE_MAX_CORRELATED_PER_CYCLE", "2")
         ),
@@ -181,17 +184,19 @@ def main() -> None:
         notification.subscribe()
         if settings.telegram_send_startup_message:
             notification.send_telegram(
-                "🟦 <b>SCANNER LONG V3 ATTIVO</b>\n\n"
+                "🟦 <b>SCANNER LONG V4 ATTIVO</b>\n\n"
                 "Monitoraggio: <b>20 coppie</b>\n"
                 "Timeframe: <b>15m</b> con conferma <b>1h</b>\n"
-                "Strategie: <b>6 LONG</b>, incluse forza relativa e squeeze breakout\n"
+                "Strategie: <b>6 LONG</b>\n"
+                "Logica: <b>nucleo tecnico obbligatorio + conferme adattive</b>\n"
+                "Costi: <b>target adattato senza abbassare R/R minimo</b>\n"
                 "Massimo segnali per ciclo: <b>3</b>\n"
+                "Massimo posizioni aperte: <b>5</b>\n"
                 "Massimo esposizioni fortemente correlate: <b>2</b>\n"
-                "Segnali SHORT: <b>disattivati</b>\n\n"
-                "Strategie deboli: pausa temporanea, poi riattivazione automatica in probation."
+                "Segnali SHORT: <b>disattivati</b>"
             )
 
-    scheduler = SimpleMarketScheduler(
+    scheduler = OperationalMarketScheduler(
         settings,
         collector,
         None,
