@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pandas as pd
 
@@ -95,12 +95,11 @@ def test_mean_reversion_requires_reentry_inside_bollinger_band() -> None:
 
 
 def test_fetch_closed_frame_excludes_open_candle() -> None:
-    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    closed = now - timedelta(minutes=30)
-    open_candle = now - timedelta(minutes=5)
+    current_interval = pd.Timestamp.now(tz="UTC").floor("15min").to_pydatetime()
+    closed = current_interval - timedelta(minutes=15)
     client = FakeClient(
         [
-            (open_candle, 100, 101, 99, 100.5, 10),
+            (current_interval, 100, 101, 99, 100.5, 10),
             (closed, 99, 100, 98, 99.5, 9),
         ]
     )
