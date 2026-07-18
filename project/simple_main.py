@@ -20,10 +20,10 @@ from project.database.postgres import (
 from project.notification_engine.service import NotificationEngine
 from project.notification_engine.simple_formatters import format_simple_signal_message
 from project.position_monitor.service import PositionMonitor
+from project.reliable_simple_scanner import ReliableSimpleStrategyScanner
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_scheduler import SimpleMarketScheduler
-from project.simple_strategy_scanner import SimpleStrategyScanner
 
 
 RAILWAY_LIGHT_MISSING_DATABASE_URL = (
@@ -108,7 +108,7 @@ def main() -> None:
     notification_service.format_signal_message = format_simple_signal_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = SimpleStrategyScanner(
+    scanner = ReliableSimpleStrategyScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
