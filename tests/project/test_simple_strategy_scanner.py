@@ -6,9 +6,9 @@ import pandas as pd
 
 from project.config.settings import PlatformSettings
 from project.notification_engine.simple_formatters import format_simple_signal_message
+from project.reliable_simple_scanner import ReliableSimpleStrategyScanner
 from project.shared.events import EventBus
 from project.simple_main import apply_simple_policy
-from project.simple_strategy_scanner import SimpleStrategyScanner
 
 
 class FakeClient:
@@ -36,7 +36,7 @@ def indicator_frame() -> pd.DataFrame:
                 "volume": 100.0 + index,
             }
         )
-    return SimpleStrategyScanner.add_indicators(pd.DataFrame(rows))
+    return ReliableSimpleStrategyScanner.add_indicators(pd.DataFrame(rows))
 
 
 def test_simple_policy_disables_quant_research() -> None:
@@ -57,7 +57,7 @@ def test_simple_policy_disables_quant_research() -> None:
 def test_detects_uptrend_from_hourly_context() -> None:
     frame_15m = indicator_frame()
     frame_1h = indicator_frame()
-    assert SimpleStrategyScanner.detect_regime(frame_15m, frame_1h) == "TREND_UP"
+    assert ReliableSimpleStrategyScanner.detect_regime(frame_15m, frame_1h) == "TREND_UP"
 
 
 def test_trend_pullback_setup_is_readable_and_actionable() -> None:
@@ -67,7 +67,7 @@ def test_trend_pullback_setup_is_readable_and_actionable() -> None:
     frame.loc[frame.index[-2], "close"] = frame.iloc[-1]["close"] * 0.998
     frame.loc[frame.index[-1], "rsi"] = 56.0
     frame.loc[frame.index[-1], "volume_ratio"] = 1.2
-    setup = SimpleStrategyScanner.trend_pullback_setup(frame, frame, "TREND_UP")
+    setup = ReliableSimpleStrategyScanner.trend_pullback_setup(frame, frame, "TREND_UP")
     assert setup is not None
     assert setup["strategy"] == "Trend Pullback"
     assert setup["score"] >= 70
@@ -78,7 +78,7 @@ def test_breakout_is_blocked_in_downtrend() -> None:
     frame.loc[frame.index[-1], "close"] = frame.iloc[-1]["high20_prev"] + 1
     frame.loc[frame.index[-1], "rsi"] = 60.0
     frame.loc[frame.index[-1], "volume_ratio"] = 2.0
-    assert SimpleStrategyScanner.breakout_setup(frame, frame, "TREND_DOWN") is None
+    assert ReliableSimpleStrategyScanner.breakout_setup(frame, frame, "TREND_DOWN") is None
 
 
 def test_mean_reversion_requires_reentry_inside_bollinger_band() -> None:
@@ -89,7 +89,7 @@ def test_mean_reversion_requires_reentry_inside_bollinger_band() -> None:
     frame.loc[frame.index[-1], "volume_ratio"] = 1.0
     hourly = frame.copy()
     hourly.loc[hourly.index[-1], "close"] = hourly.iloc[-1]["ema200"] * 1.01
-    setup = SimpleStrategyScanner.mean_reversion_setup(frame, hourly, "RANGE")
+    setup = ReliableSimpleStrategyScanner.mean_reversion_setup(frame, hourly, "RANGE")
     assert setup is not None
     assert setup["strategy"] == "Mean Reversion Bollinger"
 
@@ -103,7 +103,7 @@ def test_fetch_closed_frame_excludes_open_candle() -> None:
             (closed, 99, 100, 98, 99.5, 9),
         ]
     )
-    scanner = SimpleStrategyScanner(client, EventBus(), ["BTC/USD"])
+    scanner = ReliableSimpleStrategyScanner(client, EventBus(), ["BTC/USD"])
     frame = scanner.fetch_closed_frame("BTC/USD", "15m", 10)
     assert len(frame) == 1
     assert float(frame.iloc[0]["close"]) == 99.5
