@@ -34,12 +34,19 @@ def format_simple_signal_message(payload: dict[str, Any]) -> str:
         if len(reasons) >= 4:
             break
     reason_lines = "\n".join(f"• {_escape(item)}" for item in reasons) or "• Regole della strategia soddisfatte"
-    forward_completed = int(_float((payload.get("score_breakdown") or {}).get("forward_completed"), 0.0))
-    forward_pf = _float((payload.get("score_breakdown") or {}).get("forward_profit_factor"), 0.0)
+    breakdown = payload.get("score_breakdown") or {}
+    forward_completed = int(_float(breakdown.get("forward_completed"), 0.0))
+    forward_pf = _float(breakdown.get("forward_profit_factor"), 0.0)
+    strategy_state = str(breakdown.get("strategy_state") or "ACTIVE")
     forward_line = (
         f"• Storico forward strategia: <b>{forward_completed} trade · PF {forward_pf:.2f}</b>\n"
         if forward_completed
         else "• Storico forward strategia: <b>in costruzione</b>\n"
+    )
+    state_line = (
+        "• Stato strategia: <b>PROBATION</b> · segnale-test con requisiti rafforzati\n"
+        if strategy_state == "PROBATION"
+        else f"• Stato strategia: <b>{_escape(strategy_state)}</b>\n"
     )
     return (
         "🟢 <b>SEGNALE LONG</b>\n"
@@ -57,7 +64,8 @@ def format_simple_signal_message(payload: dict[str, Any]) -> str:
         f"• R/R netto: <b>{_float(payload.get('net_rr')):.2f}</b>\n"
         f"• Profitto netto stimato TP: <b>€{_float(payload.get('net_profit_tp1_eur')):.2f}</b>\n"
         f"• Perdita netta stimata SL: <b>€{_float(payload.get('net_loss_sl_eur')):.2f}</b>\n"
-        f"{forward_line}\n"
+        f"{forward_line}"
+        f"{state_line}\n"
         "✅ <b>Perché è stato selezionato</b>\n"
         f"{reason_lines}\n\n"
         "⚠️ Segnale sperimentale in paper trading: nessun metodo garantisce profitto."
