@@ -1,7 +1,7 @@
-"""Stable Railway entrypoint with isolated historical research backfill."""
+"""Stable Railway entrypoint for the simple 20-crypto scanner."""
 from __future__ import annotations
 
-from project.fixed_history_main import main
+from project.simple_main import main
 
 
 if __name__ == "__main__":
