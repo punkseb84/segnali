@@ -43,6 +43,17 @@ CREATE INDEX IF NOT EXISTS idx_generated_signals_reference_candle
     ON signals.generated_signals(pair, timeframe, reference_candle_time, signal_class);
 """
 
+SIGNAL_OUTCOME_AUDIT_MIGRATION = """
+ALTER TABLE signals.generated_signals
+    ADD COLUMN IF NOT EXISTS exchange TEXT NOT NULL DEFAULT 'kraken',
+    ADD COLUMN IF NOT EXISTS outcome_open_price NUMERIC,
+    ADD COLUMN IF NOT EXISTS outcome_high_price NUMERIC,
+    ADD COLUMN IF NOT EXISTS outcome_low_price NUMERIC;
+
+CREATE INDEX IF NOT EXISTS idx_generated_signals_exchange_lifecycle
+    ON signals.generated_signals(exchange, pair, timeframe, status, created_at DESC);
+"""
+
 
 def run_migrations(client: PostgresClient) -> None:
     for statement in ALL_SCHEMAS:
@@ -50,3 +61,4 @@ def run_migrations(client: PostgresClient) -> None:
     client.execute(WATCHLIST_ISOLATION_MIGRATION)
     client.execute(TELEGRAM_MESSAGE_REFERENCE_MIGRATION)
     client.execute(SIGNAL_LIFECYCLE_INTEGRITY_MIGRATION)
+    client.execute(SIGNAL_OUTCOME_AUDIT_MIGRATION)
