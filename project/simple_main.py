@@ -1,4 +1,4 @@
-"""Railway entrypoint for the operational LONG-only 20-crypto Telegram scanner."""
+"""Railway entrypoint for the seven-strategy LONG-only Telegram scanner."""
 from __future__ import annotations
 
 import os
@@ -17,15 +17,12 @@ from project.database.postgres import (
     parse_postgres_connection_info,
     sanitize_postgres_error,
 )
+from project.harmonic_live_scanner import LIVE_LONG_STRATEGIES, HarmonicLiveStrategyScanner
 from project.notification_engine.service import NotificationEngine
 from project.notification_engine.simple_formatters import (
     format_simple_outcome_message,
     format_simple_report_message,
     format_simple_signal_message,
-)
-from project.operational_long_scanner import (
-    OPERATIONAL_LONG_STRATEGIES,
-    OperationalLongStrategyScanner,
 )
 from project.operational_scheduler import OperationalMarketScheduler
 from project.position_monitor.service import PositionMonitor
@@ -39,7 +36,6 @@ RAILWAY_LIGHT_MISSING_DATABASE_URL = (
 
 
 def apply_simple_policy(settings: PlatformSettings) -> PlatformSettings:
-    """Force the small operational architecture regardless of obsolete Railway flags."""
     return replace(
         settings,
         enable_research_engine=False,
@@ -66,38 +62,40 @@ def build_postgres(settings: PlatformSettings) -> PostgresClient:
     return postgres
 
 
-def build_collector(
-    settings: PlatformSettings,
-    event_bus: EventBus,
-    postgres: PostgresClient,
-) -> DataCollectorService:
+def build_collector(settings: PlatformSettings, event_bus: EventBus, postgres: PostgresClient) -> DataCollectorService:
     kraken = KrakenOhlcClient(
         api_base=settings.kraken_api_base,
         sleep_seconds=settings.kraken_api_sleep_seconds,
         max_retries=settings.kraken_max_retries,
         timeout_seconds=settings.kraken_timeout_seconds,
     )
-    repository = MarketDataRepository(postgres, settings.exchange_name)
-    return DataCollectorService(kraken, repository, event_bus)
+    return DataCollectorService(
+        kraken,
+        MarketDataRepository(postgres, settings.exchange_name),
+        event_bus,
+    )
 
 
 def main() -> None:
     settings = apply_simple_policy(load_settings())
     logger = get_module_logger("system")
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-18 OPERATIONAL LONG SCANNER V4")
+    logger.info("PROJECT MAIN VERSION: 2026-07-19 HARMONIC LIVE LONG SCANNER V5")
     logger.info("======================================")
     logger.info(
-        "OPERATIONAL_LONG_MODE pairs=%s timeframes=%s interval_seconds=%s "
-        "strategies=%s max_signals=%s max_open=%s max_correlated=%s "
-        "adaptive_confirmations=true economic_target_rescue=true research=false short_signals=false",
+        "HARMONIC_LIVE_MODE pairs=%s timeframes=%s interval_seconds=%s strategies=%s "
+        "max_signals=%s max_open=%s max_correlated=%s max_net_loss_eur=%s "
+        "loss_streak_trigger=%s loss_guard_hours=%s research=false short_signals=false",
         len(settings.collector_pairs),
         settings.collector_timeframes,
         settings.scheduler_collector_seconds,
-        list(OPERATIONAL_LONG_STRATEGIES),
+        list(LIVE_LONG_STRATEGIES),
         int(os.getenv("SIMPLE_MAX_SIGNALS_PER_CYCLE", "3")),
         int(os.getenv("SIMPLE_MAX_OPEN_POSITIONS", "5")),
         int(os.getenv("SIMPLE_MAX_CORRELATED_PER_CYCLE", "2")),
+        float(os.getenv("SIMPLE_MAX_NET_LOSS_EUR", "1.00")),
+        int(os.getenv("SIMPLE_LOSS_STREAK_TRIGGER", "3")),
+        int(os.getenv("SIMPLE_LOSS_GUARD_HOURS", "12")),
     )
 
     try:
@@ -110,10 +108,7 @@ def main() -> None:
         raise SystemExit(1) from exc
 
     logger.info("PostgreSQL connection: OK")
-    logger.info(
-        "PostgreSQL %s",
-        parse_postgres_connection_info(settings.database_url).display(),
-    )
+    logger.info("PostgreSQL %s", parse_postgres_connection_info(settings.database_url).display())
     run_migrations(postgres)
 
     event_bus = EventBus()
@@ -122,7 +117,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_simple_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = OperationalLongStrategyScanner(
+    scanner = HarmonicLiveStrategyScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -141,28 +136,17 @@ def main() -> None:
         min_net_profit_eur=float(os.getenv("SIMPLE_MIN_NET_PROFIT_EUR", "0.25")),
         max_signals_per_cycle=int(os.getenv("SIMPLE_MAX_SIGNALS_PER_CYCLE", "3")),
         max_open_signals=int(os.getenv("SIMPLE_MAX_OPEN_POSITIONS", "5")),
-        max_correlated_per_cycle=int(
-            os.getenv("SIMPLE_MAX_CORRELATED_PER_CYCLE", "2")
-        ),
-        correlation_threshold=float(
-            os.getenv("SIMPLE_CORRELATION_THRESHOLD", "0.85")
-        ),
-        performance_guard_min_trades=int(
-            os.getenv("SIMPLE_PERFORMANCE_GUARD_MIN_TRADES", "20")
-        ),
-        performance_guard_min_pf=float(
-            os.getenv("SIMPLE_PERFORMANCE_GUARD_MIN_PF", "0.85")
-        ),
-        performance_pause_hours=int(
-            os.getenv("SIMPLE_PERFORMANCE_PAUSE_HOURS", "72")
-        ),
-        probation_interval_hours=int(
-            os.getenv("SIMPLE_PROBATION_INTERVAL_HOURS", "24")
-        ),
-        probation_min_score=float(
-            os.getenv("SIMPLE_PROBATION_MIN_SCORE", "76")
-        ),
+        max_correlated_per_cycle=int(os.getenv("SIMPLE_MAX_CORRELATED_PER_CYCLE", "2")),
+        correlation_threshold=float(os.getenv("SIMPLE_CORRELATION_THRESHOLD", "0.85")),
+        performance_guard_min_trades=int(os.getenv("SIMPLE_PERFORMANCE_GUARD_MIN_TRADES", "20")),
+        performance_guard_min_pf=float(os.getenv("SIMPLE_PERFORMANCE_GUARD_MIN_PF", "0.85")),
+        performance_pause_hours=int(os.getenv("SIMPLE_PERFORMANCE_PAUSE_HOURS", "72")),
+        probation_interval_hours=int(os.getenv("SIMPLE_PROBATION_INTERVAL_HOURS", "24")),
+        probation_min_score=float(os.getenv("SIMPLE_PROBATION_MIN_SCORE", "76")),
         probation_min_rr=float(os.getenv("SIMPLE_PROBATION_MIN_RR", "1.25")),
+        max_net_loss_eur=float(os.getenv("SIMPLE_MAX_NET_LOSS_EUR", "1.00")),
+        loss_streak_trigger=int(os.getenv("SIMPLE_LOSS_STREAK_TRIGGER", "3")),
+        loss_guard_hours=int(os.getenv("SIMPLE_LOSS_GUARD_HOURS", "12")),
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
     )
@@ -184,27 +168,25 @@ def main() -> None:
         notification.subscribe()
         if settings.telegram_send_startup_message:
             notification.send_telegram(
-                "🟦 <b>SCANNER LONG V4 ATTIVO</b>\n\n"
+                "🟦 <b>SCANNER LONG V5 ATTIVO</b>\n\n"
                 "Monitoraggio: <b>20 coppie</b>\n"
                 "Timeframe: <b>15m</b> con conferma <b>1h</b>\n"
-                "Strategie: <b>6 LONG</b>\n"
-                "Logica: <b>nucleo tecnico obbligatorio + conferme adattive</b>\n"
-                "Costi: <b>target adattato senza abbassare R/R minimo</b>\n"
-                "Massimo segnali per ciclo: <b>3</b>\n"
-                "Massimo posizioni aperte: <b>5</b>\n"
-                "Massimo esposizioni fortemente correlate: <b>2</b>\n"
+                "Strategie: <b>7 LONG live</b>\n"
+                "Nuova: <b>Pattern armonici Gartley, Bat, Butterfly e Crab</b>\n"
+                "Stop: <b>strutturali e adeguati all'ATR</b>\n"
+                "Perdita netta stimata massima per segnale: <b>€1,00</b>\n"
+                "Dopo 3 stop consecutivi: <b>modalità prudente automatica</b>\n"
                 "Segnali SHORT: <b>disattivati</b>"
             )
 
-    scheduler = OperationalMarketScheduler(
+    OperationalMarketScheduler(
         settings,
         collector,
         None,
         None,
         scanner,
         position_monitor,
-    )
-    scheduler.run_forever()
+    ).run_forever()
 
 
 if __name__ == "__main__":
