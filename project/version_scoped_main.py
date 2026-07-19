@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import project.notification_engine.service as notification_service
 from project.config.settings import load_settings
@@ -23,6 +25,39 @@ from project.simple_main import apply_simple_policy, build_collector, build_post
 from project.version_scoped_harmonic_scanner import VersionScopedHarmonicLiveStrategyScanner
 
 
+ROME = ZoneInfo("Europe/Rome")
+
+
+def startup_loss_guard_status(
+    scanner: VersionScopedHarmonicLiveStrategyScanner,
+    now: datetime | None = None,
+) -> tuple[int, bool, str]:
+    """Return current-version streak, actual guard state and a user-facing status line."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    streak, last_closed = scanner.fetch_loss_streak()
+    guard_until: datetime | None = None
+    if last_closed is not None:
+        normalized = (
+            last_closed
+            if last_closed.tzinfo is not None
+            else last_closed.replace(tzinfo=timezone.utc)
+        )
+        guard_until = normalized + timedelta(hours=scanner.loss_guard_hours)
+    active = bool(
+        streak >= scanner.loss_streak_trigger
+        and guard_until is not None
+        and current < guard_until
+    )
+    if active and guard_until is not None:
+        local_until = guard_until.astimezone(ROME).strftime("%d/%m/%Y %H:%M")
+        label = f"ATTIVA fino al {local_until} ora italiana"
+    else:
+        label = "NON ATTIVA"
+    return streak, active, label
+
+
 def main() -> None:
     settings = apply_simple_policy(load_settings())
     logger = get_module_logger("system")
@@ -34,7 +69,8 @@ def main() -> None:
         "strategies=%s max_signals=%s max_open=%s max_correlated=%s "
         "max_net_loss_eur=%s loss_streak_trigger=%s loss_guard_hours=%s "
         "loss_guard_version_scoped=true report_version_scoped=true "
-        "delivery_aware=true closed_candles=datetime_safe research=false short_signals=false",
+        "startup_guard_state=true delivery_aware=true closed_candles=datetime_safe "
+        "research=false short_signals=false",
         RUNTIME_VERSION,
         len(settings.collector_pairs),
         settings.collector_timeframes,
@@ -117,14 +153,23 @@ def main() -> None:
         postgres=postgres,
     )
     notification.subscribe()
+    startup_streak, startup_guard_active, startup_guard_label = startup_loss_guard_status(scanner)
+    logger.info(
+        "STARTUP_LOSS_GUARD runtime=%s streak=%s active=%s status=%s",
+        RUNTIME_VERSION,
+        startup_streak,
+        startup_guard_active,
+        startup_guard_label,
+    )
     if settings.telegram_send_startup_message:
         notification.send_telegram(
             "🟦 <b>SCANNER LONG V5.1.2 ATTIVO</b>\n\n"
             "Monitoraggio: <b>20 coppie</b>\n"
             "Timeframe: <b>15m</b> con conferma <b>1h</b>\n"
             "Strategie: <b>7 LONG live</b>\n"
-            "Modalità prudente: <b>solo risultati della versione corrente</b>\n"
-            "Report 24h: <b>solo segnali della versione corrente</b>\n"
+            f"Stop consecutivi V5.1.2: <b>{startup_streak}</b>\n"
+            f"Modalità prudente: <b>{startup_guard_label}</b>\n"
+            "Report 24h: <b>solo segnali V5.1.2</b>\n"
             "Candele: <b>solo chiuse</b>\n"
             "Perdita netta stimata massima: <b>€1,00</b>\n"
             "Segnali SHORT: <b>disattivati</b>"
