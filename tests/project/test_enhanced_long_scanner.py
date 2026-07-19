@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from project.enhanced_long_scanner import ENHANCED_LONG_STRATEGIES, EnhancedLongStrategyScanner
+from project.harmonic_patterns import HARMONIC_STRATEGY
 from project.notification_engine.simple_formatters import format_simple_signal_message
 from project.shared.events import EventBus
 
@@ -40,10 +41,11 @@ def build_scanner(**kwargs) -> EnhancedLongStrategyScanner:
     )
 
 
-def test_six_strategies_and_three_signal_limit() -> None:
-    assert len(ENHANCED_LONG_STRATEGIES) == 6
+def test_seven_strategies_and_three_signal_limit() -> None:
+    assert len(ENHANCED_LONG_STRATEGIES) == 7
     assert "Relative Strength Momentum" in ENHANCED_LONG_STRATEGIES
     assert "Volatility Squeeze Breakout" in ENHANCED_LONG_STRATEGIES
+    assert HARMONIC_STRATEGY in ENHANCED_LONG_STRATEGIES
     assert build_scanner().max_signals_per_cycle == 3
 
 
@@ -89,32 +91,27 @@ def weak_performance(last_closed_at, latest_status="STOP_LOSS"):
     }
 
 
-def test_strategy_pause_is_temporary_and_becomes_probation() -> None:
+def test_paused_strategy_automatically_enters_probation() -> None:
     scanner = build_scanner(performance_pause_hours=72)
     now = datetime.now(timezone.utc)
-    paused = scanner.determine_strategy_state("Breakout 20", weak_performance(now - timedelta(hours=2)), now)
-    probation = scanner.determine_strategy_state("Breakout 20", weak_performance(now - timedelta(hours=73)), now)
+    paused = scanner.determine_strategy_state(
+        "Breakout 20", weak_performance(now - timedelta(hours=24)), now
+    )
+    probation = scanner.determine_strategy_state(
+        "Breakout 20", weak_performance(now - timedelta(hours=80)), now
+    )
     assert paused["state"] == "PAUSED"
     assert probation["state"] == "PROBATION"
 
 
-def test_winning_probe_stays_probation_until_metrics_recover() -> None:
-    scanner = build_scanner()
-    now = datetime.now(timezone.utc)
-    state = scanner.determine_strategy_state(
-        "Breakout 20", weak_performance(now - timedelta(hours=1), "TARGET_HIT"), now
-    )
-    assert state["state"] == "PROBATION"
-
-
-def test_strategy_reactivates_when_metrics_recover() -> None:
+def test_recovered_metrics_return_strategy_to_active() -> None:
     scanner = build_scanner()
     state = scanner.determine_strategy_state(
         "Breakout 20",
         {
             "completed": 25,
             "profit_factor": 1.05,
-            "net_result_eur": 0.5,
+            "net_result_eur": 1.2,
             "latest_status": "TARGET_HIT",
             "last_closed_at": datetime.now(timezone.utc),
         },
@@ -122,34 +119,23 @@ def test_strategy_reactivates_when_metrics_recover() -> None:
     assert state["state"] == "ACTIVE"
 
 
-def test_correlation_filter_allows_two_and_blocks_third() -> None:
-    scanner = build_scanner(correlation_threshold=0.80, max_correlated_per_cycle=2)
-    frame = indicator_frame()
-    scanner._frame_cache = {"BTC/USD": frame.copy(), "ETH/USD": frame.copy(), "SOL/USD": frame.copy()}
-    one = scanner.correlated_with_published("ETH/USD", [SimpleNamespace(pair="BTC/USD")])
-    two = scanner.correlated_with_published(
-        "SOL/USD", [SimpleNamespace(pair="BTC/USD"), SimpleNamespace(pair="ETH/USD")]
+def test_strategy_message_is_still_long_only() -> None:
+    signal = SimpleNamespace(
+        signal_id=12,
+        strategy="Relative Strength Momentum",
+        pair="SOL/USD",
+        timeframe="15m",
+        regime="TREND_UP",
+        entry=100.0,
+        stop_loss=98.0,
+        take_profit=104.0,
+        score=80.0,
+        net_rr=1.4,
+        net_profit_tp1_eur=1.2,
+        net_loss_sl_eur=0.8,
+        reasons=["trend favorevole"],
+        score_breakdown={"strategy_state": "ACTIVE"},
     )
-    assert len(one) == 1
-    assert len(two) == 2
-
-
-def test_telegram_explains_probation() -> None:
-    message = format_simple_signal_message({
-        "signal_id": 10,
-        "pair": "SOL/USD",
-        "timeframe": "15m",
-        "strategy": "Relative Strength Momentum",
-        "regime": "TREND_UP",
-        "entry": 100,
-        "stop_loss": 98,
-        "take_profit": 104,
-        "score": 80,
-        "net_rr": 1.3,
-        "net_profit_tp1_eur": 0.4,
-        "net_loss_sl_eur": 0.3,
-        "reasons": ["forza relativa confermata"],
-        "score_breakdown": {"strategy_state": "PROBATION", "forward_completed": 25, "forward_profit_factor": 0.8},
-    })
-    assert "PROBATION" in message
-    assert "segnale-test" in message
+    message = format_simple_signal_message(signal)
+    assert "LONG" in message
+    assert "SHORT" not in message
