@@ -1,4 +1,4 @@
-"""Railway entrypoint for the delivery-aware seven-strategy LONG scanner."""
+"""Railway entrypoint for the report-safe seven-strategy LONG scanner."""
 from __future__ import annotations
 
 import os
@@ -15,11 +15,9 @@ from project.notification_engine.simple_formatters import (
 )
 from project.operational_scheduler import OperationalMarketScheduler
 from project.position_monitor.service import PositionMonitor
-from project.reliable_harmonic_scanner import (
-    RUNTIME_VERSION,
-    ReliableHarmonicLiveStrategyScanner,
-)
+from project.reliable_harmonic_scanner import RUNTIME_VERSION
 from project.reliable_notification import ReliableNotificationEngine
+from project.report_safe_harmonic_scanner import ReportSafeHarmonicLiveStrategyScanner
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
@@ -29,13 +27,14 @@ def main() -> None:
     settings = apply_simple_policy(load_settings())
     logger = get_module_logger("system")
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-19 HARMONIC LIVE LONG SCANNER V5.1")
+    logger.info("PROJECT MAIN VERSION: 2026-07-19 HARMONIC LIVE LONG SCANNER V5.1.1")
     logger.info("======================================")
     logger.info(
         "HARMONIC_LIVE_MODE runtime=%s pairs=%s timeframes=%s interval_seconds=%s "
         "strategies=%s max_signals=%s max_open=%s max_correlated=%s "
         "max_net_loss_eur=%s loss_streak_trigger=%s loss_guard_hours=%s "
-        "delivery_aware=true closed_candles=datetime_safe research=false short_signals=false",
+        "delivery_aware=true closed_candles=datetime_safe dynamic_report_placeholders=true "
+        "research=false short_signals=false",
         RUNTIME_VERSION,
         len(settings.collector_pairs),
         settings.collector_timeframes,
@@ -71,7 +70,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_simple_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = ReliableHarmonicLiveStrategyScanner(
+    scanner = ReportSafeHarmonicLiveStrategyScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -120,12 +119,13 @@ def main() -> None:
     notification.subscribe()
     if settings.telegram_send_startup_message:
         notification.send_telegram(
-            "🟦 <b>SCANNER LONG V5.1 ATTIVO</b>\n\n"
+            "🟦 <b>SCANNER LONG V5.1.1 ATTIVO</b>\n\n"
             "Monitoraggio: <b>20 coppie</b>\n"
             "Timeframe: <b>15m</b> con conferma <b>1h</b>\n"
             "Strategie: <b>7 LONG live</b>\n"
             "Candele: <b>solo chiuse, filtro datetime sicuro</b>\n"
             "Slot: <b>solo segnali realmente consegnati</b>\n"
+            "Report: <b>query dinamica per 7 strategie corretta</b>\n"
             "Dopo 3 stop: <b>modalità prudente, non blocco totale</b>\n"
             "Perdita netta stimata massima: <b>€1,00</b>\n"
             "Segnali SHORT: <b>disattivati</b>"
