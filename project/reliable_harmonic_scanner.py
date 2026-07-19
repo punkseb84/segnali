@@ -18,7 +18,7 @@ from project.harmonic_live_scanner import (
 from project.strategy_engine.service import GeneratedSignal
 
 
-RUNTIME_VERSION = "HARMONIC_LIVE_V5_1"
+RUNTIME_VERSION = "HARMONIC_LIVE_V5_1_2"
 _TIMEFRAME_SECONDS = {"15m": 900, "1h": 3600}
 
 
@@ -90,7 +90,6 @@ class ReliableHarmonicLiveStrategyScanner(HarmonicLiveStrategyScanner):
             )
         )
         ceiling = min(entry * 1.03, entry + atr * 3.0)
-        # Never invent a target beyond either the harmonic projection or the technical cap.
         return min(harmonic_target, ceiling)
 
     def _build_signal_for_assessment(
@@ -101,10 +100,6 @@ class ReliableHarmonicLiveStrategyScanner(HarmonicLiveStrategyScanner):
         relative: dict[str, float],
         assessment: dict[str, Any],
     ) -> tuple[GeneratedSignal | None, str, dict[str, Any]]:
-        # During the global loss guard the evaluate() method already enforces one signal,
-        # score >= 78, net R/R >= 1.25 and net profit >= EUR 0.30. Do not additionally
-        # suppress every adaptive setup, otherwise the six original strategies can become
-        # effectively silent for twelve hours.
         guard_active = self._loss_guard_active
         self._loss_guard_active = False
         try:
@@ -199,7 +194,7 @@ class ReliableHarmonicLiveStrategyScanner(HarmonicLiveStrategyScanner):
             }
         )
         self.logger.info(
-            "HARMONIC_LIVE_V5_1 runtime=%s delivery_aware=true closed_candles=datetime_safe",
+            "HARMONIC_LIVE_V5_1_2 runtime=%s delivery_aware=true closed_candles=datetime_safe",
             RUNTIME_VERSION,
         )
         return result
