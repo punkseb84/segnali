@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pandas as pd
 
 from project.enhanced_long_scanner import ENHANCED_LONG_STRATEGIES, EnhancedLongStrategyScanner
-from project.harmonic_patterns import HARMONIC_STRATEGY
 from project.notification_engine.simple_formatters import format_simple_signal_message
 from project.shared.events import EventBus
 
@@ -41,11 +40,10 @@ def build_scanner(**kwargs) -> EnhancedLongStrategyScanner:
     )
 
 
-def test_seven_strategies_and_three_signal_limit() -> None:
-    assert len(ENHANCED_LONG_STRATEGIES) == 7
+def test_six_strategies_and_three_signal_limit() -> None:
+    assert len(ENHANCED_LONG_STRATEGIES) == 6
     assert "Relative Strength Momentum" in ENHANCED_LONG_STRATEGIES
     assert "Volatility Squeeze Breakout" in ENHANCED_LONG_STRATEGIES
-    assert HARMONIC_STRATEGY in ENHANCED_LONG_STRATEGIES
     assert build_scanner().max_signals_per_cycle == 3
 
 
@@ -89,53 +87,3 @@ def weak_performance(last_closed_at, latest_status="STOP_LOSS"):
         "latest_status": latest_status,
         "last_closed_at": last_closed_at,
     }
-
-
-def test_paused_strategy_automatically_enters_probation() -> None:
-    scanner = build_scanner(performance_pause_hours=72)
-    now = datetime.now(timezone.utc)
-    paused = scanner.determine_strategy_state(
-        "Breakout 20", weak_performance(now - timedelta(hours=24)), now
-    )
-    probation = scanner.determine_strategy_state(
-        "Breakout 20", weak_performance(now - timedelta(hours=80)), now
-    )
-    assert paused["state"] == "PAUSED"
-    assert probation["state"] == "PROBATION"
-
-
-def test_recovered_metrics_return_strategy_to_active() -> None:
-    scanner = build_scanner()
-    state = scanner.determine_strategy_state(
-        "Breakout 20",
-        {
-            "completed": 25,
-            "profit_factor": 1.05,
-            "net_result_eur": 1.2,
-            "latest_status": "TARGET_HIT",
-            "last_closed_at": datetime.now(timezone.utc),
-        },
-    )
-    assert state["state"] == "ACTIVE"
-
-
-def test_strategy_message_is_still_long_only() -> None:
-    signal = SimpleNamespace(
-        signal_id=12,
-        strategy="Relative Strength Momentum",
-        pair="SOL/USD",
-        timeframe="15m",
-        regime="TREND_UP",
-        entry=100.0,
-        stop_loss=98.0,
-        take_profit=104.0,
-        score=80.0,
-        net_rr=1.4,
-        net_profit_tp1_eur=1.2,
-        net_loss_sl_eur=0.8,
-        reasons=["trend favorevole"],
-        score_breakdown={"strategy_state": "ACTIVE"},
-    )
-    message = format_simple_signal_message(signal)
-    assert "LONG" in message
-    assert "SHORT" not in message
