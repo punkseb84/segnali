@@ -200,6 +200,7 @@ class ShadowInsertClient:
 def test_closed_gate_saves_shadow_signal_not_live_signal() -> None:
     scanner = object.__new__(CapitalProtectionScanner)
     scanner.client = ShadowInsertClient()
+    scanner.logger = SimpleNamespace(info=lambda *args, **kwargs: None)
     scanner._shadow_saved_cycle = 0
     scanner.max_shadow_per_cycle = 3
     scanner.signal_cooldown_minutes = 90
