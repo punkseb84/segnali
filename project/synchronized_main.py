@@ -1,7 +1,7 @@
-"""Stable Railway entrypoint for V6 capital protection."""
+"""Stable Railway entrypoint for V6.1 daily LONG paper signals."""
 from __future__ import annotations
 
-from project.capital_protection_main import main
+from project.daily_paper_main import main
 
 
 if __name__ == "__main__":
