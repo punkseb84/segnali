@@ -1,7 +1,7 @@
-"""Stable Railway entrypoint for the validated seven-strategy LONG scanner."""
+"""Stable Railway entrypoint for V6 capital protection."""
 from __future__ import annotations
 
-from project.validated_entrypoint import main
+from project.capital_protection_main import main
 
 
 if __name__ == "__main__":
