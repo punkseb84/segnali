@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from project.daily_paper_scanner import (
@@ -92,8 +91,16 @@ def test_closed_live_gate_still_publishes_ranked_paper_signal() -> None:
     scanner.aggregate_forward_performance = lambda performance: {}
 
     captured = {}
-    scanner.save_signal = lambda signal: captured.setdefault("saved", signal) or 801
-    scanner.publish_signal_event = lambda signal: captured.setdefault("published", signal)
+
+    def save_signal(signal):
+        captured["saved"] = signal
+        return 801
+
+    def publish_signal_event(signal):
+        captured["published"] = signal
+
+    scanner.save_signal = save_signal
+    scanner.publish_signal_event = publish_signal_event
 
     result = scanner.evaluate()
 
