@@ -10,15 +10,15 @@ from project.audited_formatters import (
     format_simple_signal_message,
 )
 from project.capital_protection_migration import run_capital_protection_migration
-from project.capital_protection_report import CapitalProtectionReportScanner
 from project.capital_protection_scanner import RUNTIME_VERSION
+from project.capital_protection_v601 import CapitalProtectionReportScannerV601
 from project.config.settings import load_settings
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
+from project.fair_shadow_signal_monitor import FairShadowValidationMonitor
 from project.harmonic_live_scanner import LIVE_LONG_STRATEGIES
 from project.operational_scheduler import OperationalMarketScheduler
 from project.reliable_notification import ReliableNotificationEngine
-from project.shadow_signal_monitor import ShadowValidationMonitor
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
@@ -27,13 +27,17 @@ from project.simple_main import apply_simple_policy, build_collector, build_post
 def main() -> None:
     settings = apply_simple_policy(load_settings())
     logger = get_module_logger("system")
+    shadow_monitor_limit = max(
+        20, int(os.getenv("CAPITAL_SHADOW_MONITOR_LIMIT", "200"))
+    )
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-20 CAPITAL PROTECTION V6")
+    logger.info("PROJECT MAIN VERSION: 2026-07-20 CAPITAL PROTECTION V6.0.1")
     logger.info("======================================")
     logger.info(
         "CAPITAL_PROTECTION_MODE runtime=%s pairs=%s strategies=%s shadow_first=true "
         "live_requires_empirical_edge=true min_shadow_samples=%s min_shadow_pf=%.2f "
         "min_shadow_expectancy_r=%.2f max_shadow_loss_streak=%s "
+        "shadow_monitor_limit=%s win_rate_gate=sample_aware "
         "live_stop_trigger=%s live_stop_24h_limit=%s live_cooldown_hours=%s "
         "short_signals=false",
         RUNTIME_VERSION,
@@ -43,6 +47,7 @@ def main() -> None:
         float(os.getenv("CAPITAL_MIN_SHADOW_PF", "1.30")),
         float(os.getenv("CAPITAL_MIN_SHADOW_EXPECTANCY_R", "0.10")),
         int(os.getenv("CAPITAL_MAX_SHADOW_LOSS_STREAK", "4")),
+        shadow_monitor_limit,
         int(os.getenv("CAPITAL_LIVE_STOP_TRIGGER", "3")),
         int(os.getenv("CAPITAL_LIVE_STOP_24H_LIMIT", "2")),
         int(os.getenv("CAPITAL_LIVE_COOLDOWN_HOURS", "24")),
@@ -71,7 +76,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_audited_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = CapitalProtectionReportScanner(
+    scanner = CapitalProtectionReportScannerV601(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -114,10 +119,11 @@ def main() -> None:
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
     )
-    position_monitor = ShadowValidationMonitor(
+    position_monitor = FairShadowValidationMonitor(
         postgres,
         event_bus,
         ambiguous_candle_mode=settings.ambiguous_candle_mode,
+        max_shadow_signals_per_cycle=shadow_monitor_limit,
     )
 
     notification = ReliableNotificationEngine(
@@ -130,10 +136,12 @@ def main() -> None:
     notification.subscribe()
     if settings.telegram_send_startup_message:
         notification.send_telegram(
-            "🛡 <b>PROTEZIONE CAPITALE V6 ATTIVA</b>\n\n"
+            "🛡 <b>PROTEZIONE CAPITALE V6.0.1 ATTIVA</b>\n\n"
             "Strategie monitorate: <b>7 LONG</b>\n"
             "Modalità iniziale: <b>SHADOW · nessun segnale operativo</b>\n"
-            "I setup validi vengono seguiti internamente senza usare denaro reale.\n\n"
+            "I setup validi vengono seguiti internamente senza usare denaro reale.\n"
+            f"Coda shadow controllata per ciclo: <b>fino a {shadow_monitor_limit}</b>\n"
+            "Win rate: <b>valutato solo dopo un campione sufficiente e misurabile</b>\n\n"
             "Ammissione automatica al live solo dopo:\n"
             "• almeno <b>30</b> operazioni shadow non ambigue\n"
             "• Profit Factor almeno <b>1,30</b>\n"
