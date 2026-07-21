@@ -1,4 +1,4 @@
-"""Railway entrypoint for V6.2 structure-aware daily LONG paper signals."""
+"""Railway entrypoint for V6.3 structure-aware daily LONG paper signals."""
 from __future__ import annotations
 
 import os
@@ -15,16 +15,18 @@ from project.daily_paper_position_monitor import DailyPaperPositionMonitor
 from project.daily_paper_scanner import PAPER_RUNTIME_VERSION
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
-from project.harmonic_live_scanner import LIVE_LONG_STRATEGIES
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.operational_scheduler import OperationalMarketScheduler
 from project.reliable_notification import ReliableNotificationEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.structure_aware_daily_scanner import (
-    STRUCTURE_RUNTIME_VERSION,
-    StructureAwareDailyPaperScanner,
+from project.structure_aware_daily_scanner import STRUCTURE_RUNTIME_VERSION
+from project.tori_trendline_scanner import (
+    EIGHT_LONG_STRATEGIES,
+    TORI_RUNTIME_VERSION,
+    TORI_TRENDLINE_STRATEGY,
+    ToriTrendlineDailyPaperScanner,
 )
 
 
@@ -51,23 +53,41 @@ def main() -> None:
     resistance_buffer_atr = max(
         0.05, float(os.getenv("STRUCTURE_RESISTANCE_BUFFER_ATR", "0.10"))
     )
+    tori_touch_separation = max(
+        2, int(os.getenv("TORI_MIN_TOUCH_SEPARATION_4H", "3"))
+    )
+    tori_touch_tolerance = max(
+        0.12, float(os.getenv("TORI_TOUCH_TOLERANCE_ATR", "0.28"))
+    )
+    tori_break_buffer = max(
+        0.03, float(os.getenv("TORI_BREAK_BUFFER_ATR", "0.10"))
+    )
+    tori_max_extension = max(
+        0.30, float(os.getenv("TORI_MAX_EXTENSION_ATR", "0.80"))
+    )
+    tori_min_gross_rr = max(
+        1.50, float(os.getenv("TORI_MIN_GROSS_RR", "2.00"))
+    )
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN VERSION: 2026-07-20 STRUCTURE-AWARE DAILY LONG V6.2")
+    logger.info("PROJECT MAIN VERSION: 2026-07-21 EIGHT-STRATEGY DAILY LONG V6.3")
     logger.info("======================================")
     logger.info(
-        "STRUCTURE_AWARE_MODE structure_runtime=%s paper_runtime=%s capital_runtime=%s "
-        "pairs=%s strategies=%s paper_enabled=true paper_max_day=%s paper_max_cycle=%s "
-        "paper_interval_minutes=%s pair_cooldown_minutes=%s paper_min_score=%.1f "
-        "paper_min_net_rr=%.2f structure_min_rr_to_resistance=%.2f "
-        "structure_min_profit_to_resistance=%.2f resistance_buffer_atr=%.2f "
-        "target_crossing_resistance=false fallback_next_candidate=true "
-        "shadow_validation_parallel=true short_signals=false leverage=false",
+        "EIGHT_STRATEGY_MODE structure_runtime=%s tori_runtime=%s paper_runtime=%s "
+        "capital_runtime=%s pairs=%s strategies=%s strategy_count=%s paper_enabled=true "
+        "paper_max_day=%s paper_max_cycle=%s paper_interval_minutes=%s "
+        "pair_cooldown_minutes=%s paper_min_score=%.1f paper_min_net_rr=%.2f "
+        "structure_min_rr_to_resistance=%.2f tori_timeframe=4h tori_touches=3 "
+        "tori_confirmed_close=true tori_safety_line=true tori_min_gross_rr=%.2f "
+        "target_crossing_resistance=false shadow_validation_parallel=true "
+        "short_signals=false leverage=false",
         STRUCTURE_RUNTIME_VERSION,
+        TORI_RUNTIME_VERSION,
         PAPER_RUNTIME_VERSION,
         RUNTIME_VERSION,
         len(settings.collector_pairs),
-        list(LIVE_LONG_STRATEGIES),
+        list(EIGHT_LONG_STRATEGIES),
+        len(EIGHT_LONG_STRATEGIES),
         paper_max_per_day,
         paper_max_per_cycle,
         paper_min_interval,
@@ -75,8 +95,7 @@ def main() -> None:
         float(os.getenv("DAILY_PAPER_MIN_SCORE", "64")),
         float(os.getenv("DAILY_PAPER_MIN_NET_RR", "1.05")),
         structure_min_rr,
-        structure_min_profit,
-        resistance_buffer_atr,
+        tori_min_gross_rr,
     )
 
     try:
@@ -102,7 +121,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_daily_paper_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = StructureAwareDailyPaperScanner(
+    scanner = ToriTrendlineDailyPaperScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -156,6 +175,11 @@ def main() -> None:
         resistance_lookback_15m=int(os.getenv("STRUCTURE_LOOKBACK_15M", "120")),
         resistance_lookback_1h=int(os.getenv("STRUCTURE_LOOKBACK_1H", "120")),
         resistance_buffer_atr=resistance_buffer_atr,
+        tori_min_touch_separation_bars=tori_touch_separation,
+        tori_touch_tolerance_atr=tori_touch_tolerance,
+        tori_break_buffer_atr=tori_break_buffer,
+        tori_max_extension_atr=tori_max_extension,
+        tori_min_gross_rr=tori_min_gross_rr,
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
     )
@@ -176,15 +200,16 @@ def main() -> None:
     notification.subscribe()
     if settings.telegram_send_startup_message:
         notification.send_telegram(
-            "🧭 <b>STRUCTURE-AWARE DAILY LONG V6.2 ATTIVO</b>\n\n"
-            "Obiettivo: <b>1–3 segnali LONG paper al giorno</b>, scegliendo il miglior candidato con spazio reale.\n"
-            "Controllo nuovo: <b>prima resistenza 15m/1h e livelli psicologici</b>\n"
-            f"R/R netto minimo prima della resistenza: <b>{structure_min_rr:.2f}</b>\n"
-            "Il target non può attraversare una resistenza non ancora superata.\n"
-            "Se il primo candidato non ha spazio, il bot passa automaticamente al successivo.\n\n"
-            "La validazione shadow V6 continua in parallelo.\n"
-            "Segnali SHORT: <b>disattivati</b> · Leva: <b>disattivata</b>\n"
-            "⚠️ I segnali PAPER non garantiscono profitto e non sono inviti a usare denaro reale."
+            "📐 <b>OTTO STRATEGIE LONG V6.3 ATTIVE</b>\n\n"
+            "Strategie: <b>8 LONG</b> · nessuno SHORT · nessuna leva\n"
+            f"Nuova strategia: <b>{TORI_TRENDLINE_STRATEGY}</b>\n"
+            "Timeframe nuova strategia: <b>4h</b>, ricostruito da candele 1h chiuse\n"
+            "Requisiti: <b>3 contatti, chiusura sopra action line, safety line opposta</b>\n"
+            f"R/R lordo minimo iniziale: <b>{tori_min_gross_rr:.2f}</b>\n"
+            "Target: <b>sempre prima della prima resistenza significativa</b>\n"
+            "Ingresso: <b>solo su rottura 4h recente e non già estesa</b>\n\n"
+            "Le altre sette strategie e la validazione shadow continuano normalmente.\n"
+            "⚠️ Tutti i segnali restano PAPER finché l'edge non è dimostrato."
         )
 
     OperationalMarketScheduler(
