@@ -8,17 +8,48 @@ import pytest
 
 from project.daily_paper_formatters import format_daily_paper_signal_message
 from project.daily_paper_scanner import PAPER_EXECUTION_MODE
-from project.tori_trendline_scanner import (
-    EIGHT_LONG_STRATEGIES,
-    TORI_TRENDLINE_STRATEGY,
-    ToriTrendlineDailyPaperScanner,
-)
-from project.tori_trendline_v11 import ToriTrendlineDailyPaperScannerV11
 from tests.project.test_daily_paper_v61 import make_signal
 
 
-def scanner_shell() -> ToriTrendlineDailyPaperScannerV11:
-    scanner = object.__new__(ToriTrendlineDailyPaperScannerV11)
+@pytest.fixture(scope="module")
+def tori_runtime():
+    """Import the V6.3 module only for this file and restore legacy strategy tuples."""
+    import project.audited_long_scanner as audited_module
+    import project.capital_protection_scanner as capital_module
+    import project.daily_paper_scanner as daily_module
+    import project.harmonic_live_scanner as harmonic_module
+    import project.validated_report_scanner as validated_report_module
+
+    originals = {
+        "audited": audited_module.ENHANCED_LONG_STRATEGIES,
+        "capital": capital_module.LIVE_LONG_STRATEGIES,
+        "daily": daily_module.LIVE_LONG_STRATEGIES,
+        "harmonic": harmonic_module.LIVE_LONG_STRATEGIES,
+        "validated_report": validated_report_module.LIVE_LONG_STRATEGIES,
+    }
+    from project.tori_trendline_scanner import (
+        EIGHT_LONG_STRATEGIES,
+        TORI_TRENDLINE_STRATEGY,
+        ToriTrendlineDailyPaperScanner,
+    )
+    from project.tori_trendline_v11 import ToriTrendlineDailyPaperScannerV11
+
+    yield SimpleNamespace(
+        EIGHT_LONG_STRATEGIES=EIGHT_LONG_STRATEGIES,
+        TORI_TRENDLINE_STRATEGY=TORI_TRENDLINE_STRATEGY,
+        ToriTrendlineDailyPaperScanner=ToriTrendlineDailyPaperScanner,
+        ToriTrendlineDailyPaperScannerV11=ToriTrendlineDailyPaperScannerV11,
+    )
+
+    audited_module.ENHANCED_LONG_STRATEGIES = originals["audited"]
+    capital_module.LIVE_LONG_STRATEGIES = originals["capital"]
+    daily_module.LIVE_LONG_STRATEGIES = originals["daily"]
+    harmonic_module.LIVE_LONG_STRATEGIES = originals["harmonic"]
+    validated_report_module.LIVE_LONG_STRATEGIES = originals["validated_report"]
+
+
+def scanner_shell(tori_runtime):
+    scanner = object.__new__(tori_runtime.ToriTrendlineDailyPaperScannerV11)
     scanner.tori_min_touch_separation_bars = 3
     scanner.tori_touch_tolerance_atr = 0.28
     scanner.tori_break_buffer_atr = 0.10
@@ -97,23 +128,23 @@ def frame_15m_at_break_end(*, stale_minutes: int = 0) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_eighth_strategy_is_registered_once() -> None:
-    assert len(EIGHT_LONG_STRATEGIES) == 8
-    assert len(set(EIGHT_LONG_STRATEGIES)) == 8
-    assert TORI_TRENDLINE_STRATEGY in EIGHT_LONG_STRATEGIES
+def test_eighth_strategy_is_registered_once(tori_runtime) -> None:
+    assert len(tori_runtime.EIGHT_LONG_STRATEGIES) == 8
+    assert len(set(tori_runtime.EIGHT_LONG_STRATEGIES)) == 8
+    assert tori_runtime.TORI_TRENDLINE_STRATEGY in tori_runtime.EIGHT_LONG_STRATEGIES
 
 
-def test_aggregate_4h_keeps_only_complete_groups() -> None:
+def test_aggregate_4h_keeps_only_complete_groups(tori_runtime) -> None:
     frame = one_hour_frame(periods=10)
-    result = ToriTrendlineDailyPaperScanner.aggregate_closed_4h(frame)
+    result = tori_runtime.ToriTrendlineDailyPaperScanner.aggregate_closed_4h(frame)
     assert len(result) == 2
     assert result.iloc[0]["open"] == pytest.approx(frame.iloc[0]["open"])
     assert result.iloc[0]["close"] == pytest.approx(frame.iloc[3]["close"])
     assert result.iloc[0]["volume"] == pytest.approx(400.0)
 
 
-def test_detects_descending_action_line_with_three_separated_touches() -> None:
-    scanner = scanner_shell()
+def test_detects_descending_action_line_with_three_separated_touches(tori_runtime) -> None:
+    scanner = scanner_shell(tori_runtime)
     frame = four_hour_break_frame()
     action = scanner._descending_action_line(frame)
     assert action is not None
@@ -125,8 +156,8 @@ def test_detects_descending_action_line_with_three_separated_touches() -> None:
     )
 
 
-def test_assessment_requires_fresh_confirmed_4h_break(monkeypatch) -> None:
-    scanner = scanner_shell()
+def test_assessment_requires_fresh_confirmed_4h_break(tori_runtime, monkeypatch) -> None:
+    scanner = scanner_shell(tori_runtime)
     frame4h = four_hour_break_frame()
     monkeypatch.setattr(scanner, "aggregate_closed_4h", lambda frame: frame4h.copy())
     monkeypatch.setattr(
@@ -162,15 +193,15 @@ def test_assessment_requires_fresh_confirmed_4h_break(monkeypatch) -> None:
     assert result["tori_safety_line"] < result["tori_action_line"] + 1.0
 
 
-def test_stale_4h_break_is_rejected(monkeypatch) -> None:
-    scanner = scanner_shell()
+def test_stale_4h_break_is_rejected(tori_runtime, monkeypatch) -> None:
+    scanner = scanner_shell(tori_runtime)
     frame4h = four_hour_break_frame()
     monkeypatch.setattr(scanner, "aggregate_closed_4h", lambda frame: frame4h.copy())
     monkeypatch.setattr(
-        ToriTrendlineDailyPaperScanner,
+        tori_runtime.ToriTrendlineDailyPaperScanner,
         "tori_trendline_assessment",
         lambda self, frame_15m, frame_1h, regime: {
-            "strategy": TORI_TRENDLINE_STRATEGY,
+            "strategy": tori_runtime.TORI_TRENDLINE_STRATEGY,
             "score": 90.0,
             "qualified": True,
             "reasons": [],
@@ -185,14 +216,14 @@ def test_stale_4h_break_is_rejected(monkeypatch) -> None:
     assert any("non recente" in blocker for blocker in result["blockers"])
 
 
-def test_safety_line_stop_is_not_artificially_capped_to_2_5_percent() -> None:
-    scanner = scanner_shell()
+def test_safety_line_stop_is_not_artificially_capped_to_2_5_percent(tori_runtime) -> None:
+    scanner = scanner_shell(tori_runtime)
     scanner._tori_assessment = {
         "tori_safety_line": 96.50,
         "tori_atr_4h": 1.50,
     }
     distance = scanner.stop_distance_for_strategy(
-        TORI_TRENDLINE_STRATEGY, pd.DataFrame(), 100.0, 0.40
+        tori_runtime.TORI_TRENDLINE_STRATEGY, pd.DataFrame(), 100.0, 0.40
     )
     assert distance == pytest.approx(3.65)
     assert distance > 2.50
@@ -202,15 +233,15 @@ def test_safety_line_stop_is_not_artificially_capped_to_2_5_percent() -> None:
         "tori_atr_4h": 1.50,
     }
     assert scanner.stop_distance_for_strategy(
-        TORI_TRENDLINE_STRATEGY, pd.DataFrame(), 100.0, 0.40
+        tori_runtime.TORI_TRENDLINE_STRATEGY, pd.DataFrame(), 100.0, 0.40
     ) == 0.0
 
 
-def test_resistance_cap_must_preserve_full_two_r(monkeypatch) -> None:
-    scanner = scanner_shell()
+def test_resistance_cap_must_preserve_full_two_r(tori_runtime, monkeypatch) -> None:
+    scanner = scanner_shell(tori_runtime)
     candidate = replace(
         make_signal(score=90.0, net_rr=1.30, net_profit=0.50),
-        strategy=TORI_TRENDLINE_STRATEGY,
+        strategy=tori_runtime.TORI_TRENDLINE_STRATEGY,
         gross_rr=1.70,
         entry=100.0,
         stop_loss=98.0,
@@ -219,7 +250,7 @@ def test_resistance_cap_must_preserve_full_two_r(monkeypatch) -> None:
         effective_take_profit=103.4,
     )
     monkeypatch.setattr(
-        ToriTrendlineDailyPaperScanner,
+        tori_runtime.ToriTrendlineDailyPaperScanner,
         "_build_signal_for_assessment",
         lambda self, pair, frame_15m, regime, relative, assessment: (
             candidate,
@@ -233,7 +264,7 @@ def test_resistance_cap_must_preserve_full_two_r(monkeypatch) -> None:
         "TREND_UP",
         {},
         {
-            "strategy": TORI_TRENDLINE_STRATEGY,
+            "strategy": tori_runtime.TORI_TRENDLINE_STRATEGY,
             "tori_action_line": 99.5,
             "tori_atr_4h": 2.0,
             "tori_break_age_minutes": 0.0,
@@ -244,10 +275,10 @@ def test_resistance_cap_must_preserve_full_two_r(monkeypatch) -> None:
     assert diagnostic["gross_rr_after_structure"] == pytest.approx(1.70)
 
 
-def test_formatter_shows_4h_setup_and_15m_monitor() -> None:
+def test_formatter_shows_4h_setup_and_15m_monitor(tori_runtime) -> None:
     signal = replace(
         make_signal(),
-        strategy=TORI_TRENDLINE_STRATEGY,
+        strategy=tori_runtime.TORI_TRENDLINE_STRATEGY,
         pair="BTC/USD",
         timeframe="15m",
         score_breakdown={
