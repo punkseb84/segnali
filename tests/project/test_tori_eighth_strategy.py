@@ -66,7 +66,6 @@ def four_hour_break_frame() -> pd.DataFrame:
                 "volume": 100.0,
             }
         )
-    # Last closed candle breaks above the descending action line.
     final_line = 110.0 - 0.30 * 29
     rows[-1].update(
         {
@@ -80,7 +79,6 @@ def four_hour_break_frame() -> pd.DataFrame:
 
 
 def frame_15m_at_break_end(*, stale_minutes: int = 0) -> pd.DataFrame:
-    # Last 4h candle in four_hour_break_frame starts at 20:00 and ends at 00:00.
     last_end = pd.Timestamp("2026-07-21 00:00", tz="UTC") + pd.Timedelta(minutes=stale_minutes)
     timestamps = pd.date_range(end=last_end - pd.Timedelta(minutes=15), periods=20, freq="15min")
     rows = []
@@ -130,10 +128,6 @@ def test_detects_descending_action_line_with_three_separated_touches() -> None:
 def test_assessment_requires_fresh_confirmed_4h_break(monkeypatch) -> None:
     scanner = scanner_shell()
     frame4h = four_hour_break_frame()
-    # Align the last 4h start to 20:00 UTC on 20 July, ending at midnight.
-    frame4h["timestamp"] = pd.date_range(
-        "2026-07-16 04:00", periods=30, freq="4h", tz="UTC"
-    )
     monkeypatch.setattr(scanner, "aggregate_closed_4h", lambda frame: frame4h.copy())
     monkeypatch.setattr(
         scanner,
@@ -171,9 +165,6 @@ def test_assessment_requires_fresh_confirmed_4h_break(monkeypatch) -> None:
 def test_stale_4h_break_is_rejected(monkeypatch) -> None:
     scanner = scanner_shell()
     frame4h = four_hour_break_frame()
-    frame4h["timestamp"] = pd.date_range(
-        "2026-07-16 04:00", periods=30, freq="4h", tz="UTC"
-    )
     monkeypatch.setattr(scanner, "aggregate_closed_4h", lambda frame: frame4h.copy())
     monkeypatch.setattr(
         ToriTrendlineDailyPaperScanner,
