@@ -1,7 +1,7 @@
-"""Stable Railway entrypoint for V6.3 eight-strategy daily LONG signals."""
+"""Stable Railway entrypoint for the pure price-action V7 paper scanner."""
 from __future__ import annotations
 
-from project.tori_strategy_entrypoint import main
+from project.price_action_main import main
 
 
 if __name__ == "__main__":
