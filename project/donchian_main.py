@@ -1,7 +1,8 @@
-"""Railway runtime for the single Donchian EMA200 ADX ATR paper strategy."""
+"""Railway runtime for the only active Donchian EMA200 ADX ATR paper strategy."""
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import project.notification_engine.service as notification_service
 from project.capital_protection_migration import run_capital_protection_migration
@@ -13,7 +14,8 @@ from project.daily_paper_formatters import (
 from project.daily_paper_position_monitor import DailyPaperPositionMonitor
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
-from project.donchian_scanner import DonchianBreakoutScanner, RUNTIME_VERSION, STRATEGY_NAME
+from project.donchian_daily_limited_scanner import DailyLimitedDonchianScanner
+from project.donchian_scanner import RUNTIME_VERSION, STRATEGY_NAME
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.operational_scheduler import OperationalMarketScheduler
 from project.reliable_notification import ReliableNotificationEngine
@@ -22,8 +24,17 @@ from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 
 
+TOP_20_PAIRS = [
+    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD",
+    "DOGE/USD", "LINK/USD", "AVAX/USD", "AAVE/USD", "LTC/USD",
+    "BCH/USD", "TAO/USD", "DOT/USD", "XLM/USD", "TRX/USD",
+    "ATOM/USD", "ETC/USD", "FIL/USD", "NEAR/USD", "UNI/USD",
+]
+
+
 def main() -> None:
     settings = apply_simple_policy(load_settings())
+    settings = replace(settings, collector_pairs=list(TOP_20_PAIRS))
     logger = get_module_logger("system")
 
     donchian_period = int(os.getenv("DONCHIAN_PERIOD", "20"))
@@ -37,14 +48,15 @@ def main() -> None:
     min_net_rr = float(os.getenv("DONCHIAN_MIN_NET_RR", "1.20"))
     min_net_profit = float(os.getenv("DONCHIAN_MIN_NET_PROFIT_EUR", "0.10"))
     max_per_cycle = max(1, int(os.getenv("DONCHIAN_MAX_PER_CYCLE", "2")))
+    max_per_day = max(1, int(os.getenv("DONCHIAN_MAX_PER_DAY", "10")))
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN: SINGLE DONCHIAN STRATEGY")
+    logger.info("PROJECT MAIN: ONLY DONCHIAN STRATEGY")
     logger.info("======================================")
     logger.info(
         "DONCHIAN_RUNTIME version=%s strategy=%s timeframe=15m pairs=%s "
         "donchian=%s ema=%s adx_period=%s adx_min=%.1f atr_period=%s "
-        "atr_stop=%.2f atr_target=%.2f",
+        "atr_stop=%.2f atr_target=%.2f max_per_day=%s telegram=true",
         RUNTIME_VERSION,
         STRATEGY_NAME,
         len(settings.collector_pairs),
@@ -55,6 +67,7 @@ def main() -> None:
         atr_period,
         atr_stop,
         atr_target,
+        max_per_day,
     )
 
     try:
@@ -80,7 +93,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_daily_paper_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = DonchianBreakoutScanner(
+    scanner = DailyLimitedDonchianScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -98,6 +111,7 @@ def main() -> None:
         min_net_rr=min_net_rr,
         min_net_profit_eur=min_net_profit,
         max_signals_per_cycle=max_per_cycle,
+        max_signals_per_day=max_per_day,
         enable_daily_signal_report=settings.enable_daily_signal_report,
         daily_signal_report_hours=settings.daily_signal_report_hours,
         donchian_period=donchian_period,
@@ -126,12 +140,14 @@ def main() -> None:
     if settings.telegram_send_startup_message:
         notification.send_telegram(
             "🚀 <b>DONCHIAN BREAKOUT ATTIVO</b>\n\n"
-            f"Strategia unica: <b>{STRATEGY_NAME}</b>\n"
+            f"Unica strategia: <b>{STRATEGY_NAME}</b>\n"
+            f"Mercati: <b>Top 20 crypto/USD</b>\n"
             f"Timeframe: <b>15m</b>\n"
             f"Ingresso: chiusura sopra Donchian <b>{donchian_period}</b>\n"
             f"Filtro trend: prezzo sopra EMA <b>{ema_period}</b>\n"
             f"Filtro forza: ADX({adx_period}) ≥ <b>{adx_min:.1f}</b> e +DI &gt; -DI\n"
-            f"Stop: <b>{atr_stop:.2f} ATR</b> · Target: <b>{atr_target:.2f} ATR</b>\n\n"
+            f"Stop: <b>{atr_stop:.2f} ATR</b> · Target: <b>{atr_target:.2f} ATR</b>\n"
+            f"Massimo segnali Telegram: <b>{max_per_day} al giorno</b>\n\n"
             "Tutte le strategie precedenti sono escluse dal runtime.\n"
             "⚠️ Segnali PAPER fino a validazione forward."
         )
