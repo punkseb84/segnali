@@ -1,8 +1,9 @@
-"""Telegram formatters for the simplified LONG-only scanner."""
+"""Telegram formatters for the single Donchian LONG-only scanner."""
 from __future__ import annotations
 
 import html
 import json
+import re
 from typing import Any
 
 
@@ -22,6 +23,86 @@ def _price(value: Any) -> str:
     absolute = abs(number)
     decimals = 2 if absolute >= 1000 else 3 if absolute >= 1 else 5 if absolute >= 0.01 else 8
     return f"{number:,.{decimals}f}"
+
+
+def _plain_html(value: Any) -> str:
+    text = re.sub(r"<[^>]+>", "", str(value or ""))
+    return html.unescape(text).strip()
+
+
+def _extract_report_value(text: str, label: str, default: str = "0") -> str:
+    pattern = rf"{re.escape(label)}\s*:\s*([^\n]+)"
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    return _plain_html(match.group(1)) if match else default
+
+
+def _format_rejection_lines(raw_rejections: str) -> str:
+    try:
+        parsed = json.loads(raw_rejections)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = {}
+
+    labels = {
+        "BELOW_EMA200": "coppie sotto EMA 200",
+        "ADX_BELOW_MINIMUM": "coppie con ADX insufficiente",
+        "DIRECTION_NOT_BULLISH": "coppie senza direzione rialzista (+DI ≤ -DI)",
+        "NO_DONCHIAN_BREAKOUT": "coppie senza breakout Donchian",
+        "BREAKOUT_NOT_FRESH": "breakout già avvenuti e non più validi",
+        "INSUFFICIENT_OHLC": "coppie con storico insufficiente",
+        "INDICATORS_NOT_READY": "coppie con indicatori non ancora pronti",
+        "NET_RR_TOO_LOW": "setup con rapporto rischio/rendimento insufficiente",
+        "NET_PROFIT_TOO_LOW": "setup con profitto netto stimato insufficiente",
+        "ACTIVE_PAIR_COOLDOWN": "segnali bloccati dal cooldown della coppia",
+        "DAILY_SIGNAL_LIMIT": "segnali bloccati dal limite giornaliero",
+    }
+    if not isinstance(parsed, dict) or not parsed:
+        return "• Nessun motivo disponibile"
+
+    ordered = sorted(parsed.items(), key=lambda item: (-int(item[1]), str(item[0])))
+    lines = []
+    for reason, count in ordered:
+        description = labels.get(str(reason), str(reason).replace("_", " ").lower())
+        lines.append(f"• <b>{int(count)}</b> {html.escape(description)}")
+    return "\n".join(lines)
+
+
+def _format_donchian_scanner_report(raw: str) -> str:
+    plain = _plain_html(raw)
+    monitored = _extract_report_value(plain, "Coppie monitorate")
+    qualified = _extract_report_value(plain, "Setup qualificati ultimo ciclo")
+    sent_cycle = _extract_report_value(plain, "Segnali inviati ultimo ciclo")
+    sent_24h = _extract_report_value(plain, "Segnali ultime 24h")
+    best = _extract_report_value(plain, "Miglior setup", "Nessuno")
+    if best.upper() == "NONE":
+        best = "Nessuno"
+    rejections = _extract_report_value(plain, "Motivi senza segnale", "{}")
+    rejection_lines = _format_rejection_lines(rejections)
+
+    return (
+        "📊 <b>REPORT SCANNER CRYPTO</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🔎 <b>RIEPILOGO ULTIMO CICLO</b>\n\n"
+        f"🪙 Coppie monitorate: <b>{_escape(monitored)}</b>\n"
+        f"✅ Setup qualificati: <b>{_escape(qualified)}</b>\n"
+        f"📨 Segnali inviati: <b>{_escape(sent_cycle)}</b>\n"
+        f"🕒 Segnali nelle ultime 24 ore: <b>{_escape(sent_24h)}</b>\n"
+        f"⭐ Miglior setup rilevato: <b>{_escape(best)}</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🚫 <b>MOTIVI DI ESCLUSIONE</b>\n\n"
+        f"{rejection_lines}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "⚙️ <b>STRATEGIA ATTIVA</b>\n\n"
+        "<b>Donchian Breakout + EMA 200 + ADX + ATR</b>\n\n"
+        "• Breakout Donchian: <b>20 periodi</b>\n"
+        "• Filtro trend: <b>EMA 200</b>\n"
+        "• Forza del trend: <b>ADX ≥ 25</b>\n"
+        "• Direzione: <b>+DI &gt; -DI</b>\n"
+        "• Stop Loss: <b>1,5 ATR</b>\n"
+        "• Take Profit: <b>3 ATR</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "⏳ <i>Nessun ingresso valido al momento: il sistema continua a monitorare il mercato.</i>\n\n"
+        "⚠️ <i>Segnali PAPER. Contenuto informativo, non consulenza finanziaria.</i>"
+    )
 
 
 def format_simple_signal_message(payload: dict[str, Any]) -> str:
@@ -73,13 +154,17 @@ def format_simple_signal_message(payload: dict[str, Any]) -> str:
 
 
 def format_simple_report_message(payload: dict[str, Any]) -> str:
-    """Preserve HTML only for reports generated internally by the scanner."""
+    """Format scanner reports while preserving trusted Telegram HTML."""
     raw = payload.get("message")
     if raw is None:
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    raw_text = str(raw)
+    plain = _plain_html(raw_text).upper()
+    if "REPORT SCANNER CRYPTO" in plain or "COPPIE MONITORATE" in plain:
+        return _format_donchian_scanner_report(raw_text)
     if payload.get("trusted_html") is True:
-        return str(raw)
-    return "📊 <b>REPORT SCANNER</b>\n\n" + _escape(raw)
+        return raw_text
+    return "📊 <b>REPORT SCANNER</b>\n\n" + _escape(raw_text)
 
 
 def format_simple_outcome_message(payload: dict[str, Any]) -> str:
