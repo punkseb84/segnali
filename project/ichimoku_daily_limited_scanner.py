@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any
 
 from project.ichimoku_scanner import IchimokuCloudScanner, RUNTIME_VERSION
+from project.shared.events import Event, EventType
 from project.strategy_engine.service import GeneratedSignal
 
 
@@ -110,3 +112,38 @@ class DailyLimitedIchimokuScanner(IchimokuCloudScanner):
             json.dumps(rejection_reasons, sort_keys=True),
         )
         return published[0] if published else None
+
+    def publish_daily_signal_report(self) -> bool:
+        if not self.enable_daily_signal_report:
+            return False
+        now = datetime.now(timezone.utc)
+        if self._last_no_trade_report_at is not None:
+            elapsed = (now - self._last_no_trade_report_at).total_seconds() / 3600.0
+            if elapsed < self.daily_signal_report_hours:
+                return False
+
+        recent = self.client.fetch_all(
+            """SELECT COUNT(*)
+            FROM signals.generated_signals
+            WHERE score_breakdown->>'runtime_version' = %s
+              AND telegram_sent_at IS NOT NULL
+              AND created_at >= NOW() - (%s * INTERVAL '1 hour')""",
+            (RUNTIME_VERSION, self.daily_signal_report_hours),
+        )
+        recent_count = int(recent[0][0] or 0) if recent else 0
+        summary = self._last_cycle_summary or {}
+        message = (
+            "☁️ <b>REPORT SCANNER CRYPTO</b>\n\n"
+            f"• Coppie monitorate: <b>{summary.get('pairs_scanned', len(self.pairs))}</b>\n"
+            f"• Setup qualificati ultimo ciclo: <b>{summary.get('qualified', 0)}</b>\n"
+            f"• Segnali inviati ultimo ciclo: <b>{summary.get('published', 0)}</b>\n"
+            f"• Segnali ultime {self.daily_signal_report_hours}h: <b>{recent_count}</b>\n"
+            f"• Miglior setup: <b>{summary.get('best_candidate', 'NONE')}</b>\n"
+            f"• Motivi senza segnale: <code>{json.dumps(summary.get('rejections', {}), sort_keys=True)}</code>\n\n"
+            "Strategia attiva: Ichimoku Cloud Breakout."
+        )
+        self.event_bus.publish(
+            Event(EventType.REPORT_READY, {"message": message, "trusted_html": True})
+        )
+        self._last_no_trade_report_at = now
+        return True
