@@ -1,7 +1,7 @@
-"""Stable Railway entrypoint for the single Donchian strategy."""
+"""Stable Railway entrypoint for the single Ichimoku strategy."""
 from __future__ import annotations
 
-from project.donchian_main import main
+from project.ichimoku_main import main
 
 
 if __name__ == "__main__":
