@@ -33,10 +33,10 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
     resolution = str(payload.get("outcome_resolution") or "")
     is_ichimoku_exit = resolution.startswith("ICHIMOKU_")
 
-    if is_stop:
-        title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
-    elif is_ichimoku_exit:
+    if is_ichimoku_exit:
         title = "☁️ <b>USCITA ICHIMOKU CONFERMATA</b>"
+    elif is_stop:
+        title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
     else:
         title = "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
 
