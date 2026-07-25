@@ -1,4 +1,4 @@
-"""Telegram formatters for the single Donchian LONG-only scanner."""
+"""Telegram formatters for the single Ichimoku LONG-only scanner."""
 from __future__ import annotations
 
 import html
@@ -43,17 +43,19 @@ def _format_rejection_lines(raw_rejections: str) -> str:
         parsed = {}
 
     labels = {
-        "BELOW_EMA200": "coppie sotto EMA 200",
-        "ADX_BELOW_MINIMUM": "coppie con ADX insufficiente",
-        "DIRECTION_NOT_BULLISH": "coppie senza direzione rialzista (+DI ≤ -DI)",
-        "NO_DONCHIAN_BREAKOUT": "coppie senza breakout Donchian",
-        "BREAKOUT_NOT_FRESH": "breakout già avvenuti e non più validi",
-        "INSUFFICIENT_OHLC": "coppie con storico insufficiente",
-        "INDICATORS_NOT_READY": "coppie con indicatori non ancora pronti",
-        "NET_RR_TOO_LOW": "setup con rapporto rischio/rendimento insufficiente",
-        "NET_PROFIT_TOO_LOW": "setup con profitto netto stimato insufficiente",
-        "ACTIVE_PAIR_COOLDOWN": "segnali bloccati dal cooldown della coppia",
-        "DAILY_SIGNAL_LIMIT": "segnali bloccati dal limite giornaliero",
+        "PRICE_NOT_ABOVE_CLOUD": "coppie con prezzo non ancora sopra la nuvola",
+        "CLOUD_BREAKOUT_NOT_FRESH": "coppie già sopra la nuvola, senza nuovo breakout",
+        "TENKAN_NOT_ABOVE_KIJUN": "coppie senza conferma Tenkan sopra Kijun",
+        "ICHIMOKU_NOT_READY": "coppie con struttura Ichimoku non ancora pronta",
+        "INSUFFICIENT_OHLC": "coppie con storico 1h insufficiente",
+        "INVALID_ATR": "coppie con ATR non valido",
+        "INVALID_STOP": "setup con stop non valido",
+        "REFERENCE_MOVE_TOO_SMALL": "setup con movimento potenziale insufficiente rispetto ai costi",
+        "NOT_TRADABLE": "setup non negoziabili con i limiti configurati",
+        "SCORE_BELOW_MINIMUM": "setup sotto la qualità minima",
+        "ACTIVE_PAIR_COOLDOWN": "segnali bloccati perché la coppia ha già una posizione attiva",
+        "ICHIMOKU_DAILY_LIMIT": "segnali bloccati dal limite giornaliero",
+        "PAIR_ERROR": "coppie non elaborate per errore dati",
     }
     if not isinstance(parsed, dict) or not parsed:
         return "• Nessun motivo disponibile"
@@ -66,7 +68,7 @@ def _format_rejection_lines(raw_rejections: str) -> str:
     return "\n".join(lines)
 
 
-def _format_donchian_scanner_report(raw: str) -> str:
+def _format_ichimoku_scanner_report(raw: str) -> str:
     plain = _plain_html(raw)
     monitored = _extract_report_value(plain, "Coppie monitorate")
     qualified = _extract_report_value(plain, "Setup qualificati ultimo ciclo")
@@ -79,7 +81,7 @@ def _format_donchian_scanner_report(raw: str) -> str:
     rejection_lines = _format_rejection_lines(rejections)
 
     return (
-        "📊 <b>REPORT SCANNER CRYPTO</b>\n\n"
+        "☁️ <b>REPORT SCANNER ICHIMOKU</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "🔎 <b>RIEPILOGO ULTIMO CICLO</b>\n\n"
         f"🪙 Coppie monitorate: <b>{_escape(monitored)}</b>\n"
@@ -91,64 +93,71 @@ def _format_donchian_scanner_report(raw: str) -> str:
         "🚫 <b>MOTIVI DI ESCLUSIONE</b>\n\n"
         f"{rejection_lines}\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "⚙️ <b>STRATEGIA ATTIVA</b>\n\n"
-        "<b>Donchian Breakout + EMA 200 + ADX + ATR</b>\n\n"
-        "• Breakout Donchian: <b>20 periodi</b>\n"
-        "• Filtro trend: <b>EMA 200</b>\n"
-        "• Forza del trend: <b>ADX ≥ 25</b>\n"
-        "• Direzione: <b>+DI &gt; -DI</b>\n"
-        "• Stop Loss: <b>1,5 ATR</b>\n"
-        "• Take Profit: <b>3 ATR</b>\n\n"
+        "⚙️ <b>UNICA STRATEGIA ATTIVA</b>\n\n"
+        "<b>Ichimoku Cloud Breakout</b>\n\n"
+        "• Timeframe: <b>1 ora</b>\n"
+        "• Ingresso: <b>prima chiusura sopra tutta la nuvola</b>\n"
+        "• Conferma: <b>Tenkan Sen &gt; Kijun Sen</b>\n"
+        "• Stop Loss iniziale: <b>1,5 ATR</b>\n"
+        "• Uscita: <b>rientro nella nuvola o incrocio Tenkan/Kijun ribassista</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "⏳ <i>Nessun ingresso valido al momento: il sistema continua a monitorare il mercato.</i>\n\n"
         "⚠️ <i>Segnali PAPER. Contenuto informativo, non consulenza finanziaria.</i>"
     )
 
 
-def format_simple_signal_message(payload: dict[str, Any]) -> str:
-    signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
-    reasons = []
+def _reason_lines(payload: dict[str, Any]) -> str:
+    reasons: list[str] = []
     for reason in payload.get("reasons") or []:
         text = str(reason)
-        if "=" not in text and text not in reasons:
+        if text not in reasons:
             reasons.append(text)
-        if len(reasons) >= 4:
+        if len(reasons) >= 5:
             break
-    reason_lines = "\n".join(f"• {_escape(item)}" for item in reasons) or "• Regole della strategia soddisfatte"
+    return "\n".join(f"• {_escape(item)}" for item in reasons) or "• Regole Ichimoku soddisfatte"
+
+
+def _format_ichimoku_signal_message(payload: dict[str, Any]) -> str:
+    signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
     breakdown = payload.get("score_breakdown") or {}
-    forward_completed = int(_float(breakdown.get("forward_completed"), 0.0))
-    forward_pf = _float(breakdown.get("forward_profit_factor"), 0.0)
-    strategy_state = str(breakdown.get("strategy_state") or "ACTIVE")
-    forward_line = (
-        f"• Storico forward strategia: <b>{forward_completed} trade · PF {forward_pf:.2f}</b>\n"
-        if forward_completed
-        else "• Storico forward strategia: <b>in costruzione</b>\n"
+    return (
+        "☁️ <b>SEGNALE LONG ICHIMOKU</b>\n"
+        f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
+        f"<b>{_escape(payload.get('pair'))}</b> · <b>1h</b>\n"
+        "Strategia: <b>Ichimoku Cloud Breakout</b>\n\n"
+        "💰 <b>Livelli operativi</b>\n"
+        f"• Entry indicativa: <b>{_price(payload.get('entry'))}</b>\n"
+        f"• Stop Loss iniziale: <b>{_price(payload.get('stop_loss'))}</b>\n"
+        "• Take Profit fisso: <b>non previsto</b>\n"
+        "• Uscita 1: chiusura dentro o sotto la nuvola\n"
+        "• Uscita 2: Tenkan Sen incrocia sotto Kijun Sen\n"
+        "• Entrata: dopo la chiusura della candela 1h di conferma\n\n"
+        "📊 <b>Valutazione</b>\n"
+        f"• Score setup: <b>{_float(payload.get('score')):.1f}/100</b>\n"
+        f"• Perdita netta stimata allo stop: <b>€{_float(payload.get('net_loss_sl_eur')):.2f}</b>\n"
+        f"• ATR di riferimento: <b>{_price(breakdown.get('atr'))}</b>\n"
+        "• Storico forward: <b>in costruzione</b>\n\n"
+        "✅ <b>Perché è stato selezionato</b>\n"
+        f"{_reason_lines(payload)}\n\n"
+        "⚠️ Segnale sperimentale in paper trading: nessun metodo garantisce profitto."
     )
-    state_line = (
-        "• Stato strategia: <b>PROBATION</b> · segnale-test con requisiti rafforzati\n"
-        if strategy_state == "PROBATION"
-        else f"• Stato strategia: <b>{_escape(strategy_state)}</b>\n"
-    )
+
+
+def format_simple_signal_message(payload: dict[str, Any]) -> str:
+    strategy = str(payload.get("strategy") or "")
+    if "ICHIMOKU" in strategy.upper():
+        return _format_ichimoku_signal_message(payload)
+
+    signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
     return (
         "🟢 <b>SEGNALE LONG</b>\n"
         f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
         f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
-        f"Strategia: <b>{_escape(payload.get('strategy'))}</b>\n"
-        f"Regime: <b>{_escape(payload.get('regime'))}</b>\n\n"
+        f"Strategia: <b>{_escape(strategy)}</b>\n\n"
         "💰 <b>Livelli operativi</b>\n"
         f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
         f"• Stop Loss: <b>{_price(payload.get('stop_loss'))}</b>\n"
-        f"• Take Profit: <b>{_price(payload.get('take_profit'))}</b>\n"
-        "• Entrata: alla ricezione del messaggio\n\n"
-        "📊 <b>Valutazione</b>\n"
-        f"• Score setup: <b>{_float(payload.get('score')):.1f}/100</b>\n"
-        f"• R/R netto: <b>{_float(payload.get('net_rr')):.2f}</b>\n"
-        f"• Profitto netto stimato TP: <b>€{_float(payload.get('net_profit_tp1_eur')):.2f}</b>\n"
-        f"• Perdita netta stimata SL: <b>€{_float(payload.get('net_loss_sl_eur')):.2f}</b>\n"
-        f"{forward_line}"
-        f"{state_line}\n"
-        "✅ <b>Perché è stato selezionato</b>\n"
-        f"{reason_lines}\n\n"
+        f"• Take Profit: <b>{_price(payload.get('take_profit'))}</b>\n\n"
         "⚠️ Segnale sperimentale in paper trading: nessun metodo garantisce profitto."
     )
 
@@ -160,28 +169,34 @@ def format_simple_report_message(payload: dict[str, Any]) -> str:
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     raw_text = str(raw)
     plain = _plain_html(raw_text).upper()
-    if "REPORT SCANNER CRYPTO" in plain or "COPPIE MONITORATE" in plain:
-        return _format_donchian_scanner_report(raw_text)
+    if "REPORT SCANNER" in plain or "COPPIE MONITORATE" in plain:
+        return _format_ichimoku_scanner_report(raw_text)
     if payload.get("trusted_html") is True:
         return raw_text
-    return "📊 <b>REPORT SCANNER</b>\n\n" + _escape(raw_text)
+    return "☁️ <b>REPORT SCANNER ICHIMOKU</b>\n\n" + _escape(raw_text)
 
 
 def format_simple_outcome_message(payload: dict[str, Any]) -> str:
     is_stop = str(payload.get("outcome")) == "STOP_LOSS"
-    title = "🔴 <b>STOP LOSS RAGGIUNTO</b>" if is_stop else "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
+    resolution = str(payload.get("outcome_resolution") or "")
+    is_ichimoku_exit = resolution.startswith("ICHIMOKU_")
+    if is_stop:
+        title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
+    elif is_ichimoku_exit:
+        title = "☁️ <b>USCITA ICHIMOKU CONFERMATA</b>"
+    else:
+        title = "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
-    result = -abs(_float(payload.get("net_loss_sl_eur"))) if is_stop else _float(payload.get("net_profit_tp1_eur"))
+    result = _float(payload.get("realized_net_eur"))
+    if "realized_net_eur" not in payload:
+        result = -abs(_float(payload.get("net_loss_sl_eur"))) if is_stop else _float(payload.get("net_profit_tp1_eur"))
     return (
         f"{title}\n"
         f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
         f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
-        f"Strategia: <b>{_escape(payload.get('strategy'))}</b>\n\n"
-        "📍 <b>Esito</b>\n"
         f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
-        f"• Livello raggiunto: <b>{_price(payload.get('outcome_price'))}</b>\n"
+        f"• Uscita: <b>{_price(payload.get('outcome_price'))}</b>\n"
         f"• Risultato netto stimato: <b>€{result:+.2f}</b>\n"
-        f"• R/R iniziale: <b>{_float(payload.get('net_rr')):.2f}</b>\n\n"
         f"• Candela di chiusura: <b>{_escape(payload.get('closed_at'))}</b>\n"
-        f"• Risoluzione: <b>{_escape(payload.get('outcome_resolution'))}</b>"
+        f"• Motivo: <b>{_escape(resolution)}</b>"
     )
