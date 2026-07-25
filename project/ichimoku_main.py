@@ -172,9 +172,11 @@ def main() -> None:
             "Ingresso: prima chiusura sopra tutta la nuvola\n"
             "Conferma: <b>Tenkan Sen &gt; Kijun Sen</b>\n"
             f"Stop iniziale: <b>{atr_stop:.2f} ATR</b>\n"
-            "Uscita: chiusura dentro/sotto la nuvola oppure incrocio ribassista Tenkan/Kijun\n"
+            "A +1 ATR: <b>stop spostato a Break Even</b>\n"
+            "A +2 ATR: <b>chiusura del 50% della posizione</b>\n"
+            "Restante 50%: uscita dentro/sotto la nuvola oppure incrocio ribassista Tenkan/Kijun\n"
             f"Massimo segnali Telegram: <b>{max_per_day} al giorno</b>\n\n"
-            "Le strategie precedenti sono escluse dal runtime e i vecchi segnali aperti sono scaduti.\n"
+            "Le condizioni di ingresso e tutti gli altri parametri restano invariati.\n"
             "⚠️ Segnali PAPER fino a validazione forward."
         )
 
