@@ -99,7 +99,9 @@ def _format_ichimoku_scanner_report(raw: str) -> str:
         "• Ingresso: <b>prima chiusura sopra tutta la nuvola</b>\n"
         "• Conferma: <b>Tenkan Sen &gt; Kijun Sen</b>\n"
         "• Stop Loss iniziale: <b>1,5 ATR</b>\n"
-        "• Uscita: <b>rientro nella nuvola o incrocio Tenkan/Kijun ribassista</b>\n\n"
+        "• A +1 ATR: <b>stop spostato a Break Even</b>\n"
+        "• A +2 ATR: <b>TP1 sul 50% della posizione</b>\n"
+        "• Restante 50%: <b>uscita Ichimoku dinamica</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "⏳ <i>Nessun ingresso valido al momento: il sistema continua a monitorare il mercato.</i>\n\n"
         "⚠️ <i>Segnali PAPER. Contenuto informativo, non consulenza finanziaria.</i>"
@@ -120,22 +122,26 @@ def _reason_lines(payload: dict[str, Any]) -> str:
 def _format_ichimoku_signal_message(payload: dict[str, Any]) -> str:
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
     breakdown = payload.get("score_breakdown") or {}
+    entry = _float(payload.get("entry"))
+    atr = _float(breakdown.get("atr"))
+    break_even_trigger = entry + atr
+    tp1_price = entry + (2.0 * atr)
     return (
         "☁️ <b>SEGNALE LONG ICHIMOKU</b>\n"
         f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
         f"<b>{_escape(payload.get('pair'))}</b> · <b>1h</b>\n"
         "Strategia: <b>Ichimoku Cloud Breakout</b>\n\n"
         "💰 <b>Livelli operativi</b>\n"
-        f"• Entry indicativa: <b>{_price(payload.get('entry'))}</b>\n"
+        f"• Entry indicativa: <b>{_price(entry)}</b>\n"
         f"• Stop Loss iniziale: <b>{_price(payload.get('stop_loss'))}</b>\n"
-        "• Take Profit fisso: <b>non previsto</b>\n"
-        "• Uscita 1: chiusura dentro o sotto la nuvola\n"
-        "• Uscita 2: Tenkan Sen incrocia sotto Kijun Sen\n"
+        f"• Livello +1 ATR: <b>{_price(break_even_trigger)}</b> → stop a Break Even\n"
+        f"• TP1 +2 ATR: <b>{_price(tp1_price)}</b> → chiusura del 50%\n"
+        "• Restante 50%: uscita dentro/sotto la nuvola o incrocio ribassista Tenkan/Kijun\n"
         "• Entrata: dopo la chiusura della candela 1h di conferma\n\n"
         "📊 <b>Valutazione</b>\n"
         f"• Score setup: <b>{_float(payload.get('score')):.1f}/100</b>\n"
         f"• Perdita netta stimata allo stop: <b>€{_float(payload.get('net_loss_sl_eur')):.2f}</b>\n"
-        f"• ATR di riferimento: <b>{_price(breakdown.get('atr'))}</b>\n"
+        f"• ATR di riferimento: <b>{_price(atr)}</b>\n"
         "• Storico forward: <b>in costruzione</b>\n\n"
         "✅ <b>Perché è stato selezionato</b>\n"
         f"{_reason_lines(payload)}\n\n"
@@ -177,19 +183,17 @@ def format_simple_report_message(payload: dict[str, Any]) -> str:
 
 
 def format_simple_outcome_message(payload: dict[str, Any]) -> str:
-    is_stop = str(payload.get("outcome")) == "STOP_LOSS"
     resolution = str(payload.get("outcome_resolution") or "")
-    is_ichimoku_exit = resolution.startswith("ICHIMOKU_")
-    if is_stop:
-        title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
-    elif is_ichimoku_exit:
-        title = "☁️ <b>USCITA ICHIMOKU CONFERMATA</b>"
-    else:
-        title = "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
     result = _float(payload.get("realized_net_eur"))
-    if "realized_net_eur" not in payload:
-        result = -abs(_float(payload.get("net_loss_sl_eur"))) if is_stop else _float(payload.get("net_profit_tp1_eur"))
+    if bool(payload.get("partial_take_profit")):
+        title = "🟢 <b>TP1 PARZIALE RAGGIUNTO</b>"
+    elif resolution == "ICHIMOKU_BREAK_EVEN_STOP":
+        title = "🟡 <b>STOP A BREAK EVEN RAGGIUNTO</b>"
+    elif str(payload.get("outcome")) == "STOP_LOSS":
+        title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
+    else:
+        title = "☁️ <b>USCITA ICHIMOKU CONFERMATA</b>"
     return (
         f"{title}\n"
         f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
@@ -197,6 +201,6 @@ def format_simple_outcome_message(payload: dict[str, Any]) -> str:
         f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
         f"• Uscita: <b>{_price(payload.get('outcome_price'))}</b>\n"
         f"• Risultato netto stimato: <b>€{result:+.2f}</b>\n"
-        f"• Candela di chiusura: <b>{_escape(payload.get('closed_at'))}</b>\n"
+        f"• Candela: <b>{_escape(payload.get('closed_at'))}</b>\n"
         f"• Motivo: <b>{_escape(resolution)}</b>"
     )

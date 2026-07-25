@@ -29,21 +29,38 @@ def _price(value: Any) -> str:
 
 
 def format_audited_outcome_message(payload: dict[str, Any]) -> str:
-    is_stop = str(payload.get("outcome")) == "STOP_LOSS"
     resolution = str(payload.get("outcome_resolution") or "")
+    signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
+    result = _float(payload.get("realized_net_eur"))
+
+    if bool(payload.get("partial_take_profit")) or resolution == "ICHIMOKU_TP1_2ATR":
+        return (
+            "🟢 <b>TP1 PARZIALE RAGGIUNTO</b>\n"
+            f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
+            f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
+            "Strategia: <b>Ichimoku Cloud Breakout</b>\n\n"
+            "💰 <b>Gestione della posizione</b>\n"
+            f"• Livello +2 ATR: <b>{_price(payload.get('outcome_price'))}</b>\n"
+            "• Posizione chiusa: <b>50%</b>\n"
+            f"• Profitto netto stimato sulla metà: <b>€{result:+.2f}</b>\n"
+            "• Stop della metà restante: <b>Break Even</b>\n"
+            "• Posizione ancora aperta: <b>50%</b>\n\n"
+            "☁️ La parte restante uscirà al rientro nella nuvola o all’incrocio ribassista Tenkan/Kijun."
+        )
+
+    is_stop = str(payload.get("outcome")) == "STOP_LOSS"
     is_ichimoku_exit = resolution.startswith("ICHIMOKU_")
 
-    if is_ichimoku_exit:
-        title = "☁️ <b>USCITA ICHIMOKU CONFERMATA</b>"
+    if resolution == "ICHIMOKU_BREAK_EVEN_STOP":
+        title = "🟡 <b>STOP A BREAK EVEN RAGGIUNTO</b>"
     elif is_stop:
         title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
+    elif is_ichimoku_exit:
+        title = "☁️ <b>USCITA ICHIMOKU CONFERMATA</b>"
     else:
         title = "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
 
-    signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
-    if payload.get("realized_net_eur") is not None:
-        result = _float(payload.get("realized_net_eur"))
-    else:
+    if payload.get("realized_net_eur") is None:
         result = -abs(_float(payload.get("net_loss_sl_eur"))) if is_stop else _float(payload.get("net_profit_tp1_eur"))
 
     open_price = payload.get("outcome_open_price")
@@ -65,9 +82,17 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
     elif resolution == "ICHIMOKU_TENKAN_KIJUN_EXIT":
         resolution_text = "incrocio Tenkan Sen sotto Kijun Sen"
     elif resolution == "ATR_STOP_ICHIMOKU":
-        resolution_text = "stop loss ATR"
+        resolution_text = "stop loss iniziale a 1,5 ATR"
+    elif resolution == "ICHIMOKU_BREAK_EVEN_STOP":
+        resolution_text = "ritorno al prezzo di ingresso dopo l’attivazione del break-even"
     else:
         resolution_text = resolution or "n/d"
+
+    tp1_line = ""
+    if bool(payload.get("tp1_hit")):
+        tp1_line = (
+            f"• TP1 precedente sul 50%: <b>€{_float(payload.get('tp1_realized_net_eur')):+.2f}</b>\n"
+        )
 
     return (
         f"{title}\n"
@@ -75,10 +100,11 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
         f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
         f"Strategia: <b>{_escape(payload.get('strategy'))}</b>\n"
         f"Exchange: <b>{_escape(payload.get('exchange'))}</b>\n\n"
-        "📍 <b>Esito</b>\n"
+        "📍 <b>Esito complessivo</b>\n"
         f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
-        f"• Prezzo di uscita: <b>{_price(payload.get('outcome_price'))}</b>\n"
-        f"• Risultato netto stimato: <b>€{result:+.2f}</b>\n"
+        f"• Prezzo uscita finale: <b>{_price(payload.get('outcome_price'))}</b>\n"
+        f"{tp1_line}"
+        f"• Risultato netto complessivo stimato: <b>€{result:+.2f}</b>\n"
         f"• Motivo: <b>{_escape(resolution_text)}</b>\n"
         f"{candle_block}"
         f"• Candela di chiusura: <b>{_escape(payload.get('closed_at'))}</b>"
