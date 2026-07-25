@@ -1,4 +1,4 @@
-"""Outcome formatter that exposes the real candle used for TP/SL resolution."""
+"""Outcome formatter that exposes the real candle used for strategy resolution."""
 from __future__ import annotations
 
 import html
@@ -30,20 +30,26 @@ def _price(value: Any) -> str:
 
 def format_audited_outcome_message(payload: dict[str, Any]) -> str:
     is_stop = str(payload.get("outcome")) == "STOP_LOSS"
-    title = "🔴 <b>STOP LOSS RAGGIUNTO</b>" if is_stop else "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
+    resolution = str(payload.get("outcome_resolution") or "")
+    is_ichimoku_exit = resolution.startswith("ICHIMOKU_")
+
+    if is_stop:
+        title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
+    elif is_ichimoku_exit:
+        title = "☁️ <b>USCITA ICHIMOKU CONFERMATA</b>"
+    else:
+        title = "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
+
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
-    result = -abs(_float(payload.get("net_loss_sl_eur"))) if is_stop else _float(payload.get("net_profit_tp1_eur"))
+    if payload.get("realized_net_eur") is not None:
+        result = _float(payload.get("realized_net_eur"))
+    else:
+        result = -abs(_float(payload.get("net_loss_sl_eur"))) if is_stop else _float(payload.get("net_profit_tp1_eur"))
+
     open_price = payload.get("outcome_open_price")
     high = payload.get("outcome_high_price")
     low = payload.get("outcome_low_price")
     close_price = payload.get("close_price")
-    actual_extreme = (
-        f"• Minimo reale: <b>{_price(low)}</b>\n"
-        if is_stop and low is not None
-        else f"• Massimo reale: <b>{_price(high)}</b>\n"
-        if not is_stop and high is not None
-        else ""
-    )
     candle_block = ""
     if all(value is not None for value in (open_price, high, low, close_price)):
         candle_block = (
@@ -53,12 +59,16 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
             f"• Low: <b>{_price(low)}</b>\n"
             f"• Close: <b>{_price(close_price)}</b>\n"
         )
-    ambiguous = bool(payload.get("ambiguous"))
-    ambiguity_line = (
-        "• Candela ambigua: <b>SÌ · TP e SL toccati nella stessa candela</b>\n"
-        if ambiguous
-        else "• Candela ambigua: <b>NO</b>\n"
-    )
+
+    if resolution == "ICHIMOKU_CLOUD_EXIT":
+        resolution_text = "chiusura dentro o sotto la nuvola"
+    elif resolution == "ICHIMOKU_TENKAN_KIJUN_EXIT":
+        resolution_text = "incrocio Tenkan Sen sotto Kijun Sen"
+    elif resolution == "ATR_STOP_ICHIMOKU":
+        resolution_text = "stop loss ATR"
+    else:
+        resolution_text = resolution or "n/d"
+
     return (
         f"{title}\n"
         f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
@@ -67,14 +77,11 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
         f"Exchange: <b>{_escape(payload.get('exchange'))}</b>\n\n"
         "📍 <b>Esito</b>\n"
         f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
-        f"• Livello operativo: <b>{_price(payload.get('outcome_price'))}</b>\n"
-        f"{actual_extreme}"
+        f"• Prezzo di uscita: <b>{_price(payload.get('outcome_price'))}</b>\n"
         f"• Risultato netto stimato: <b>€{result:+.2f}</b>\n"
-        f"• R/R iniziale: <b>{_float(payload.get('net_rr')):.2f}</b>\n"
+        f"• Motivo: <b>{_escape(resolution_text)}</b>\n"
         f"{candle_block}"
-        f"{ambiguity_line}"
-        f"• Candela di chiusura: <b>{_escape(payload.get('closed_at'))}</b>\n"
-        f"• Risoluzione: <b>{_escape(payload.get('outcome_resolution'))}</b>"
+        f"• Candela di chiusura: <b>{_escape(payload.get('closed_at'))}</b>"
     )
 
 
