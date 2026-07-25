@@ -10,7 +10,7 @@ from project.simple_strategy_scanner import SimpleStrategyScanner
 from project.strategy_engine.service import GeneratedSignal
 
 STRATEGY_NAME = "Ichimoku Cloud Breakout"
-RUNTIME_VERSION = "ICHIMOKU_CLOUD_BREAKOUT_V1"
+RUNTIME_VERSION = "ICHIMOKU_CLOUD_BREAKOUT_V2_TP_MANAGEMENT"
 
 
 class IchimokuCloudScanner(SimpleStrategyScanner):
