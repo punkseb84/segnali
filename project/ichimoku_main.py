@@ -14,7 +14,7 @@ from project.daily_paper_formatters import (
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
 from project.ichimoku_daily_limited_scanner import DailyLimitedIchimokuScanner
-from project.ichimoku_position_monitor import IchimokuPositionMonitor
+from project.ichimoku_outcome_monitor import IchimokuOutcomeMonitor
 from project.ichimoku_scanner import RUNTIME_VERSION, STRATEGY_NAME
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.operational_scheduler import OperationalMarketScheduler
@@ -141,7 +141,7 @@ def main() -> None:
         atr_stop_multiple=atr_stop,
         reference_target_atr=reference_target_atr,
     )
-    position_monitor = IchimokuPositionMonitor(
+    position_monitor = IchimokuOutcomeMonitor(
         postgres,
         event_bus,
         ambiguous_candle_mode=settings.ambiguous_candle_mode,
