@@ -13,11 +13,11 @@ from project.daily_paper_formatters import (
 )
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
+from project.hour_aligned_ichimoku_scheduler import HourAlignedIchimokuScheduler
 from project.ichimoku_daily_limited_scanner import DailyLimitedIchimokuScanner
 from project.ichimoku_scanner import RUNTIME_VERSION, STRATEGY_NAME
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.notifying_ichimoku_outcome_monitor import NotifyingIchimokuOutcomeMonitor
-from project.operational_scheduler import OperationalMarketScheduler
 from project.reliable_notification import ReliableNotificationEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
@@ -75,7 +75,7 @@ def main() -> None:
     logger.info(
         "ICHIMOKU_RUNTIME version=%s strategy=%s timeframe=1h pairs=%s "
         "tenkan=%s kijun=%s senkou_b=%s displacement=%s atr=%s "
-        "atr_stop=%.2f max_per_day=%s telegram=true",
+        "atr_stop=%.2f max_per_day=%s telegram=true hour_close_sync=true",
         RUNTIME_VERSION,
         STRATEGY_NAME,
         len(settings.collector_pairs),
@@ -169,6 +169,7 @@ def main() -> None:
             f"Unica strategia: <b>{STRATEGY_NAME}</b>\n"
             "Mercati: <b>20 crypto/USD</b>\n"
             "Timeframe: <b>1h</b>\n"
+            "Controllo candela chiusa: <b>sincronizzato nei minuti 1-4 di ogni ora UTC</b>\n"
             "Ingresso: prima chiusura sopra tutta la nuvola\n"
             "Conferma: <b>Tenkan Sen &gt; Kijun Sen</b>\n"
             f"Stop iniziale: <b>{atr_stop:.2f} ATR</b>\n"
@@ -180,7 +181,7 @@ def main() -> None:
             "⚠️ Segnali PAPER fino a validazione forward."
         )
 
-    OperationalMarketScheduler(
+    HourAlignedIchimokuScheduler(
         settings,
         collector,
         None,
