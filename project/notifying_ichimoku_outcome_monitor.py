@@ -1,7 +1,6 @@
-"""Ichimoku outcome monitor with one-time Telegram break-even updates."""
+"""Ichimoku outcome monitor with retryable Telegram break-even updates."""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from project.ichimoku_outcome_monitor import IchimokuOutcomeMonitor
@@ -49,21 +48,6 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
                 },
             )
         )
-        self.postgres.execute(
-            """UPDATE signals.generated_signals
-            SET score_breakdown = COALESCE(score_breakdown, '{}'::jsonb)
-                || %s::jsonb
-            WHERE id = %s""",
-            (
-                json.dumps(
-                    {
-                        "breakeven_notification_sent": True,
-                        "breakeven_notification_sent_at": str(timestamp),
-                    }
-                ),
-                signal_id,
-            ),
-        )
         self.logger.info(
             "ICHIMOKU_BREAK_EVEN_NOTIFICATION_PUBLISHED id=%s pair=%s backfilled=%s",
             signal_id,
@@ -83,7 +67,7 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
             LIMIT %s""",
             (self.max_signals_per_cycle,),
         )
-        sent = 0
+        published = 0
         for signal_id, pair, timeframe, entry, armed_at in rows:
             self._publish_break_even_update(
                 signal_id=signal_id,
@@ -93,15 +77,15 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
                 timestamp=armed_at or "già registrato nel database",
                 backfilled=True,
             )
-            sent += 1
-        return sent
+            published += 1
+        return published
 
     def monitor_open_signals(self) -> int:
         backfilled = self._backfill_pending_break_even_notifications()
         closed = super().monitor_open_signals()
         if backfilled:
             self.logger.info(
-                "ICHIMOKU_BREAK_EVEN_BACKFILL completed notifications=%s",
+                "ICHIMOKU_BREAK_EVEN_BACKFILL published=%s",
                 backfilled,
             )
         return closed
@@ -128,10 +112,4 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
             entry=entry,
             timestamp=timestamp,
             backfilled=False,
-        )
-        state.update(
-            {
-                "breakeven_notification_sent": True,
-                "breakeven_notification_sent_at": str(timestamp),
-            }
         )
