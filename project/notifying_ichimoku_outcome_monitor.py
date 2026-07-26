@@ -92,82 +92,106 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
             )
         return closed
 
+    @staticmethod
+    def _to_utc(value: Any) -> pd.Timestamp:
+        timestamp = pd.Timestamp(value)
+        return (
+            timestamp.tz_localize("UTC")
+            if timestamp.tzinfo is None
+            else timestamp.tz_convert("UTC")
+        )
+
     def _resolve_reference_candle(
         self,
         signal: dict[str, Any],
     ) -> tuple[Any, float, float, float, float] | None:
-        """Resolve whether the stored reference is an OHLC open or close timestamp.
+        """Resolve the first candle affected by the signal using delivery time.
 
-        Some historical signals store the candle opening timestamp, while others store
-        the boundary at which the candle closed. We inspect the two candles immediately
-        preceding the stored reference and select the latest candle that had already
-        closed when the signal was created. This avoids matching the new, still-open
-        candle when a close boundary such as 11:00 is stored.
+        ``reference_candle_time`` is not reliable for historical rows because it can
+        represent either an OHLC opening timestamp or a closing boundary. The only
+        unambiguous boundary is when Telegram actually delivered the signal. We use
+        ``telegram_sent_at`` and fall back to ``created_at``. The candle containing
+        that instant is evaluated by close only after it is closed; later candles are
+        left to the normal high/low monitor.
         """
-        reference = signal.get("reference_candle_time")
-        if reference is None:
+        delivery_rows = self.postgres.fetch_all(
+            """SELECT COALESCE(telegram_sent_at, created_at)
+            FROM signals.generated_signals
+            WHERE id = %s
+            LIMIT 1""",
+            (signal["id"],),
+        )
+        boundary_value = (
+            delivery_rows[0][0]
+            if delivery_rows and delivery_rows[0][0] is not None
+            else signal.get("created_at")
+        )
+        if boundary_value is None:
+            self.logger.warning(
+                "ICHIMOKU_MANAGEMENT_BOUNDARY_MISSING id=%s pair=%s",
+                signal.get("id"),
+                signal.get("pair"),
+            )
             return None
 
+        boundary = self._to_utc(boundary_value)
         rows = self.postgres.fetch_all(
             """SELECT timestamp, open, high, low, close
             FROM market_data.ohlc
             WHERE exchange = %s AND pair = %s AND timeframe = %s
               AND timestamp <= %s
             ORDER BY timestamp DESC
-            LIMIT 2""",
+            LIMIT 1""",
             (
                 signal["exchange"],
                 signal["pair"],
                 signal["timeframe"],
-                reference,
+                boundary,
             ),
         )
         if not rows:
+            self.logger.warning(
+                "ICHIMOKU_DELIVERY_CANDLE_NOT_FOUND id=%s pair=%s boundary=%s",
+                signal.get("id"),
+                signal.get("pair"),
+                boundary,
+            )
             return None
 
+        selected = rows[0]
+        candle_open = self._to_utc(selected[0])
         seconds = 3600 if signal["timeframe"] == "1h" else 900
-        created = pd.Timestamp(signal.get("created_at") or pd.Timestamp.now(tz="UTC"))
-        created = created.tz_localize("UTC") if created.tzinfo is None else created.tz_convert("UTC")
+        candle_end = candle_open + pd.Timedelta(seconds=seconds)
         now = pd.Timestamp.now(tz="UTC")
-
-        selected = None
-        for row in rows:
-            timestamp = pd.Timestamp(row[0])
-            timestamp = timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
-            candle_end = timestamp + pd.Timedelta(seconds=seconds)
-            if candle_end <= created:
-                selected = row
-                break
-
-        if selected is None:
-            for row in rows:
-                timestamp = pd.Timestamp(row[0])
-                timestamp = timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
-                if timestamp + pd.Timedelta(seconds=seconds) <= now:
-                    selected = row
-                    break
-
-        if selected is None:
+        if candle_end > now:
+            self.logger.info(
+                "ICHIMOKU_DELIVERY_CANDLE_WAITING id=%s pair=%s boundary=%s open=%s end=%s",
+                signal.get("id"),
+                signal.get("pair"),
+                boundary,
+                candle_open,
+                candle_end,
+            )
             return None
 
-        resolved_timestamp = pd.Timestamp(selected[0])
         self.logger.info(
-            "ICHIMOKU_REFERENCE_CANDLE_RESOLVED id=%s pair=%s stored=%s resolved_open=%s",
+            "ICHIMOKU_DELIVERY_CANDLE_RESOLVED id=%s pair=%s boundary=%s open=%s end=%s",
             signal.get("id"),
             signal.get("pair"),
-            reference,
-            resolved_timestamp,
+            boundary,
+            candle_open,
+            candle_end,
         )
         return selected
 
     def check_signal(self, signal: dict[str, Any]) -> bool:
-        """Evaluate the resolved reference close, then monitor later candles normally."""
+        """Evaluate the delivery candle close, then monitor later candles normally."""
         resolved = self._resolve_reference_candle(signal)
         normalized_signal = dict(signal)
 
         if resolved is not None:
             timestamp, open_price, high_price, low_price, close_price = resolved
-            timestamp = pd.Timestamp(timestamp)
+            timestamp = self._to_utc(timestamp)
             normalized_signal["reference_candle_time"] = timestamp
 
             state = self._load_management_state(signal)
@@ -183,7 +207,7 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
                     and close_value >= break_even_trigger
                 ):
                     self.logger.info(
-                        "ICHIMOKU_REFERENCE_CANDLE_BREAK_EVEN id=%s pair=%s close=%.8f trigger=%.8f",
+                        "ICHIMOKU_DELIVERY_CANDLE_BREAK_EVEN id=%s pair=%s close=%.8f trigger=%.8f",
                         signal.get("id"),
                         signal.get("pair"),
                         close_value,
@@ -196,7 +220,7 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
                     and close_value >= tp1_price
                 ):
                     self.logger.info(
-                        "ICHIMOKU_REFERENCE_CANDLE_TP1 id=%s pair=%s close=%.8f trigger=%.8f",
+                        "ICHIMOKU_DELIVERY_CANDLE_TP1 id=%s pair=%s close=%.8f trigger=%.8f",
                         signal.get("id"),
                         signal.get("pair"),
                         close_value,
