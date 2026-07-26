@@ -92,69 +92,128 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
             )
         return closed
 
-    def check_signal(self, signal: dict[str, Any]) -> bool:
-        """Evaluate the reference candle close without using its pre-signal range.
+    def _resolve_reference_candle(
+        self,
+        signal: dict[str, Any],
+    ) -> tuple[Any, float, float, float, float] | None:
+        """Resolve whether the stored reference is an OHLC open or close timestamp.
 
-        The base monitor skips ``timestamp <= reference_candle_time`` to avoid false
-        stop/target hits caused by price action before Telegram delivery. That also
-        skipped a legitimate management move when the reference candle *closed*
-        above +1 ATR or +2 ATR. Here only the close is inspected for that candle;
-        later candles continue to use the full high/low range in the base monitor.
+        Some historical signals store the candle opening timestamp, while others store
+        the boundary at which the candle closed. We inspect the two candles immediately
+        preceding the stored reference and select the latest candle that had already
+        closed when the signal was created. This avoids matching the new, still-open
+        candle when a close boundary such as 11:00 is stored.
         """
         reference = signal.get("reference_candle_time")
-        if reference is not None:
-            rows = self.postgres.fetch_all(
-                """SELECT timestamp, open, high, low, close
-                FROM market_data.ohlc
-                WHERE exchange = %s AND pair = %s AND timeframe = %s
-                  AND timestamp = %s
-                LIMIT 1""",
-                (
-                    signal["exchange"],
-                    signal["pair"],
-                    signal["timeframe"],
-                    reference,
-                ),
-            )
-            if rows:
-                timestamp, open_price, high_price, low_price, close_price = rows[0]
-                timestamp = pd.Timestamp(timestamp)
-                seconds = 3600 if signal["timeframe"] == "1h" else 900
-                candle_closed = (
-                    timestamp.timestamp() + seconds
-                    <= pd.Timestamp.now(tz="UTC").timestamp()
-                )
-                if candle_closed:
-                    state = self._load_management_state(signal)
-                    atr = float(state.get("atr") or 0.0)
-                    if atr > 0:
-                        entry = float(signal["entry"])
-                        close_value = float(close_price)
-                        break_even_trigger = entry + atr
-                        tp1_price = entry + (2.0 * atr)
+        if reference is None:
+            return None
 
-                        if (
-                            not bool(state.get("breakeven_armed"))
-                            and close_value >= break_even_trigger
-                        ):
-                            self._arm_break_even(signal, state, timestamp)
+        rows = self.postgres.fetch_all(
+            """SELECT timestamp, open, high, low, close
+            FROM market_data.ohlc
+            WHERE exchange = %s AND pair = %s AND timeframe = %s
+              AND timestamp <= %s
+            ORDER BY timestamp DESC
+            LIMIT 2""",
+            (
+                signal["exchange"],
+                signal["pair"],
+                signal["timeframe"],
+                reference,
+            ),
+        )
+        if not rows:
+            return None
 
-                        if (
-                            not bool(state.get("tp1_hit"))
-                            and close_value >= tp1_price
-                        ):
-                            self._take_partial_profit(
-                                signal,
-                                state,
-                                tp1_price,
-                                timestamp,
-                                float(open_price),
-                                float(high_price),
-                                float(low_price),
-                                close_value,
-                            )
+        seconds = 3600 if signal["timeframe"] == "1h" else 900
+        created = pd.Timestamp(signal.get("created_at") or pd.Timestamp.now(tz="UTC"))
+        created = created.tz_localize("UTC") if created.tzinfo is None else created.tz_convert("UTC")
+        now = pd.Timestamp.now(tz="UTC")
 
-        return super().check_signal(signal)
+        selected = None
+        for row in rows:
+            timestamp = pd.Timestamp(row[0])
+            timestamp = timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
+            candle_end = timestamp + pd.Timedelta(seconds=seconds)
+            if candle_end <= created:
+                selected = row
+                break
+
+        if selected is None:
+            for row in rows:
+                timestamp = pd.Timestamp(row[0])
+                timestamp = timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
+                if timestamp + pd.Timedelta(seconds=seconds) <= now:
+                    selected = row
+                    break
+
+        if selected is None:
+            return None
+
+        resolved_timestamp = pd.Timestamp(selected[0])
+        self.logger.info(
+            "ICHIMOKU_REFERENCE_CANDLE_RESOLVED id=%s pair=%s stored=%s resolved_open=%s",
+            signal.get("id"),
+            signal.get("pair"),
+            reference,
+            resolved_timestamp,
+        )
+        return selected
+
+    def check_signal(self, signal: dict[str, Any]) -> bool:
+        """Evaluate the resolved reference close, then monitor later candles normally."""
+        resolved = self._resolve_reference_candle(signal)
+        normalized_signal = dict(signal)
+
+        if resolved is not None:
+            timestamp, open_price, high_price, low_price, close_price = resolved
+            timestamp = pd.Timestamp(timestamp)
+            normalized_signal["reference_candle_time"] = timestamp
+
+            state = self._load_management_state(signal)
+            atr = float(state.get("atr") or 0.0)
+            if atr > 0:
+                entry = float(signal["entry"])
+                close_value = float(close_price)
+                break_even_trigger = entry + atr
+                tp1_price = entry + (2.0 * atr)
+
+                if (
+                    not bool(state.get("breakeven_armed"))
+                    and close_value >= break_even_trigger
+                ):
+                    self.logger.info(
+                        "ICHIMOKU_REFERENCE_CANDLE_BREAK_EVEN id=%s pair=%s close=%.8f trigger=%.8f",
+                        signal.get("id"),
+                        signal.get("pair"),
+                        close_value,
+                        break_even_trigger,
+                    )
+                    self._arm_break_even(signal, state, timestamp)
+
+                if (
+                    not bool(state.get("tp1_hit"))
+                    and close_value >= tp1_price
+                ):
+                    self.logger.info(
+                        "ICHIMOKU_REFERENCE_CANDLE_TP1 id=%s pair=%s close=%.8f trigger=%.8f",
+                        signal.get("id"),
+                        signal.get("pair"),
+                        close_value,
+                        tp1_price,
+                    )
+                    self._take_partial_profit(
+                        signal,
+                        state,
+                        tp1_price,
+                        timestamp,
+                        float(open_price),
+                        float(high_price),
+                        float(low_price),
+                        close_value,
+                    )
+
+        return super().check_signal(normalized_signal)
 
     def _arm_break_even(
         self,
