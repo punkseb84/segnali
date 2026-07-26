@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+
 from project.ichimoku_outcome_monitor import IchimokuOutcomeMonitor
 from project.shared.events import Event, EventType
 
@@ -89,6 +91,70 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
                 backfilled,
             )
         return closed
+
+    def check_signal(self, signal: dict[str, Any]) -> bool:
+        """Evaluate the reference candle close without using its pre-signal range.
+
+        The base monitor skips ``timestamp <= reference_candle_time`` to avoid false
+        stop/target hits caused by price action before Telegram delivery. That also
+        skipped a legitimate management move when the reference candle *closed*
+        above +1 ATR or +2 ATR. Here only the close is inspected for that candle;
+        later candles continue to use the full high/low range in the base monitor.
+        """
+        reference = signal.get("reference_candle_time")
+        if reference is not None:
+            rows = self.postgres.fetch_all(
+                """SELECT timestamp, open, high, low, close
+                FROM market_data.ohlc
+                WHERE exchange = %s AND pair = %s AND timeframe = %s
+                  AND timestamp = %s
+                LIMIT 1""",
+                (
+                    signal["exchange"],
+                    signal["pair"],
+                    signal["timeframe"],
+                    reference,
+                ),
+            )
+            if rows:
+                timestamp, open_price, high_price, low_price, close_price = rows[0]
+                timestamp = pd.Timestamp(timestamp)
+                seconds = 3600 if signal["timeframe"] == "1h" else 900
+                candle_closed = (
+                    timestamp.timestamp() + seconds
+                    <= pd.Timestamp.now(tz="UTC").timestamp()
+                )
+                if candle_closed:
+                    state = self._load_management_state(signal)
+                    atr = float(state.get("atr") or 0.0)
+                    if atr > 0:
+                        entry = float(signal["entry"])
+                        close_value = float(close_price)
+                        break_even_trigger = entry + atr
+                        tp1_price = entry + (2.0 * atr)
+
+                        if (
+                            not bool(state.get("breakeven_armed"))
+                            and close_value >= break_even_trigger
+                        ):
+                            self._arm_break_even(signal, state, timestamp)
+
+                        if (
+                            not bool(state.get("tp1_hit"))
+                            and close_value >= tp1_price
+                        ):
+                            self._take_partial_profit(
+                                signal,
+                                state,
+                                tp1_price,
+                                timestamp,
+                                float(open_price),
+                                float(high_price),
+                                float(low_price),
+                                close_value,
+                            )
+
+        return super().check_signal(signal)
 
     def _arm_break_even(
         self,
