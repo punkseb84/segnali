@@ -234,10 +234,68 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
         )
         return selected
 
+    def _resolve_series_exchange(self, signal: dict[str, Any]) -> str | None:
+        """Resolve the stored exchange label before the full OHLC history query.
+
+        The base outcome monitor queries the complete candle series with an exact
+        exchange comparison. Normalizing the real label here prevents a signal saved
+        as ``kraken`` from silently missing candles stored as ``Kraken``.
+        """
+        requested_exchange = str(signal.get("exchange") or "").strip()
+        rows = self.postgres.fetch_all(
+            """SELECT exchange
+            FROM market_data.ohlc
+            WHERE LOWER(TRIM(exchange)) = LOWER(TRIM(%s))
+              AND pair = %s
+              AND timeframe = %s
+            ORDER BY timestamp DESC
+            LIMIT 1""",
+            (requested_exchange, signal["pair"], signal["timeframe"]),
+        )
+        lookup_mode = "EXACT_EXCHANGE"
+
+        if not rows:
+            rows = self.postgres.fetch_all(
+                """SELECT exchange
+                FROM market_data.ohlc
+                WHERE pair = %s AND timeframe = %s
+                ORDER BY timestamp DESC
+                LIMIT 1""",
+                (signal["pair"], signal["timeframe"]),
+            )
+            lookup_mode = "PAIR_TIMEFRAME_FALLBACK"
+
+        resolved_exchange = str(rows[0][0] or "").strip() if rows else ""
+        if not resolved_exchange:
+            self.logger.warning(
+                "ICHIMOKU_OHLC_SERIES_EXCHANGE_NOT_FOUND id=%s pair=%s timeframe=%s "
+                "requested_exchange=%s",
+                signal.get("id"),
+                signal.get("pair"),
+                signal.get("timeframe"),
+                requested_exchange,
+            )
+            return None
+
+        self.logger.info(
+            "ICHIMOKU_OHLC_SERIES_EXCHANGE_RESOLVED id=%s pair=%s mode=%s "
+            "requested_exchange=%s resolved_exchange=%s",
+            signal.get("id"),
+            signal.get("pair"),
+            lookup_mode,
+            requested_exchange,
+            resolved_exchange,
+        )
+        return resolved_exchange
+
     def check_signal(self, signal: dict[str, Any]) -> bool:
         """Evaluate the delivery candle close, then monitor later candles normally."""
         resolved = self._resolve_reference_candle(signal)
         normalized_signal = dict(signal)
+
+        resolved_series_exchange = self._resolve_series_exchange(signal)
+        if resolved_series_exchange is not None:
+            normalized_signal["exchange"] = resolved_series_exchange
 
         if resolved is not None:
             timestamp, open_price, high_price, low_price, close_price = resolved
