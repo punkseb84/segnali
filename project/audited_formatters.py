@@ -45,13 +45,24 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
             f"• Profitto netto stimato sulla metà: <b>€{result:+.2f}</b>\n"
             "• Stop della metà restante: <b>Break Even</b>\n"
             "• Posizione ancora aperta: <b>50%</b>\n\n"
-            "☁️ La parte restante uscirà al rientro nella nuvola o all’incrocio ribassista Tenkan/Kijun."
+            "⏳ <b>Non chiudere ancora la parte restante.</b>\n"
+            "Il bot invierà un secondo messaggio esplicito quando sarà il momento di uscire definitivamente."
         )
 
     is_stop = str(payload.get("outcome")) == "STOP_LOSS"
     is_ichimoku_exit = resolution.startswith("ICHIMOKU_")
+    tp1_hit = bool(payload.get("tp1_hit"))
+    prior_net = _float(payload.get("tp1_realized_net_eur"))
+    final_leg_net = result - prior_net if tp1_hit else result
 
-    if resolution == "ICHIMOKU_BREAK_EVEN_STOP":
+    if tp1_hit:
+        if resolution == "ICHIMOKU_BREAK_EVEN_STOP":
+            title = "🟡 <b>CHIUDI ORA · POSIZIONE CHIUSA AL 100%</b>"
+        elif result >= 0:
+            title = "🟢 <b>CHIUDI ORA · POSIZIONE CHIUSA AL 100%</b>"
+        else:
+            title = "🔴 <b>CHIUDI ORA · POSIZIONE CHIUSA AL 100%</b>"
+    elif resolution == "ICHIMOKU_BREAK_EVEN_STOP":
         title = "🟡 <b>STOP A BREAK EVEN RAGGIUNTO</b>"
     elif is_stop:
         title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
@@ -88,10 +99,14 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
     else:
         resolution_text = resolution or "n/d"
 
-    tp1_line = ""
-    if bool(payload.get("tp1_hit")):
-        tp1_line = (
-            f"• TP1 precedente sul 50%: <b>€{_float(payload.get('tp1_realized_net_eur')):+.2f}</b>\n"
+    management_block = ""
+    if tp1_hit:
+        management_block = (
+            "\n💰 <b>Riepilogo delle due uscite</b>\n"
+            f"• Prima metà chiusa a TP1: <b>€{prior_net:+.2f}</b>\n"
+            f"• Seconda metà chiusa adesso: <b>€{final_leg_net:+.2f}</b>\n"
+            f"• Risultato netto totale: <b>€{result:+.2f}</b>\n"
+            "• Posizione residua: <b>0% · operazione conclusa</b>\n"
         )
 
     return (
@@ -100,12 +115,11 @@ def format_audited_outcome_message(payload: dict[str, Any]) -> str:
         f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
         f"Strategia: <b>{_escape(payload.get('strategy'))}</b>\n"
         f"Exchange: <b>{_escape(payload.get('exchange'))}</b>\n\n"
-        "📍 <b>Esito complessivo</b>\n"
-        f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
+        "📍 <b>Uscita operativa</b>\n"
+        f"• Azione: <b>{'chiudi il 50% restante' if tp1_hit else 'chiudi la posizione'}</b>\n"
         f"• Prezzo uscita finale: <b>{_price(payload.get('outcome_price'))}</b>\n"
-        f"{tp1_line}"
-        f"• Risultato netto complessivo stimato: <b>€{result:+.2f}</b>\n"
         f"• Motivo: <b>{_escape(resolution_text)}</b>\n"
+        f"{management_block}"
         f"{candle_block}"
         f"• Candela di chiusura: <b>{_escape(payload.get('closed_at'))}</b>"
     )
