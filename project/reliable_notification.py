@@ -9,7 +9,7 @@ from project.shared.events import Event, EventType
 
 
 class ReliableNotificationEngine(NotificationEngine):
-    """Persist delivery failure so an unseen signal is never treated as an open exposure."""
+    """Persist delivery outcomes for signals and position-management updates."""
 
     def handle_event(self, event: Event) -> None:
         payload = dict(event.payload)
@@ -40,12 +40,52 @@ class ReliableNotificationEngine(NotificationEngine):
             return
 
         result = self.send_telegram(message, reply_to_message_id=reply_to_message_id)
+
+        if (
+            event.type == EventType.REPORT_READY
+            and payload.get("management_update") == "BREAK_EVEN_ARMED"
+        ):
+            if result:
+                self.mark_break_even_notification_sent(payload.get("signal_id"))
+            else:
+                self.logger.warning(
+                    "Break-even Telegram delivery failed; retry remains pending signal_id=%s",
+                    payload.get("signal_id"),
+                )
+            return
+
         if event.type != EventType.NEW_SIGNAL:
             return
         if result:
             self.save_signal_reference(payload.get("signal_id"), result)
         else:
             self.mark_signal_delivery_failed(payload.get("signal_id"), "TELEGRAM_SEND_FAILED")
+
+    def mark_break_even_notification_sent(self, signal_id: Any) -> None:
+        if self.postgres is None or signal_id is None:
+            return
+        try:
+            self.postgres.execute(
+                """UPDATE signals.generated_signals
+                SET score_breakdown = COALESCE(score_breakdown, '{}'::jsonb)
+                    || jsonb_build_object(
+                        'breakeven_notification_sent', TRUE,
+                        'breakeven_notification_sent_at', NOW()::text
+                    )
+                WHERE id = %s
+                  AND status IN ('NEW', 'OPEN')""",
+                (int(signal_id),),
+            )
+            self.logger.info(
+                "Break-even Telegram delivery persisted signal_id=%s",
+                signal_id,
+            )
+        except Exception as exc:
+            self.logger.error(
+                "Break-even Telegram delivery persistence failed signal_id=%s error=%s",
+                signal_id,
+                exc,
+            )
 
     def mark_signal_delivery_failed(self, signal_id: Any, reason: str) -> None:
         if self.postgres is None or signal_id is None:
