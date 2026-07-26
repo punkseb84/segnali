@@ -107,12 +107,9 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
     ) -> tuple[Any, float, float, float, float] | None:
         """Resolve the first candle affected by the signal using delivery time.
 
-        ``reference_candle_time`` is not reliable for historical rows because it can
-        represent either an OHLC opening timestamp or a closing boundary. The only
-        unambiguous boundary is when Telegram actually delivered the signal. We use
-        ``telegram_sent_at`` and fall back to ``created_at``. The candle containing
-        that instant is evaluated by close only after it is closed; later candles are
-        left to the normal high/low monitor.
+        Telegram delivery time is the operational boundary. OHLC exchange labels are
+        matched case-insensitively; when historical signals contain a different or
+        missing exchange label, the lookup safely falls back to pair/timeframe.
         """
         delivery_rows = self.postgres.fetch_all(
             """SELECT COALESCE(telegram_sent_at, created_at)
@@ -135,34 +132,87 @@ class NotifyingIchimokuOutcomeMonitor(IchimokuOutcomeMonitor):
             return None
 
         boundary = self._to_utc(boundary_value)
+        requested_exchange = str(signal.get("exchange") or "").strip()
+
         rows = self.postgres.fetch_all(
-            """SELECT timestamp, open, high, low, close
+            """SELECT timestamp, open, high, low, close, exchange
             FROM market_data.ohlc
-            WHERE exchange = %s AND pair = %s AND timeframe = %s
+            WHERE LOWER(TRIM(exchange)) = LOWER(TRIM(%s))
+              AND pair = %s
+              AND timeframe = %s
               AND timestamp <= %s
             ORDER BY timestamp DESC
             LIMIT 1""",
             (
-                signal["exchange"],
+                requested_exchange,
                 signal["pair"],
                 signal["timeframe"],
                 boundary,
             ),
         )
+
+        lookup_mode = "EXACT_EXCHANGE"
         if not rows:
+            rows = self.postgres.fetch_all(
+                """SELECT timestamp, open, high, low, close, exchange
+                FROM market_data.ohlc
+                WHERE pair = %s
+                  AND timeframe = %s
+                  AND timestamp <= %s
+                ORDER BY timestamp DESC
+                LIMIT 1""",
+                (
+                    signal["pair"],
+                    signal["timeframe"],
+                    boundary,
+                ),
+            )
+            lookup_mode = "PAIR_TIMEFRAME_FALLBACK"
+
+        if not rows:
+            latest_rows = self.postgres.fetch_all(
+                """SELECT timestamp, exchange
+                FROM market_data.ohlc
+                WHERE pair = %s AND timeframe = %s
+                ORDER BY timestamp DESC
+                LIMIT 1""",
+                (signal["pair"], signal["timeframe"]),
+            )
+            latest_timestamp = latest_rows[0][0] if latest_rows else None
+            latest_exchange = latest_rows[0][1] if latest_rows else None
             self.logger.warning(
-                "ICHIMOKU_DELIVERY_CANDLE_NOT_FOUND id=%s pair=%s boundary=%s",
+                "ICHIMOKU_DELIVERY_CANDLE_NOT_FOUND id=%s pair=%s timeframe=%s "
+                "requested_exchange=%s boundary=%s latest_timestamp=%s latest_exchange=%s",
                 signal.get("id"),
                 signal.get("pair"),
+                signal.get("timeframe"),
+                requested_exchange,
                 boundary,
+                latest_timestamp,
+                latest_exchange,
             )
             return None
 
-        selected = rows[0]
+        raw = rows[0]
+        selected = raw[:5]
+        resolved_exchange = raw[5]
         candle_open = self._to_utc(selected[0])
         seconds = 3600 if signal["timeframe"] == "1h" else 900
         candle_end = candle_open + pd.Timedelta(seconds=seconds)
         now = pd.Timestamp.now(tz="UTC")
+
+        self.logger.info(
+            "ICHIMOKU_OHLC_LOOKUP id=%s pair=%s mode=%s requested_exchange=%s "
+            "resolved_exchange=%s boundary=%s open=%s",
+            signal.get("id"),
+            signal.get("pair"),
+            lookup_mode,
+            requested_exchange,
+            resolved_exchange,
+            boundary,
+            candle_open,
+        )
+
         if candle_end > now:
             self.logger.info(
                 "ICHIMOKU_DELIVERY_CANDLE_WAITING id=%s pair=%s boundary=%s open=%s end=%s",
