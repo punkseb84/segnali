@@ -98,7 +98,11 @@ def _format_legacy_audited(payload: dict[str, Any], resolution: str, signal_id: 
             f"• Minimo reale: <b>{_price(low)}</b>\n"
             f"• Close reale: <b>{_price(close_price)}</b>\n"
         )
-    ambiguity = "\n⚠️ <b>Candela ambigua: applicata gestione conservativa.</b>\n" if payload.get("ambiguous") else ""
+    ambiguity = (
+        "\n⚠️ <b>Candela ambigua: SÌ · applicata gestione conservativa.</b>\n"
+        if payload.get("ambiguous")
+        else ""
+    )
     return (
         f"{title}\n"
         f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
