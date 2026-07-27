@@ -38,6 +38,42 @@ class ReliableNotificationEngine(NotificationEngine):
         payload["budget_before_eur"] = budget_after - result
         payload["budget_after_eur"] = budget_after
 
+    def _compact_break_even_message(self, payload: dict[str, Any]) -> str:
+        signal_id = payload.get("signal_id") or "n/d"
+        pair = str(payload.get("pair") or "n/d")
+        timeframe = str(payload.get("timeframe") or "1h")
+        entry: float | None = None
+        if self.postgres is not None and signal_id != "n/d":
+            try:
+                rows = self.postgres.fetch_all(
+                    """SELECT entry
+                    FROM signals.generated_signals
+                    WHERE id = %s
+                    LIMIT 1""",
+                    (int(signal_id),),
+                )
+                if rows and rows[0][0] is not None:
+                    entry = float(rows[0][0])
+            except Exception as exc:
+                self.logger.warning(
+                    "Break-even compact lookup failed signal_id=%s error=%s",
+                    signal_id,
+                    exc,
+                )
+        stop_line = (
+            f"Stop spostato a: <b>{entry:.8f}</b>\n"
+            if entry is not None
+            else "Stop spostato al <b>prezzo di ingresso</b>\n"
+        )
+        return (
+            "🟡 <b>BREAK EVEN</b> "
+            f"<code>#{signal_id}</code>\n"
+            f"<b>{pair}</b> · {timeframe}\n\n"
+            f"{stop_line}"
+            "Posizione aperta: <b>100%</b>\n"
+            "Prossimo obiettivo: <b>TP1 50% a +2 ATR</b>"
+        )
+
     def handle_event(self, event: Event) -> None:
         payload = dict(event.payload)
         reply_to_message_id: int | None = None
@@ -47,6 +83,13 @@ class ReliableNotificationEngine(NotificationEngine):
             payload.update(reference)
             reply_to_message_id = reference.get("telegram_message_id")
             self._attach_budget_report(payload)
+
+        if (
+            event.type == EventType.REPORT_READY
+            and payload.get("management_update") == "BREAK_EVEN_ARMED"
+        ):
+            payload["message"] = self._compact_break_even_message(payload)
+            payload["trusted_html"] = True
 
         if event.type == EventType.NEW_SIGNAL:
             message = self.format_signal(payload)
