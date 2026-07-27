@@ -1,6 +1,7 @@
 """Telegram notification engine that prevents invisible signals from blocking the scanner."""
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import project.notification_engine.service as notification_service
@@ -9,7 +10,69 @@ from project.shared.events import Event, EventType
 
 
 class ReliableNotificationEngine(NotificationEngine):
-    """Persist delivery outcomes for signals and position-management updates."""
+    """Persist delivery outcomes and enrich final reports with the rolling paper budget."""
+
+    def _attach_budget_report(self, payload: dict[str, Any]) -> None:
+        if self.postgres is None or payload.get("partial_take_profit"):
+            return
+        result = float(payload.get("realized_net_eur") or 0.0)
+        try:
+            initial_budget = float(os.getenv("PAPER_INITIAL_BUDGET_EUR", "100"))
+        except (TypeError, ValueError):
+            initial_budget = 100.0
+        try:
+            rows = self.postgres.fetch_all(
+                """SELECT COALESCE(SUM(
+                           COALESCE(net_profit_tp1_eur, 0)
+                           - COALESCE(net_loss_sl_eur, 0)
+                       ), 0)
+                FROM signals.generated_signals
+                WHERE closed_at IS NOT NULL
+                  AND strategy = 'Ichimoku Cloud Breakout'"""
+            )
+            cumulative = float(rows[0][0] or 0.0) if rows else result
+        except Exception as exc:
+            self.logger.warning("Budget aggregation failed; using current result only error=%s", exc)
+            cumulative = result
+        budget_after = initial_budget + cumulative
+        payload["budget_before_eur"] = budget_after - result
+        payload["budget_after_eur"] = budget_after
+
+    def _compact_break_even_message(self, payload: dict[str, Any]) -> str:
+        signal_id = payload.get("signal_id") or "n/d"
+        pair = str(payload.get("pair") or "n/d")
+        timeframe = str(payload.get("timeframe") or "1h")
+        entry: float | None = None
+        if self.postgres is not None and signal_id != "n/d":
+            try:
+                rows = self.postgres.fetch_all(
+                    """SELECT entry
+                    FROM signals.generated_signals
+                    WHERE id = %s
+                    LIMIT 1""",
+                    (int(signal_id),),
+                )
+                if rows and rows[0][0] is not None:
+                    entry = float(rows[0][0])
+            except Exception as exc:
+                self.logger.warning(
+                    "Break-even compact lookup failed signal_id=%s error=%s",
+                    signal_id,
+                    exc,
+                )
+        stop_line = (
+            f"Stop spostato a: <b>{entry:.8f}</b>\n"
+            if entry is not None
+            else "Stop spostato al <b>prezzo di ingresso</b>\n"
+        )
+        return (
+            "🟡 <b>BREAK EVEN</b> "
+            f"<code>#{signal_id}</code>\n"
+            f"<b>{pair}</b> · {timeframe}\n\n"
+            f"{stop_line}"
+            "Posizione aperta: <b>100%</b>\n"
+            "Prossimo obiettivo: <b>TP1 50% a +2 ATR</b>"
+        )
 
     def handle_event(self, event: Event) -> None:
         payload = dict(event.payload)
@@ -19,6 +82,14 @@ class ReliableNotificationEngine(NotificationEngine):
             reference = self.fetch_signal_reference(payload.get("signal_id"))
             payload.update(reference)
             reply_to_message_id = reference.get("telegram_message_id")
+            self._attach_budget_report(payload)
+
+        if (
+            event.type == EventType.REPORT_READY
+            and payload.get("management_update") == "BREAK_EVEN_ARMED"
+        ):
+            payload["message"] = self._compact_break_even_message(payload)
+            payload["trusted_html"] = True
 
         if event.type == EventType.NEW_SIGNAL:
             message = self.format_signal(payload)
@@ -76,10 +147,7 @@ class ReliableNotificationEngine(NotificationEngine):
                   AND status IN ('NEW', 'OPEN')""",
                 (int(signal_id),),
             )
-            self.logger.info(
-                "Break-even Telegram delivery persisted signal_id=%s",
-                signal_id,
-            )
+            self.logger.info("Break-even Telegram delivery persisted signal_id=%s", signal_id)
         except Exception as exc:
             self.logger.error(
                 "Break-even Telegram delivery persistence failed signal_id=%s error=%s",
