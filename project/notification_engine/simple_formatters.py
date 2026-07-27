@@ -1,4 +1,4 @@
-"""Compact Telegram formatters for the single Ichimoku LONG-only scanner."""
+"""Compact Telegram formatters for the Ichimoku runtime with legacy fallbacks."""
 from __future__ import annotations
 
 import html
@@ -81,13 +81,25 @@ def format_simple_signal_message(payload: dict[str, Any]) -> str:
         return _format_ichimoku_signal_message(payload)
 
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
+    execution_mode = str((payload.get("score_breakdown") or {}).get("execution_mode") or payload.get("execution_mode") or "")
+    paper_label = " · PAPER" if "PAPER" in execution_mode.upper() else ""
+    validated_label = " · EDGE VALIDATO" if payload.get("validated_edge") else ""
+    setup_note = ""
+    execution_tf = str((payload.get("score_breakdown") or {}).get("execution_timeframe") or "")
+    if execution_tf and execution_tf != str(payload.get("timeframe") or ""):
+        setup_note = f" · setup <b>{_escape(execution_tf)}</b> · monitor {_escape(payload.get('timeframe'))}"
+    confirmation = "\n• ingresso confermato su candela 4h chiusa" if execution_tf == "4h" else ""
     return (
-        "🟢 <b>NUOVO SEGNALE</b> "
-        f"<code>#{_escape(signal_id)}</code>\n"
-        f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n\n"
-        f"Entrata: <b>{_price(payload.get('entry'))}</b>\n"
-        f"Stop Loss: <b>{_price(payload.get('stop_loss'))}</b>\n"
-        f"Take Profit: <b>{_price(payload.get('take_profit'))}</b>"
+        f"🟢 <b>SEGNALE LONG{paper_label}{validated_label}</b>\n"
+        f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
+        f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}{setup_note}\n"
+        f"Strategia: <b>{_escape(strategy)}</b>\n\n"
+        "💰 <b>Livelli operativi</b>\n"
+        f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
+        f"• Stop Loss: <b>{_price(payload.get('stop_loss'))}</b>\n"
+        f"• Take Profit: <b>{_price(payload.get('take_profit'))}</b>"
+        f"{confirmation}\n\n"
+        "⚠️ Segnale sperimentale in paper trading: nessun metodo garantisce profitto."
     )
 
 
@@ -97,7 +109,7 @@ def format_simple_report_message(payload: dict[str, Any]) -> str:
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     raw_text = str(raw)
     plain = _plain_html(raw_text).upper()
-    if "REPORT SCANNER" in plain or "COPPIE MONITORATE" in plain:
+    if "ICHIMOKU" in plain and ("REPORT SCANNER" in plain or "COPPIE MONITORATE" in plain):
         return _format_ichimoku_scanner_report(raw_text)
     if payload.get("trusted_html") is True:
         return raw_text
@@ -105,9 +117,12 @@ def format_simple_report_message(payload: dict[str, Any]) -> str:
 
 
 def format_simple_outcome_message(payload: dict[str, Any]) -> str:
+    resolution = str(payload.get("outcome_resolution") or "")
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
     result = _float(payload.get("realized_net_eur"))
-    if bool(payload.get("partial_take_profit")):
+    strategy = str(payload.get("strategy") or "")
+    is_ichimoku = "ICHIMOKU" in strategy.upper() or resolution.startswith("ICHIMOKU_")
+    if is_ichimoku and bool(payload.get("partial_take_profit")):
         return (
             "✅ <b>TP1 RAGGIUNTO</b> "
             f"<code>#{_escape(signal_id)}</code>\n"
@@ -116,8 +131,22 @@ def format_simple_outcome_message(payload: dict[str, Any]) -> str:
             f"Risultato: <b>€{result:+.2f}</b>\n"
             "Restante 50% con stop a Break Even."
         )
+
+    if bool(payload.get("partial_take_profit")):
+        title = "🟢 <b>TP1 PARZIALE RAGGIUNTO</b>"
+    elif resolution == "ICHIMOKU_BREAK_EVEN_STOP":
+        title = "🟡 <b>STOP A BREAK EVEN RAGGIUNTO</b>"
+    elif str(payload.get("outcome")) == "STOP_LOSS":
+        title = "🔴 <b>STOP LOSS RAGGIUNTO</b>"
+    else:
+        title = "🎯 <b>TAKE PROFIT RAGGIUNTO</b>"
     return (
-        "🟢 <b>OPERAZIONE CHIUSA</b> "
-        f"<code>#{_escape(signal_id)}</code>\n"
-        f"<b>{_escape(payload.get('pair'))}</b> · Risultato: <b>€{result:+.2f}</b>"
+        f"{title}\n"
+        f"🆔 <code>#{_escape(signal_id)}</code>\n\n"
+        f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
+        f"• Entry: <b>{_price(payload.get('entry'))}</b>\n"
+        f"• Uscita: <b>{_price(payload.get('outcome_price'))}</b>\n"
+        f"• Risultato netto stimato: <b>€{result:+.2f}</b>\n"
+        f"• Candela: <b>{_escape(payload.get('closed_at'))}</b>\n"
+        f"• Motivo: <b>{_escape(resolution)}</b>"
     )
