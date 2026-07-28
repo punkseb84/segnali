@@ -26,25 +26,53 @@ def test_ichimoku_signal_is_compact_and_keeps_core_levels():
     assert "Perché" not in message
 
 
-def test_final_outcome_contains_rolling_budget():
+def test_final_outcome_contains_prices_and_rolling_budget():
     message = format_audited_outcome_message(
         {
             "signal_id": 245,
+            "strategy": "Ichimoku Cloud Breakout",
             "pair": "ETH/USD",
             "timeframe": "1h",
+            "entry": 1893.47,
+            "outcome_price": 1928.40,
             "realized_net_eur": 1.21,
             "budget_before_eur": 100.0,
             "budget_after_eur": 101.21,
             "tp1_hit": True,
+            "tp1_price": 1905.07,
             "tp1_realized_net_eur": 0.79,
         }
     )
 
     assert "OPERAZIONE CHIUSA" in message
+    assert "Entrata: <b>1,893.47</b>" in message
+    assert "TP1 50% a: <b>1,905.07</b>" in message
+    assert "Uscita finale 50% a: <b>1,928.40</b>" in message
     assert "Budget iniziale: <b>€100.00</b>" in message
     assert "Budget aggiornato: <b>€101.21</b>" in message
     assert "Candela" not in message
     assert "Exchange" not in message
+
+
+def test_final_outcome_without_tp1_shows_single_exit_price():
+    message = format_audited_outcome_message(
+        {
+            "signal_id": 246,
+            "strategy": "Ichimoku Cloud Breakout",
+            "pair": "SOL/USD",
+            "timeframe": "1h",
+            "entry": 100.0,
+            "outcome_price": 98.5,
+            "realized_net_eur": -1.08,
+            "budget_before_eur": 101.21,
+            "budget_after_eur": 100.13,
+            "tp1_hit": False,
+        }
+    )
+
+    assert "Entrata: <b>100.000</b>" in message
+    assert "Uscita finale a: <b>98.500</b>" in message
+    assert "TP1 50% a" not in message
 
 
 class _Postgres:
