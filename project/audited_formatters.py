@@ -37,6 +37,16 @@ def _is_ichimoku(payload: dict[str, Any], resolution: str) -> bool:
     return "ICHIMOKU" in str(payload.get("strategy") or "").upper() or resolution.startswith("ICHIMOKU_")
 
 
+def _tp1_price(payload: dict[str, Any]) -> Any:
+    explicit = payload.get("tp1_price") or payload.get("take_profit")
+    if explicit is not None:
+        return explicit
+    breakdown = payload.get("score_breakdown") or {}
+    atr = _float(breakdown.get("atr")) if isinstance(breakdown, dict) else 0.0
+    entry = payload.get("entry")
+    return _float(entry) + (2.0 * atr) if entry is not None and atr > 0 else None
+
+
 def _format_compact_ichimoku(payload: dict[str, Any], resolution: str, signal_id: Any) -> str:
     result = _float(payload.get("realized_net_eur"))
     if bool(payload.get("partial_take_profit")) or resolution == "ICHIMOKU_TP1_2ATR":
@@ -63,6 +73,15 @@ def _format_compact_ichimoku(payload: dict[str, Any], resolution: str, signal_id
     budget_after = _float(payload.get("budget_after_eur"), budget_before + result)
     title = "🟢 <b>OPERAZIONE CHIUSA</b>" if result >= 0 else "🔴 <b>OPERAZIONE CHIUSA</b>"
     outcome_label = "PROFITTO" if result >= 0 else "PERDITA"
+    entry_price = payload.get("entry")
+    final_exit_price = payload.get("outcome_price")
+    tp1_level = _tp1_price(payload)
+    price_lines = f"Entrata: <b>{_price(entry_price)}</b>\n"
+    if tp1_hit and tp1_level is not None:
+        price_lines += f"TP1 50% a: <b>{_price(tp1_level)}</b>\n"
+        price_lines += f"Uscita finale 50% a: <b>{_price(final_exit_price)}</b>\n\n"
+    else:
+        price_lines += f"Uscita finale a: <b>{_price(final_exit_price)}</b>\n\n"
     result_lines = ""
     if tp1_hit:
         result_lines = (
@@ -72,6 +91,7 @@ def _format_compact_ichimoku(payload: dict[str, Any], resolution: str, signal_id
     return (
         f"{title} <code>#{_escape(signal_id)}</code>\n"
         f"<b>{_escape(payload.get('pair'))}</b> · <b>{outcome_label}</b>\n\n"
+        f"{price_lines}"
         f"{result_lines}"
         f"Risultato totale: <b>{_money(result, signed=True)}</b>\n\n"
         f"Budget iniziale: <b>{_money(budget_before)}</b>\n"
