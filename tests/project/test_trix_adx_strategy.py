@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
+from project.notifying_trix_adx_outcome_monitor import NotifyingTrixAdxOutcomeMonitor
 from project.trix_adx_formatters import format_trix_adx_signal_message
 from project.trix_adx_outcome_monitor import TrixAdxOutcomeMonitor
 from project.trix_adx_scanner import TrixAdxScanner
@@ -77,6 +78,55 @@ def test_true_break_even_covers_estimated_costs() -> None:
 
     assert break_even_price > entry
     assert realized_net > 0.0
+
+
+def test_delivery_candle_ignores_high_and_low_before_telegram() -> None:
+    monitor = object.__new__(NotifyingTrixAdxOutcomeMonitor)
+    delivery_open = pd.Timestamp("2026-07-30T14:00:00Z")
+    frame = pd.DataFrame(
+        {
+            "timestamp": [delivery_open - pd.Timedelta(hours=1), delivery_open],
+            "open": [100.0, 100.0],
+            "high": [100.5, 105.0],
+            "low": [99.5, 97.0],
+            "close": [100.0, 100.5],
+            "ema50": [99.0, 99.0],
+            "atr": [1.0, 1.0],
+            "trix": [0.1, 0.1],
+            "trix_signal": [0.05, 0.05],
+        }
+    )
+    processed: list[pd.Timestamp] = []
+
+    monitor._fetch_closed_frame = lambda signal: frame.copy()
+    monitor._add_indicators = lambda value: value
+    monitor._load_state = lambda signal_id: {
+        "initial_stop": 98.0,
+        "risk_distance": 2.0,
+    }
+    monitor._mark_processed = lambda signal_id, timestamp, extra=None: processed.append(timestamp)
+    monitor._arm_break_even = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("delivery high must not arm break-even")
+    )
+    monitor._take_partial_profit = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("delivery high must not hit TP1")
+    )
+    monitor._close_signal = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("delivery low must not trigger the stop")
+    )
+    monitor.trailing_atr_multiple = 2.5
+
+    signal = {
+        "id": 700,
+        "pair": "BTC/USD",
+        "entry": 100.0,
+        "stop_loss": 98.0,
+        "telegram_sent_at": delivery_open + pd.Timedelta(minutes=2),
+        "created_at": delivery_open + pd.Timedelta(minutes=1),
+    }
+
+    assert monitor.check_signal(signal) is False
+    assert processed == [delivery_open]
 
 
 def test_telegram_signal_explains_r_based_management() -> None:
