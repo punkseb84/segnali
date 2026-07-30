@@ -15,6 +15,11 @@ from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
 from project.hour_aligned_ichimoku_scheduler import HourAlignedIchimokuScheduler
 from project.ichimoku_daily_limited_scanner import DailyLimitedIchimokuScanner
+from project.ichimoku_performance_report import (
+    DEFAULT_REPORT_KEY,
+    DEFAULT_REPORT_SINCE_UTC,
+    send_startup_performance_report,
+)
 from project.ichimoku_scanner import RUNTIME_VERSION, STRATEGY_NAME
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.notifying_ichimoku_outcome_monitor import NotifyingIchimokuOutcomeMonitor
@@ -30,6 +35,10 @@ TOP_20_PAIRS = [
     "BCH/USD", "TAO/USD", "DOT/USD", "XLM/USD", "TRX/USD",
     "ATOM/USD", "ETC/USD", "FIL/USD", "NEAR/USD", "UNI/USD",
 ]
+
+
+def _enabled(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _expire_previous_runtime_signals(postgres: object) -> None:
@@ -180,6 +189,26 @@ def main() -> None:
             "Le condizioni di ingresso e tutti gli altri parametri restano invariati.\n"
             "⚠️ Segnali PAPER fino a validazione forward."
         )
+
+    if _enabled("ICHIMOKU_SEND_PERFORMANCE_REPORT_ON_STARTUP", "true"):
+        try:
+            report_sent = send_startup_performance_report(
+                postgres,
+                notification,
+                since_utc=os.getenv(
+                    "ICHIMOKU_PERFORMANCE_REPORT_SINCE_UTC",
+                    DEFAULT_REPORT_SINCE_UTC,
+                ),
+                report_key=os.getenv(
+                    "ICHIMOKU_PERFORMANCE_REPORT_KEY",
+                    DEFAULT_REPORT_KEY,
+                ),
+                initial_budget_eur=float(os.getenv("PAPER_INITIAL_BUDGET_EUR", "100")),
+                force=_enabled("ICHIMOKU_FORCE_PERFORMANCE_REPORT", "false"),
+            )
+            logger.info("ICHIMOKU_PERFORMANCE_REPORT sent=%s", report_sent)
+        except Exception as exc:
+            logger.exception("ICHIMOKU_PERFORMANCE_REPORT failed error=%s", exc)
 
     HourAlignedIchimokuScheduler(
         settings,
