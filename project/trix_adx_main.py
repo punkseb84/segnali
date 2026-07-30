@@ -22,11 +22,12 @@ from project.reliable_notification import ReliableNotificationEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
+from project.timely_trix_adx_scanner import TimelyTrixAdxScanner
 from project.trix_adx_formatters import (
     format_trix_adx_outcome_message,
     format_trix_adx_signal_message,
 )
-from project.trix_adx_scanner import RUNTIME_VERSION, STRATEGY_NAME, TrixAdxScanner
+from project.trix_adx_scanner import RUNTIME_VERSION, STRATEGY_NAME
 from project.trix_adx_scheduler import HourAlignedTrixAdxScheduler
 
 
@@ -71,6 +72,7 @@ def main() -> None:
     trailing_atr = float(os.getenv("TRIX_TRAILING_ATR", "2.5"))
     be_buffer = float(os.getenv("TRIX_BREAK_EVEN_BUFFER_RATE", "0.0002"))
     min_score = float(os.getenv("TRIX_MIN_SCORE", "70"))
+    max_signal_delay = max(1, int(os.getenv("TRIX_MAX_SIGNAL_DELAY_MINUTES", "10")))
     max_per_cycle = max(1, int(os.getenv("TRIX_MAX_PER_CYCLE", "1")))
     max_per_day = max(1, int(os.getenv("TRIX_MAX_PER_DAY", "2")))
     max_open_positions = max(1, int(os.getenv("TRIX_MAX_OPEN_POSITIONS", "2")))
@@ -83,7 +85,7 @@ def main() -> None:
         "TRIX_ADX_RUNTIME version=%s strategy=%s trigger=1h context=4h pairs=%s "
         "trix=%s signal=%s adx=%s threshold=%.1f volume_min=%.2f "
         "max_extension_atr=%.2f stop_atr=%.2f-%.2f trailing_atr=%.2f "
-        "max_per_day=%s max_open=%s telegram=true paper=true",
+        "max_signal_delay=%sm max_per_day=%s max_open=%s telegram=true paper=true",
         RUNTIME_VERSION,
         STRATEGY_NAME,
         len(settings.collector_pairs),
@@ -96,6 +98,7 @@ def main() -> None:
         min_stop_atr,
         max_stop_atr,
         trailing_atr,
+        max_signal_delay,
         max_per_day,
         max_open_positions,
     )
@@ -120,7 +123,7 @@ def main() -> None:
     notification_service.format_outcome_message = _format_runtime_outcome
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = TrixAdxScanner(
+    scanner = TimelyTrixAdxScanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -151,6 +154,7 @@ def main() -> None:
         max_signals_per_day=max_per_day,
         max_open_positions=max_open_positions,
         max_daily_full_stops=max_daily_stops,
+        max_signal_delay_minutes=max_signal_delay,
     )
 
     trix_monitor = NotifyingTrixAdxOutcomeMonitor(
@@ -206,6 +210,7 @@ def main() -> None:
             "A +1R: stop al pareggio netto comprensivo dei costi\n"
             "A +2R: chiusura del 50%\n"
             "Restante 50%: trailing 2,5 ATR, uscita TRIX&lt;0 o sotto EMA50\n"
+            f"Finestra ingresso: <b>entro {max_signal_delay} minuti dalla chiusura 1h</b>\n"
             f"Massimo segnali: <b>{max_per_day}/giorno</b> · posizioni aperte: <b>{max_open_positions}</b>\n\n"
             "🧪 Solo PAPER TRADING. La precedente strategia Ichimoku non genera più ingressi."
         )
