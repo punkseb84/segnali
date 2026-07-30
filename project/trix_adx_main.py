@@ -16,6 +16,7 @@ from project.database.postgres import (
 from project.daily_paper_formatters import format_daily_paper_outcome_message
 from project.ichimoku_scanner import RUNTIME_VERSION as ICHIMOKU_RUNTIME_VERSION
 from project.notifying_ichimoku_outcome_monitor import NotifyingIchimokuOutcomeMonitor
+from project.notifying_trix_adx_outcome_monitor import NotifyingTrixAdxOutcomeMonitor
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.reliable_notification import ReliableNotificationEngine
 from project.shared.events import EventBus
@@ -25,7 +26,6 @@ from project.trix_adx_formatters import (
     format_trix_adx_outcome_message,
     format_trix_adx_signal_message,
 )
-from project.trix_adx_outcome_monitor import TrixAdxOutcomeMonitor
 from project.trix_adx_scanner import RUNTIME_VERSION, STRATEGY_NAME, TrixAdxScanner
 from project.trix_adx_scheduler import HourAlignedTrixAdxScheduler
 
@@ -153,7 +153,7 @@ def main() -> None:
         max_daily_full_stops=max_daily_stops,
     )
 
-    trix_monitor = TrixAdxOutcomeMonitor(
+    trix_monitor = NotifyingTrixAdxOutcomeMonitor(
         postgres,
         event_bus,
         ambiguous_candle_mode=settings.ambiguous_candle_mode,
