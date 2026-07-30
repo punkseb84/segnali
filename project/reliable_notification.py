@@ -16,23 +16,38 @@ class ReliableNotificationEngine(NotificationEngine):
         if self.postgres is None or payload.get("partial_take_profit"):
             return
         result = float(payload.get("realized_net_eur") or 0.0)
+        strategy = str(payload.get("strategy") or "").strip()
         try:
             initial_budget = float(os.getenv("PAPER_INITIAL_BUDGET_EUR", "100"))
         except (TypeError, ValueError):
             initial_budget = 100.0
         try:
-            rows = self.postgres.fetch_all(
-                """SELECT COALESCE(SUM(
-                           COALESCE(net_profit_tp1_eur, 0)
-                           - COALESCE(net_loss_sl_eur, 0)
-                       ), 0)
-                FROM signals.generated_signals
-                WHERE closed_at IS NOT NULL
-                  AND strategy = 'Ichimoku Cloud Breakout'"""
-            )
+            if strategy:
+                rows = self.postgres.fetch_all(
+                    """SELECT COALESCE(SUM(
+                               COALESCE(net_profit_tp1_eur, 0)
+                               - COALESCE(net_loss_sl_eur, 0)
+                           ), 0)
+                       FROM signals.generated_signals
+                       WHERE closed_at IS NOT NULL
+                         AND strategy = %s""",
+                    (strategy,),
+                )
+            else:
+                rows = self.postgres.fetch_all(
+                    """SELECT COALESCE(SUM(
+                               COALESCE(net_profit_tp1_eur, 0)
+                               - COALESCE(net_loss_sl_eur, 0)
+                           ), 0)
+                       FROM signals.generated_signals
+                       WHERE closed_at IS NOT NULL"""
+                )
             cumulative = float(rows[0][0] or 0.0) if rows else result
         except Exception as exc:
-            self.logger.warning("Budget aggregation failed; using current result only error=%s", exc)
+            self.logger.warning(
+                "Budget aggregation failed; using current result only error=%s",
+                exc,
+            )
             cumulative = result
         budget_after = initial_budget + cumulative
         payload["budget_before_eur"] = budget_after - result
@@ -47,9 +62,9 @@ class ReliableNotificationEngine(NotificationEngine):
             try:
                 rows = self.postgres.fetch_all(
                     """SELECT entry
-                    FROM signals.generated_signals
-                    WHERE id = %s
-                    LIMIT 1""",
+                       FROM signals.generated_signals
+                       WHERE id = %s
+                       LIMIT 1""",
                     (int(signal_id),),
                 )
                 if rows and rows[0][0] is not None:
@@ -60,18 +75,38 @@ class ReliableNotificationEngine(NotificationEngine):
                     signal_id,
                     exc,
                 )
-        stop_line = (
-            f"Stop spostato a: <b>{entry:.8f}</b>\n"
-            if entry is not None
-            else "Stop spostato al <b>prezzo di ingresso</b>\n"
+
+        configured_stop = payload.get("break_even_price")
+        try:
+            break_even_price = (
+                float(configured_stop)
+                if configured_stop is not None
+                else entry
+            )
+        except (TypeError, ValueError):
+            break_even_price = entry
+
+        if break_even_price is not None:
+            stop_line = f"Stop spostato a: <b>{break_even_price:.8f}</b>\n"
+        else:
+            stop_line = "Stop spostato al <b>pareggio configurato</b>\n"
+
+        trigger_label = str(payload.get("trigger_label") or "+1 ATR")
+        next_objective = str(payload.get("next_objective") or "TP1 50% a +2 ATR")
+        net_note = (
+            "Il livello copre i costi stimati e include il buffer configurato.\n"
+            if payload.get("break_even_price") is not None
+            else ""
         )
         return (
             "🟡 <b>BREAK EVEN</b> "
             f"<code>#{signal_id}</code>\n"
             f"<b>{pair}</b> · {timeframe}\n\n"
             f"{stop_line}"
+            f"Condizione: <b>{trigger_label}</b>\n"
+            f"{net_note}"
             "Posizione aperta: <b>100%</b>\n"
-            "Prossimo obiettivo: <b>TP1 50% a +2 ATR</b>"
+            f"Prossimo obiettivo: <b>{next_objective}</b>"
         )
 
     def handle_event(self, event: Event) -> None:
@@ -138,13 +173,13 @@ class ReliableNotificationEngine(NotificationEngine):
         try:
             self.postgres.execute(
                 """UPDATE signals.generated_signals
-                SET score_breakdown = COALESCE(score_breakdown, '{}'::jsonb)
-                    || jsonb_build_object(
-                        'breakeven_notification_sent', TRUE,
-                        'breakeven_notification_sent_at', NOW()::text
-                    )
-                WHERE id = %s
-                  AND status IN ('NEW', 'OPEN')""",
+                   SET score_breakdown = COALESCE(score_breakdown, '{}'::jsonb)
+                       || jsonb_build_object(
+                           'breakeven_notification_sent', TRUE,
+                           'breakeven_notification_sent_at', NOW()::text
+                       )
+                   WHERE id = %s
+                     AND status IN ('NEW', 'OPEN')""",
                 (int(signal_id),),
             )
             self.logger.info("Break-even Telegram delivery persisted signal_id=%s", signal_id)
@@ -161,12 +196,12 @@ class ReliableNotificationEngine(NotificationEngine):
         try:
             self.postgres.execute(
                 """UPDATE signals.generated_signals
-                SET status = 'DELIVERY_FAILED',
-                    closed_at = COALESCE(closed_at, NOW()),
-                    outcome_resolution = %s
-                WHERE id = %s
-                  AND status IN ('NEW', 'OPEN')
-                  AND telegram_sent_at IS NULL""",
+                   SET status = 'DELIVERY_FAILED',
+                       closed_at = COALESCE(closed_at, NOW()),
+                       outcome_resolution = %s
+                   WHERE id = %s
+                     AND status IN ('NEW', 'OPEN')
+                     AND telegram_sent_at IS NULL""",
                 (reason, int(signal_id)),
             )
             self.logger.warning(
