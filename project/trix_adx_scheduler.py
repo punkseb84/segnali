@@ -63,12 +63,11 @@ class HourAlignedTrixAdxScheduler(OperationalMarketScheduler):
                 one_hour_success,
                 four_hour_success,
             )
-            if one_hour_success and four_hour_success:
-                if self.position_monitor is not None:
-                    self.position_monitor.monitor_open_signals()
-                if self.strategy_engine is not None:
-                    self.strategy_engine.evaluate()
-                    self.strategy_engine.publish_daily_signal_report()
+            if one_hour_success and self.position_monitor is not None:
+                self.position_monitor.monitor_open_signals()
+            if one_hour_success and four_hour_success and self.strategy_engine is not None:
+                self.strategy_engine.evaluate()
+                self.strategy_engine.publish_daily_signal_report()
         except Exception:
             self.logger.exception("TRIX_ADX_STARTUP_SYNC failed")
         finally:
@@ -109,11 +108,10 @@ class HourAlignedTrixAdxScheduler(OperationalMarketScheduler):
                 one_hour_success,
                 four_hour_success,
             )
-            if one_hour_success and four_hour_success:
-                if self.position_monitor is not None:
-                    self.position_monitor.monitor_open_signals()
-                if self.strategy_engine is not None:
-                    self.strategy_engine.evaluate()
+            if one_hour_success and self.position_monitor is not None:
+                self.position_monitor.monitor_open_signals()
+            if one_hour_success and four_hour_success and self.strategy_engine is not None:
+                self.strategy_engine.evaluate()
         except Exception:
             self.logger.exception(
                 "TRIX_ADX_OPERATIONAL_CYCLE failed timeframes=%s",
