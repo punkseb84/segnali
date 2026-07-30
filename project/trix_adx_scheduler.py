@@ -79,6 +79,55 @@ class HourAlignedTrixAdxScheduler(OperationalMarketScheduler):
                     rss_mb,
                 )
 
+    def _run_data_collector_sync(self, timeframes: list[str]) -> None:
+        try:
+            selected = list(dict.fromkeys(timeframes))
+            self.logger.info(
+                "TRIX_ADX_COLLECTOR started timeframes=%s",
+                selected,
+            )
+            results = self.data_collector.sync_all_pairs(
+                self.settings.collector_pairs,
+                selected,
+            )
+            successful = [
+                item for item in results
+                if getattr(item, "status", None) == "SUCCESS"
+            ]
+            one_hour_success = any(
+                getattr(item, "timeframe", "") == "1h"
+                for item in successful
+            )
+            four_hour_success = any(
+                getattr(item, "timeframe", "") == "4h"
+                for item in successful
+            )
+            self.logger.info(
+                "TRIX_ADX_COLLECTOR completed success=%s total=%s 1h=%s 4h=%s",
+                len(successful),
+                len(results),
+                one_hour_success,
+                four_hour_success,
+            )
+            if one_hour_success and four_hour_success:
+                if self.position_monitor is not None:
+                    self.position_monitor.monitor_open_signals()
+                if self.strategy_engine is not None:
+                    self.strategy_engine.evaluate()
+        except Exception:
+            self.logger.exception(
+                "TRIX_ADX_OPERATIONAL_CYCLE failed timeframes=%s",
+                timeframes,
+            )
+        finally:
+            rss_mb = release_unused_memory()
+            if rss_mb is not None:
+                self.logger.info(
+                    "MEMORY_RELEASE phase=trix_adx_cycle rss_mb=%.1f",
+                    rss_mb,
+                )
+            self._collector_lock.release()
+
     def _sync_after_hour_close_if_due(
         self,
         now: datetime | None = None,
