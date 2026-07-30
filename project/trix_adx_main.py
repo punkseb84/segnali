@@ -15,7 +15,7 @@ from project.database.postgres import (
 )
 from project.daily_paper_formatters import format_daily_paper_outcome_message
 from project.ichimoku_scanner import RUNTIME_VERSION as ICHIMOKU_RUNTIME_VERSION
-from project.notifying_ichimoku_outcome_monitor import NotifyingIchimokuOutcomeMonitor
+from project.legacy_ichimoku_outcome_monitor import LegacyIchimokuOutcomeMonitor
 from project.notifying_trix_adx_outcome_monitor import NotifyingTrixAdxOutcomeMonitor
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.reliable_notification import ReliableNotificationEngine
@@ -169,7 +169,7 @@ def main() -> None:
 
     old_ichimoku_monitor = None
     if _enabled("TRIX_FINISH_ICHIMOKU_OPEN_SIGNALS", "true"):
-        old_ichimoku_monitor = NotifyingIchimokuOutcomeMonitor(
+        old_ichimoku_monitor = LegacyIchimokuOutcomeMonitor(
             postgres,
             event_bus,
             ambiguous_candle_mode=settings.ambiguous_candle_mode,
