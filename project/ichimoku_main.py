@@ -1,23 +1,12 @@
-"""Retired Railway entrypoint for the legacy Ichimoku scanner.
+"""Compatibility entrypoint redirected to the TRIX + ADX PAPER runtime.
 
-The active runtime is TRIX + ADX and is exposed by ``project.main``.  This module
-is intentionally kept as a fail-closed compatibility tombstone so an obsolete
-Railway start command cannot generate new Ichimoku signals or Telegram alerts.
-Legacy open positions are still managed by ``LegacyIchimokuOutcomeMonitor``
-inside the active TRIX runtime.
+An old Railway start command may still reference ``project.ichimoku_main``.
+Redirecting here prevents both legacy Ichimoku execution and a stopped worker:
+every supported start command now launches the same TRIX PAPER process.
 """
 from __future__ import annotations
 
-
-RETIREMENT_MESSAGE = (
-    "Legacy Ichimoku runtime is disabled. "
-    "Start Railway with: python -m project.main"
-)
-
-
-def main() -> None:
-    """Refuse to start the retired scanner before any database or Telegram work."""
-    raise SystemExit(RETIREMENT_MESSAGE)
+from project.trix_adx_main import main
 
 
 if __name__ == "__main__":
