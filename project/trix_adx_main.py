@@ -1,4 +1,4 @@
-"""Railway runtime for the only active strategy: TRIX + ADX PAPER."""
+"""Railway runtime for the only active strategy: TRIX V2 LONG/SHORT PAPER."""
 from __future__ import annotations
 
 import os
@@ -9,16 +9,15 @@ from project.capital_protection_migration import run_capital_protection_migratio
 from project.config.settings import load_settings
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
-from project.notifying_trix_adx_outcome_monitor import NotifyingTrixAdxOutcomeMonitor
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.reliable_notification import ReliableNotificationEngine
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.timely_trix_adx_scanner import TimelyTrixAdxScanner
 from project.trix_adx_formatters import format_trix_adx_outcome_message, format_trix_adx_signal_message
-from project.trix_adx_scanner import RUNTIME_VERSION, STRATEGY_NAME
-from project.trix_adx_scheduler import HourAlignedTrixAdxScheduler
+from project.trix_adx_v2_monitor import TrixAdxV2Monitor
+from project.trix_adx_v2_scanner import RUNTIME_VERSION, STRATEGY_NAME, TrixAdxV2Scanner
+from project.trix_adx_v2_scheduler import QuarterHourTrixScheduler
 
 TOP_20_PAIRS = [
     "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD",
@@ -28,13 +27,12 @@ TOP_20_PAIRS = [
 ]
 
 
-def _retire_every_non_trix_signal(postgres: object) -> None:
-    """Close every legacy open signal before notifications and schedulers start."""
+def _retire_previous_runtime_signals(postgres: object) -> None:
     postgres.execute(
         """UPDATE signals.generated_signals
            SET status = 'EXPIRED',
                closed_at = COALESCE(closed_at, NOW()),
-               outcome_resolution = 'RETIRED_NON_TRIX_RUNTIME'
+               outcome_resolution = 'REPLACED_BY_TRIX_V2_LONG_SHORT'
            WHERE status IN ('NEW', 'OPEN')
              AND COALESCE(score_breakdown->>'runtime_version', '') <> %s""",
         (RUNTIME_VERSION,),
@@ -46,9 +44,9 @@ def main() -> None:
     settings = replace(
         settings,
         collector_pairs=list(TOP_20_PAIRS),
-        collector_timeframes=["1h", "4h"],
-        operational_timeframe="1h",
-        scheduler_collector_seconds=3600,
+        collector_timeframes=["15m", "1h"],
+        operational_timeframe="15m",
+        scheduler_collector_seconds=900,
     )
     logger = get_module_logger("system")
 
@@ -63,37 +61,30 @@ def main() -> None:
     trailing_atr = float(os.getenv("TRIX_TRAILING_ATR", "2.5"))
     be_buffer = float(os.getenv("TRIX_BREAK_EVEN_BUFFER_RATE", "0.0002"))
     min_score = float(os.getenv("TRIX_MIN_SCORE", "70"))
-    max_signal_delay = max(1, int(os.getenv("TRIX_MAX_SIGNAL_DELAY_MINUTES", "10")))
     max_per_cycle = max(1, int(os.getenv("TRIX_MAX_PER_CYCLE", "1")))
-    max_per_day = max(1, int(os.getenv("TRIX_MAX_PER_DAY", "2")))
+    max_per_day = max(1, int(os.getenv("TRIX_MAX_PER_DAY", "4")))
     max_open_positions = max(1, int(os.getenv("TRIX_MAX_OPEN_POSITIONS", "2")))
     max_daily_stops = max(1, int(os.getenv("TRIX_MAX_DAILY_STOPS", "2")))
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN: ONLY TRIX + ADX PAPER")
+    logger.info("PROJECT MAIN: ONLY TRIX V2 LONG/SHORT PAPER")
     logger.info("======================================")
     logger.info(
-        "TRIX_ADX_RUNTIME version=%s strategy=%s trigger=1h context=4h pairs=%s "
-        "trix=%s signal=%s adx=%s threshold=%.1f paper=true ichimoku=false",
+        "TRIX_V2_RUNTIME version=%s strategy=%s trigger=15m context=1h directions=LONG,SHORT pairs=%s paper=true",
         RUNTIME_VERSION, STRATEGY_NAME, len(settings.collector_pairs),
-        trix_length, trix_signal_length, adx_length, adx_threshold,
     )
 
     try:
         postgres = build_postgres(settings)
     except Exception as exc:
-        logger.error(
-            "PostgreSQL connection failed: %s",
-            sanitize_postgres_error(str(exc), settings.database_url),
-        )
+        logger.error("PostgreSQL connection failed: %s", sanitize_postgres_error(str(exc), settings.database_url))
         raise SystemExit(1) from exc
 
     logger.info("PostgreSQL connection: OK")
     logger.info("PostgreSQL %s", parse_postgres_connection_info(settings.database_url).display())
     run_migrations(postgres)
     run_capital_protection_migration(postgres)
-    _retire_every_non_trix_signal(postgres)
-    logger.info("All NEW/OPEN non-TRIX signals retired")
+    _retire_previous_runtime_signals(postgres)
 
     event_bus = EventBus()
     notification_service.format_signal_message = format_trix_adx_signal_message
@@ -101,7 +92,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_trix_adx_outcome_message
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = TimelyTrixAdxScanner(
+    scanner = TrixAdxV2Scanner(
         postgres, event_bus, settings.collector_pairs,
         exchange=settings.exchange_name,
         trade_notional_eur=settings.trade_notional_eur,
@@ -112,7 +103,7 @@ def main() -> None:
         quantity_step=settings.binance_quantity_step,
         min_qty=settings.binance_min_qty,
         min_notional_eur=settings.binance_min_notional_eur,
-        signal_cooldown_minutes=max(240, settings.signal_cooldown_minutes),
+        signal_cooldown_minutes=max(60, settings.signal_cooldown_minutes),
         min_signal_score=min_score,
         min_net_rr=0.0,
         min_net_profit_eur=0.0,
@@ -130,10 +121,9 @@ def main() -> None:
         max_signals_per_day=max_per_day,
         max_open_positions=max_open_positions,
         max_daily_full_stops=max_daily_stops,
-        max_signal_delay_minutes=max_signal_delay,
     )
 
-    position_monitor = NotifyingTrixAdxOutcomeMonitor(
+    monitor = TrixAdxV2Monitor(
         postgres, event_bus,
         ambiguous_candle_mode=settings.ambiguous_candle_mode,
         max_shadow_signals_per_cycle=200,
@@ -147,8 +137,7 @@ def main() -> None:
     )
 
     notification = ReliableNotificationEngine(
-        event_bus,
-        enabled=True,
+        event_bus, enabled=True,
         max_message_length=settings.telegram_max_message_length,
         max_retries=settings.telegram_max_retries,
         postgres=postgres,
@@ -157,18 +146,17 @@ def main() -> None:
 
     if settings.telegram_send_startup_message:
         notification.send_telegram(
-            "📈 <b>TRIX + ADX PAPER ATTIVO</b>\n\n"
-            f"Strategia unica: <b>{STRATEGY_NAME}</b>\n"
-            "Contesto: <b>4h</b> · ingresso: <b>1h</b>\n"
-            "Trigger: TRIX attraversa lo zero con ADX e volume confermati\n"
-            "Gestione: stop strutturale, pareggio netto a +1R, 50% a +2R, trailing ATR\n"
-            f"Massimo segnali: <b>{max_per_day}/giorno</b>\n\n"
-            "🧪 Solo PAPER TRADING. Ichimoku e ogni altra strategia sono disabilitati."
+            "📈 <b>TRIX V2 LONG/SHORT · PAPER ATTIVO</b>\n\n"
+            f"Strategia: <b>{STRATEGY_NAME}</b>\n"
+            "Verifica direzione: <b>1h</b>\n"
+            "Segnale operativo: <b>15m</b>\n"
+            "Direzioni abilitate: <b>LONG e SHORT</b>\n"
+            "Trigger: attraversamento TRIX dello zero, trend EMA/MACD e ADX crescente\n"
+            "Gestione: stop strutturale, pareggio netto a +1R, 50% a +2R, trailing ATR\n\n"
+            "🧪 Solo PAPER TRADING. Nessun ordine reale viene inviato."
         )
 
-    HourAlignedTrixAdxScheduler(
-        settings, collector, None, None, scanner, position_monitor,
-    ).run_forever()
+    QuarterHourTrixScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
 
 if __name__ == "__main__":
