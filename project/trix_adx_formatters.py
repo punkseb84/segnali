@@ -1,4 +1,4 @@
-"""Telegram messages for the TRIX V2 LONG/SHORT PAPER runtime."""
+"""Telegram messages for the TRIX Pulse V3 LONG/SHORT PAPER runtime."""
 from __future__ import annotations
 
 import html
@@ -41,24 +41,29 @@ def format_trix_adx_signal_message(payload: dict[str, Any]) -> str:
     stop = _float(payload.get("stop_loss"))
     risk = _float(breakdown.get("risk_distance"), abs(entry - stop))
     sign = 1.0 if direction == "LONG" else -1.0
-    be_trigger = _float(breakdown.get("be_trigger_price"), entry + sign * risk)
-    tp1 = _float(breakdown.get("tp1_price"), entry + sign * 2.0 * risk)
+    be_r = _float(breakdown.get("be_trigger_r"), 0.8)
+    tp_r = _float(breakdown.get("tp1_r"), 1.5)
+    trailing = _float(breakdown.get("trailing_atr_multiple"), 1.8)
+    be_trigger = _float(breakdown.get("be_trigger_price"), entry + sign * be_r * risk)
+    tp1 = _float(breakdown.get("tp1_price"), entry + sign * tp_r * risk)
     budget = _float(payload.get("entry_notional_eur") or payload.get("trade_notional_eur"), 100.0)
     adx = _float(breakdown.get("adx_1h"))
     volume_ratio = _float(breakdown.get("volume_ratio"))
+    setup = _escape(breakdown.get("setup") or "TRIX_PULSE")
     icon = "🟢" if direction == "LONG" else "🔴"
     return (
-        f"{icon} <b>NUOVO SEGNALE TRIX V2 · PAPER</b> <code>#{_escape(signal_id)}</code>\n"
-        f"<b>{_escape(payload.get('pair'))}</b> · <b>{direction}</b> · 15m\n\n"
+        f"{icon} <b>NUOVO SEGNALE TRIX PULSE V3 · PAPER</b> <code>#{_escape(signal_id)}</code>\n"
+        f"<b>{_escape(payload.get('pair'))}</b> · <b>{direction}</b> · 15m\n"
+        f"Setup: <b>{setup}</b>\n\n"
         f"Entrata: <b>{_price(entry)}</b>\n"
-        f"Stop strutturale: <b>{_price(stop)}</b>\n"
+        f"Stop: <b>{_price(stop)}</b>\n"
         f"Rischio 1R: <b>{_price(risk)}</b>\n"
-        f"Trigger protezione +1R: <b>{_price(be_trigger)}</b>\n"
-        f"TP1 50% a +2R: <b>{_price(tp1)}</b>\n\n"
+        f"Protezione +{be_r:.1f}R: <b>{_price(be_trigger)}</b>\n"
+        f"TP1 50% a +{tp_r:.1f}R: <b>{_price(tp1)}</b>\n\n"
         "Gestione:\n"
-        "• a +1R → stop al pareggio netto stimato\n"
-        "• a +2R → chiusura del 50%\n"
-        "• restante 50% → trailing 2,5 ATR e uscita direzionale TRIX/EMA50\n\n"
+        f"• a +{be_r:.1f}R → stop al pareggio netto stimato\n"
+        f"• a +{tp_r:.1f}R → chiusura del 50%\n"
+        f"• restante 50% → trailing {trailing:.1f} ATR e uscita su inversione TRIX/EMA50\n\n"
         f"Contesto 1h: ADX <b>{adx:.1f}</b> · volume 15m <b>{volume_ratio:.2f}x</b>\n"
         f"Budget simulato: <b>€{budget:.2f}</b>\n\n"
         "⚠️ PAPER TRADING: nessuna operazione reale."
@@ -67,12 +72,12 @@ def format_trix_adx_signal_message(payload: dict[str, Any]) -> str:
 
 def _resolution_label(resolution: str) -> str:
     labels = {
-        "TRIX_LONG_INITIAL_STOP": "Stop strutturale LONG",
-        "TRIX_SHORT_INITIAL_STOP": "Stop strutturale SHORT",
+        "TRIX_LONG_INITIAL_STOP": "Stop iniziale LONG",
+        "TRIX_SHORT_INITIAL_STOP": "Stop iniziale SHORT",
         "TRIX_NET_BREAK_EVEN_STOP": "Stop al pareggio netto",
         "TRIX_TRAILING_STOP": "Trailing stop",
-        "TRIX_DIRECTIONAL_EXIT": "Uscita direzionale TRIX/EMA50",
-        "TRIX_TP1_2R": "TP1 a +2R",
+        "TRIX_PULSE_DIRECTIONAL_EXIT": "Inversione TRIX/EMA50",
+        "TRIX_TP1_1_5R": "TP1 a +1,5R",
     }
     return labels.get(resolution, resolution or "n/d")
 
@@ -90,7 +95,7 @@ def format_trix_adx_outcome_message(payload: dict[str, Any]) -> str:
             f"<b>{pair}</b> · {direction} · 15m\n\n"
             f"Chiusura 50% a: <b>{_price(payload.get('outcome_price'))}</b>\n"
             f"Risultato netto parziale: <b>€{result:+.2f}</b>\n"
-            "Posizione residua: <b>50%</b> · trailing ATR attivo."
+            "Posizione residua: <b>50%</b> · trailing 1,8 ATR attivo."
         )
     title = "🟢 <b>OPERAZIONE CHIUSA IN PROFITTO · PAPER</b>" if result > 0.005 else "🟡 <b>OPERAZIONE CHIUSA A PAREGGIO · PAPER</b>" if result >= -0.005 else "🔴 <b>OPERAZIONE CHIUSA IN PERDITA · PAPER</b>"
     budget_lines = ""
