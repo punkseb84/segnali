@@ -1,4 +1,4 @@
-"""Telegram presentation for the relative-strength PAPER runtime."""
+"""Telegram presentation for public and private relative-strength PAPER engines."""
 from __future__ import annotations
 
 import html
@@ -27,11 +27,35 @@ def _state(payload: dict[str, Any]) -> dict[str, Any]:
     return dict(raw) if isinstance(raw, dict) else {}
 
 
+def _is_private(payload: dict[str, Any]) -> bool:
+    state = _state(payload)
+    return bool(payload.get("private_portfolio") or state.get("private_portfolio"))
+
+
 def format_relative_strength_signal(payload: dict[str, Any]) -> str:
     state = _state(payload)
     direction = str(state.get("direction", "LONG"))
-    icon = "🟢" if direction == "LONG" else "🔴"
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
+    if _is_private(payload):
+        expected_net = _f(payload.get("net_profit_tp1_eur"))
+        budget = _f(state.get("budget_before_eur") or payload.get("entry_notional_eur"), 10.0)
+        return (
+            "🔐 <b>INVESTIMENTO PRIVATO · ACQUISTA</b> "
+            f"<code>#{_esc(signal_id)}</code>\n"
+            f"Crypto: <b>{_esc(payload.get('pair'))}</b> · SPOT LONG\n\n"
+            f"Capitale simulato: <b>€{budget:.2f}</b>\n"
+            f"Entrata indicativa: <b>{_price(payload.get('entry'))}</b>\n"
+            f"Stop Loss: <b>{_price(payload.get('stop_loss'))}</b>\n"
+            f"Take Profit: <b>{_price(payload.get('take_profit'))}</b>\n"
+            f"Profitto netto stimato al target: <b>€{expected_net:+.2f}</b>\n"
+            f"Rank globale: <b>{_esc(state.get('rank'))}/{_esc(state.get('universe_size'))}</b>\n"
+            f"RS score vs BTC: <b>{_f(state.get('rs_score')):+.3f}</b>\n\n"
+            "Azione: compra la crypto indicata usando il capitale personale dedicato.\n"
+            "Il bot invierà l'avviso per vendere e tornare in USDT a target, stop, inversione RS o entro 12 ore.\n"
+            "⚠️ PAPER/decision support: verifica sempre il prezzo reale prima dell'ordine."
+        )
+
+    icon = "🟢" if direction == "LONG" else "🔴"
     return (
         f"{icon} <b>NUOVO SEGNALE FORZA RELATIVA · PAPER</b> <code>#{_esc(signal_id)}</code>\n"
         f"<b>{_esc(payload.get('pair'))}</b> · <b>{direction}</b> · 15m\n\n"
@@ -50,6 +74,7 @@ def format_relative_strength_signal(payload: dict[str, Any]) -> str:
 
 
 def format_relative_strength_outcome(payload: dict[str, Any]) -> str:
+    private = _is_private(payload)
     direction = str(payload.get("direction") or _state(payload).get("direction") or "LONG")
     result = _f(payload.get("realized_net_eur"))
     gross = _f(payload.get("gross_pnl_eur"))
@@ -64,15 +89,24 @@ def format_relative_strength_outcome(payload: dict[str, Any]) -> str:
         "RELATIVE_STRENGTH_STOP": "Stop Loss raggiunto",
         "RELATIVE_STRENGTH_REVERSAL": "Forza relativa invertita",
         "RELATIVE_STRENGTH_TIME_EXIT": "Durata massima di 8 candele",
+        "PRIVATE_SPOT_TARGET": "Take Profit raggiunto",
+        "PRIVATE_SPOT_STOP": "Stop Loss raggiunto",
+        "PRIVATE_SPOT_RS_REVERSAL": "Forza relativa invertita",
+        "PRIVATE_SPOT_12H_EXIT": "Limite massimo di 12 ore",
     }
-    title = "🟢 <b>POSIZIONE CHIUSA IN PROFITTO · PAPER</b>" if result > 0.005 else "🟡 <b>POSIZIONE CHIUSA A PAREGGIO · PAPER</b>" if result >= -0.005 else "🔴 <b>POSIZIONE CHIUSA IN PERDITA · PAPER</b>"
+    if private:
+        title = "✅ <b>INVESTIMENTO PRIVATO · VENDI E TORNA IN USDT</b>"
+    else:
+        title = "🟢 <b>POSIZIONE CHIUSA IN PROFITTO · PAPER</b>" if result > 0.005 else "🟡 <b>POSIZIONE CHIUSA A PAREGGIO · PAPER</b>" if result >= -0.005 else "🔴 <b>POSIZIONE CHIUSA IN PERDITA · PAPER</b>"
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
     budget = ""
     if payload.get("budget_before_eur") is not None:
         budget = (
-            f"\n\nBudget paper: <b>€{_f(payload.get('budget_before_eur')):.2f}</b>"
+            f"\n\nBudget {'personale' if private else 'paper'}: "
+            f"<b>€{_f(payload.get('budget_before_eur')):.2f}</b>"
             f" → <b>€{_f(payload.get('budget_after_eur')):.2f}</b>"
         )
+    action = "\nAzione: <b>vendi la posizione e converti il ricavato in USDT.</b>\n" if private else ""
     return (
         f"{title}\n"
         f"🆔 <code>#{_esc(signal_id)}</code>\n"
@@ -87,6 +121,7 @@ def format_relative_strength_outcome(payload: dict[str, Any]) -> str:
         f"Slippage stimato: <b>-€{slippage:.2f}</b>\n"
         f"Costi totali: <b>-€{total_costs:.2f}</b>\n"
         f"Risultato netto: <b>€{result:+.2f}</b>"
-        f"{budget}\n\n"
-        "⚠️ Esito PAPER: costi e prezzi di esecuzione sono stimati."
+        f"{budget}\n"
+        f"{action}\n"
+        "⚠️ Costi e prezzi di esecuzione sono stimati."
     )
