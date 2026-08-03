@@ -34,7 +34,7 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
             slippage_rate=public_scanner.slippage_rate,
             quantity_step=public_scanner.quantity_step,
             min_qty=public_scanner.min_qty,
-            min_notional_eur=min(10.0, public_scanner.min_notional_eur),
+            min_notional_eur=5.0,
             signal_cooldown_minutes=24 * 60,
             min_signal_score=0.0,
             min_net_rr=0.0,
