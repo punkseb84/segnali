@@ -1,7 +1,8 @@
-"""PAPER position monitor for the BTC-relative-strength strategy."""
+"""Automatic PAPER lifecycle for relative-strength positions."""
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import pandas as pd
@@ -12,11 +13,14 @@ from project.shared.events import Event, EventType
 
 
 class RelativeStrengthMonitor(DailyPaperPositionMonitor):
-    def __init__(self, *args: Any, sell_fee_rate: float = 0.001, spread_rate: float = 0.0005, slippage_rate: float = 0.0, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, sell_fee_rate: float = 0.001,
+                 spread_rate: float = 0.0005, slippage_rate: float = 0.0,
+                 **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.sell_fee_rate = max(0.0, float(sell_fee_rate))
         self.spread_rate = max(0.0, float(spread_rate))
         self.slippage_rate = max(0.0, float(slippage_rate))
+        self.initial_budget = float(os.getenv("PAPER_INITIAL_BUDGET_EUR", "100"))
 
     def monitor_open_signals(self) -> int:
         closed = 0
@@ -29,14 +33,16 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
             """SELECT id, strategy, pair, timeframe, entry, stop_loss, take_profit,
                       reference_candle_time, created_at, telegram_sent_at,
                       COALESCE(exchange, 'Kraken'), quantity,
-                      COALESCE(estimated_buy_fee_eur, 0), COALESCE(score_breakdown, '{}'::jsonb)
+                      COALESCE(estimated_buy_fee_eur, 0),
+                      COALESCE(score_breakdown, '{}'::jsonb)
                FROM signals.generated_signals
-               WHERE status IN ('NEW', 'OPEN') AND telegram_sent_at IS NOT NULL
+               WHERE status IN ('NEW', 'OPEN')
+                 AND telegram_sent_at IS NOT NULL
                  AND score_breakdown->>'runtime_version' = %s
                ORDER BY created_at ASC LIMIT %s""",
             (RUNTIME_VERSION, self.max_signals_per_cycle),
         )
-        result: list[dict[str, Any]] = []
+        result = []
         for row in rows:
             state = row[13]
             if isinstance(state, str):
@@ -46,18 +52,22 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
                     state = {}
             result.append({
                 "id": int(row[0]), "strategy": str(row[1]), "pair": str(row[2]),
-                "timeframe": str(row[3]), "entry": float(row[4]), "stop_loss": float(row[5]),
-                "take_profit": float(row[6]), "reference_candle_time": row[7],
-                "created_at": row[8], "telegram_sent_at": row[9], "exchange": str(row[10]),
-                "quantity": float(row[11] or 0.0), "estimated_buy_fee_eur": float(row[12] or 0.0),
+                "timeframe": str(row[3]), "entry": float(row[4]),
+                "stop_loss": float(row[5]), "take_profit": float(row[6]),
+                "reference_candle_time": row[7], "created_at": row[8],
+                "telegram_sent_at": row[9], "exchange": str(row[10]),
+                "quantity": float(row[11] or 0.0),
+                "estimated_buy_fee_eur": float(row[12] or 0.0),
                 "state": dict(state or {}),
             })
         return result
 
     def _frame(self, pair: str) -> pd.DataFrame:
         rows = self.postgres.fetch_all(
-            """SELECT timestamp, open, high, low, close FROM market_data.ohlc
-               WHERE pair = %s AND timeframe = '15m' ORDER BY timestamp DESC LIMIT 160""",
+            """SELECT timestamp, open, high, low, close
+               FROM market_data.ohlc
+               WHERE pair = %s AND timeframe = '15m'
+               ORDER BY timestamp DESC LIMIT 160""",
             (pair,),
         )
         frame = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close"])
@@ -74,23 +84,45 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         ts = pd.Timestamp(value)
         return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
 
-    def _leg_net(self, signal: dict[str, Any], exit_price: float) -> float:
+    def _costs(self, signal: dict[str, Any], exit_price: float) -> dict[str, float]:
+        quantity = float(signal["quantity"])
+        entry = float(signal["entry"])
+        entry_fee = float(signal["estimated_buy_fee_eur"])
+        exit_fee = quantity * exit_price * self.sell_fee_rate
+        spread = quantity * (entry + exit_price) * (self.spread_rate / 2.0)
+        slippage = quantity * (entry + exit_price) * self.slippage_rate
+        return {
+            "entry_fee_eur": entry_fee,
+            "exit_fee_eur": exit_fee,
+            "spread_cost_eur": spread,
+            "slippage_cost_eur": slippage,
+            "total_costs_eur": entry_fee + exit_fee + spread + slippage,
+        }
+
+    def _pnl(self, signal: dict[str, Any], exit_price: float) -> dict[str, float]:
         direction = str(signal["state"].get("direction", "LONG"))
         quantity = float(signal["quantity"])
         entry = float(signal["entry"])
         gross = quantity * ((exit_price - entry) if direction == "LONG" else (entry - exit_price))
-        close_fee = quantity * exit_price * self.sell_fee_rate
-        friction = quantity * (entry + exit_price) * ((self.spread_rate / 2.0) + self.slippage_rate)
-        return gross - float(signal["estimated_buy_fee_eur"]) - close_fee - friction
+        costs = self._costs(signal, exit_price)
+        return {"gross_pnl_eur": gross, "net_pnl_eur": gross - costs["total_costs_eur"], **costs}
+
+    def _budget_before(self) -> float:
+        rows = self.postgres.fetch_all(
+            """SELECT COALESCE(SUM(COALESCE(net_profit_tp1_eur,0)-COALESCE(net_loss_sl_eur,0)),0)
+               FROM signals.generated_signals
+               WHERE score_breakdown->>'runtime_version' = %s
+                 AND closed_at IS NOT NULL""",
+            (RUNTIME_VERSION,),
+        )
+        cumulative = float(rows[0][0] or 0.0) if rows else 0.0
+        return self.initial_budget + cumulative
 
     def _relative_return(self, pair: str, candles: int = 4) -> float | None:
-        asset = self._frame(pair)
-        btc = self._frame("BTC/USD")
+        asset, btc = self._frame(pair), self._frame("BTC/USD")
         if len(asset) <= candles or len(btc) <= candles:
             return None
-        asset_ret = float(asset["close"].iloc[-1] / asset["close"].iloc[-1 - candles] - 1.0)
-        btc_ret = float(btc["close"].iloc[-1] / btc["close"].iloc[-1 - candles] - 1.0)
-        return asset_ret - btc_ret
+        return float(asset["close"].iloc[-1] / asset["close"].iloc[-1-candles] - 1.0) - float(btc["close"].iloc[-1] / btc["close"].iloc[-1-candles] - 1.0)
 
     def _check(self, signal: dict[str, Any]) -> bool:
         frame = self._frame(signal["pair"])
@@ -98,49 +130,62 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
             return False
         direction = str(signal["state"].get("direction", "LONG"))
         delivery = self._utc(signal.get("telegram_sent_at") or signal.get("created_at") or signal.get("reference_candle_time"))
-        start = delivery.floor("15min")
-        eligible = frame[frame["timestamp"] >= start]
+        eligible = frame[frame["timestamp"] >= delivery.floor("15min")]
         if eligible.empty:
             return False
-        max_hold = int(signal["state"].get("max_hold_candles", 8))
-        for index, row in eligible.iterrows():
-            high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
+        for _, row in eligible.iterrows():
+            high, low = float(row["high"]), float(row["low"])
             stop, target = float(signal["stop_loss"]), float(signal["take_profit"])
             stop_hit = low <= stop if direction == "LONG" else high >= stop
             target_hit = high >= target if direction == "LONG" else low <= target
+            # Conservative rule when both levels occur in one candle: stop first.
             if stop_hit:
                 return self._close(signal, stop, row, "RELATIVE_STRENGTH_STOP")
             if target_hit:
                 return self._close(signal, target, row, "RELATIVE_STRENGTH_TARGET")
-        held = len(eligible)
         relative = self._relative_return(signal["pair"])
         reversal = relative is not None and ((direction == "LONG" and relative < 0) or (direction == "SHORT" and relative > 0))
-        if held >= max_hold or reversal:
+        max_hold = int(signal["state"].get("max_hold_candles", 8))
+        if reversal or len(eligible) >= max_hold:
             last = eligible.iloc[-1]
-            reason = "RELATIVE_STRENGTH_REVERSAL" if reversal else "RELATIVE_STRENGTH_TIME_EXIT"
-            return self._close(signal, float(last["close"]), last, reason)
+            return self._close(signal, float(last["close"]), last,
+                               "RELATIVE_STRENGTH_REVERSAL" if reversal else "RELATIVE_STRENGTH_TIME_EXIT")
         return False
 
     def _close(self, signal: dict[str, Any], price: float, row: Any, resolution: str) -> bool:
-        result = self._leg_net(signal, price)
+        pnl = self._pnl(signal, price)
+        result = pnl["net_pnl_eur"]
         status = "TARGET_HIT" if result >= 0 else "STOP_LOSS"
         net_profit, net_loss = max(result, 0.0), max(-result, 0.0)
+        budget_before = self._budget_before()
+        budget_after = budget_before + result
+        patch = {
+            "gross_pnl_eur": pnl["gross_pnl_eur"],
+            "entry_fee_eur": pnl["entry_fee_eur"],
+            "exit_fee_eur": pnl["exit_fee_eur"],
+            "spread_cost_eur": pnl["spread_cost_eur"],
+            "slippage_cost_eur": pnl["slippage_cost_eur"],
+            "total_costs_eur": pnl["total_costs_eur"],
+            "budget_before_eur": budget_before,
+            "budget_after_eur": budget_after,
+        }
         self.postgres.execute(
             """UPDATE signals.generated_signals
-               SET status = %s, outcome_price = %s, outcome_open_price = %s,
-                   outcome_high_price = %s, outcome_low_price = %s, outcome_close_price = %s,
-                   outcome_candle_time = %s, closed_at = NOW(), outcome_ambiguous = FALSE,
-                   outcome_resolution = %s, net_profit_tp1_eur = %s, net_loss_sl_eur = %s
-               WHERE id = %s AND status IN ('NEW', 'OPEN')""",
+               SET status=%s, outcome_price=%s, outcome_open_price=%s,
+                   outcome_high_price=%s, outcome_low_price=%s, outcome_close_price=%s,
+                   outcome_candle_time=%s, closed_at=NOW(), outcome_ambiguous=FALSE,
+                   outcome_resolution=%s, net_profit_tp1_eur=%s, net_loss_sl_eur=%s,
+                   score_breakdown=COALESCE(score_breakdown,'{}'::jsonb)||%s::jsonb
+               WHERE id=%s AND status IN ('NEW','OPEN')""",
             (status, price, float(row["open"]), float(row["high"]), float(row["low"]),
-             float(row["close"]), row["timestamp"], resolution, net_profit, net_loss, signal["id"]),
+             float(row["close"]), row["timestamp"], resolution, net_profit, net_loss,
+             json.dumps(patch), signal["id"]),
         )
-        event_type = EventType.TARGET_HIT if status == "TARGET_HIT" else EventType.STOP_LOSS
-        payload = {
-            **signal, "signal_id": signal["id"], "direction": signal["state"].get("direction", "LONG"),
-            "outcome": status, "outcome_price": price, "close_price": float(row["close"]),
-            "closed_at": str(row["timestamp"]), "outcome_resolution": resolution,
-            "realized_net_eur": result, "net_profit_tp1_eur": net_profit, "net_loss_sl_eur": net_loss,
-        }
-        self.event_bus.publish(Event(event_type, payload))
+        payload = {**signal, **patch, "signal_id": signal["id"],
+                   "direction": signal["state"].get("direction", "LONG"),
+                   "outcome": status, "outcome_price": price,
+                   "close_price": float(row["close"]), "closed_at": str(row["timestamp"]),
+                   "outcome_resolution": resolution, "realized_net_eur": result,
+                   "net_profit_tp1_eur": net_profit, "net_loss_sl_eur": net_loss}
+        self.event_bus.publish(Event(EventType.TARGET_HIT if status == "TARGET_HIT" else EventType.STOP_LOSS, payload))
         return True
