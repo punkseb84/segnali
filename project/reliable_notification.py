@@ -9,8 +9,28 @@ from project.notification_engine.service import NotificationEngine
 from project.shared.events import Event, EventType
 
 
+LEGACY_REPORT_SIGNATURES = (
+    "REPORT ICHIMOKU",
+    "REPORT SCANNER CRYPTO",
+    "TREND PULLBACK",
+    "BREAKOUT 20",
+    "MEAN REVERSION BOLLINGER",
+    "STRATEGIE ATTIVE:",
+)
+
+
 class ReliableNotificationEngine(NotificationEngine):
     """Persist delivery outcomes and enrich final reports with the rolling paper budget."""
+
+    @staticmethod
+    def _is_legacy_report(event: Event, payload: dict[str, Any]) -> bool:
+        if event.type != EventType.REPORT_READY:
+            return False
+        if payload.get("management_update") == "BREAK_EVEN_ARMED":
+            return False
+        raw = str(payload.get("message") or payload)
+        normalized = raw.upper()
+        return any(signature in normalized for signature in LEGACY_REPORT_SIGNATURES)
 
     def _attach_budget_report(self, payload: dict[str, Any]) -> None:
         if self.postgres is None or payload.get("partial_take_profit"):
@@ -112,6 +132,13 @@ class ReliableNotificationEngine(NotificationEngine):
     def handle_event(self, event: Event) -> None:
         payload = dict(event.payload)
         reply_to_message_id: int | None = None
+
+        if self._is_legacy_report(event, payload):
+            self.logger.warning(
+                "Legacy scanner report blocked before Telegram event=%s",
+                event.type,
+            )
+            return
 
         if event.type in {EventType.STOP_LOSS, EventType.TARGET_HIT}:
             reference = self.fetch_signal_reference(payload.get("signal_id"))
