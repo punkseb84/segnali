@@ -1,4 +1,4 @@
-"""Railway runtime for the only active strategy: relative strength vs BTC."""
+"""Railway runtime for the active relative-strength engines."""
 from __future__ import annotations
 
 import os
@@ -12,7 +12,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.notification_engine.simple_formatters import format_simple_report_message
 from project.relative_strength_formatters import format_relative_strength_outcome, format_relative_strength_signal
 from project.relative_strength_monitor import RelativeStrengthMonitor
-from project.relative_strength_scanner import RUNTIME_VERSION, STRATEGY_NAME, RelativeStrengthScanner
+from project.relative_strength_scanner import RUNTIME_VERSION, RelativeStrengthScanner
 from project.relative_strength_scheduler import RelativeStrengthScheduler
 from project.reliable_notification import ReliableNotificationEngine
 from project.shared.events import EventBus
@@ -47,6 +47,9 @@ def main() -> None:
         collector_timeframes=["15m", "1h"],
         operational_timeframe="15m",
         scheduler_collector_seconds=900,
+        # Startup messages are deliberately disabled: Railway rolling deploys or
+        # restarts may overlap briefly and previously produced duplicate alerts.
+        telegram_send_startup_message=False,
     )
     logger = get_module_logger("system")
 
@@ -63,12 +66,13 @@ def main() -> None:
     max_hold = max(1, int(os.getenv("RS_MAX_HOLD_CANDLES", "8")))
 
     logger.info("======================================")
-    logger.info("PROJECT MAIN: ONLY RELATIVE STRENGTH PAPER")
+    logger.info("PROJECT MAIN: RELATIVE STRENGTH DUAL PAPER")
     logger.info("======================================")
     logger.info(
-        "RELATIVE_STRENGTH_RUNTIME version=%s strategy=%s benchmark=BTC/USD context=1h trigger=15m "
-        "directions=LONG,SHORT strongest=%s weakest=%s max_per_day=%s max_open=%s paper=true trix=false",
-        RUNTIME_VERSION, STRATEGY_NAME, strongest, weakest, max_per_day, max_open,
+        "RELATIVE_STRENGTH_RUNTIME version=%s benchmark=BTC/USD context=1h trigger=15m "
+        "directions=LONG,SHORT strongest=%s weakest=%s max_per_day=%s max_open=%s "
+        "paper=true trix=false startup_telegram=false",
+        RUNTIME_VERSION, strongest, weakest, max_per_day, max_open,
     )
 
     try:
@@ -143,20 +147,6 @@ def main() -> None:
         postgres=postgres,
     )
     notification.subscribe()
-
-    if settings.telegram_send_startup_message:
-        notification.send_telegram(
-            "📊 <b>FORZA RELATIVA CRYPTO vs BTC · PAPER ATTIVA</b>\n\n"
-            f"Strategia unica: <b>{STRATEGY_NAME}</b>\n"
-            "Benchmark: <b>BTC/USD</b>\n"
-            "Ranking: rendimento relativo 4h, 1h e 15m + rapporto asset/BTC + volume\n"
-            f"LONG: <b>{strongest} crypto più forti</b> · SHORT: <b>{weakest} più deboli</b>\n"
-            "Conferma: candela 15m e posizione rispetto a EMA20\n"
-            f"Gestione: stop <b>{stop_atr:.2f} ATR</b> · target <b>{target_r:.2f}R</b>\n"
-            f"Uscita anticipata: inversione RS o dopo <b>{max_hold} candele</b>\n"
-            f"Limiti: <b>{max_per_day} segnali/giorno</b> · {max_pair_day} per coppia · {max_open} aperti\n\n"
-            "🧪 Solo PAPER TRADING. TRIX e Ichimoku sono disattivati."
-        )
 
     RelativeStrengthScheduler(
         settings, collector, None, None, scanner, monitor,
