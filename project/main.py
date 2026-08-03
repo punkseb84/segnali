@@ -1,12 +1,8 @@
-"""Primary Railway entrypoint for the TRIX + ADX PAPER strategy.
-
-Compatibility exports are kept here because startup tests and older callers import
-PostgreSQL helpers from ``project.main``.
-"""
+"""Primary Railway entrypoint for the relative-strength PAPER strategy."""
 from __future__ import annotations
 
+from project.relative_strength_main import main
 from project.simple_main import RAILWAY_LIGHT_MISSING_DATABASE_URL, build_postgres
-from project.trix_adx_main import main
 
 __all__ = [
     "RAILWAY_LIGHT_MISSING_DATABASE_URL",
