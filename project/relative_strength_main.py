@@ -47,9 +47,8 @@ def main() -> None:
         collector_timeframes=["15m", "1h"],
         operational_timeframe="15m",
         scheduler_collector_seconds=900,
-        # Startup messages are deliberately disabled: Railway rolling deploys or
-        # restarts may overlap briefly and previously produced duplicate alerts.
         telegram_send_startup_message=False,
+        enable_daily_signal_report=False,
     )
     logger = get_module_logger("system")
 
@@ -71,7 +70,7 @@ def main() -> None:
     logger.info(
         "RELATIVE_STRENGTH_RUNTIME version=%s benchmark=BTC/USD context=1h trigger=15m "
         "directions=LONG,SHORT strongest=%s weakest=%s max_per_day=%s max_open=%s "
-        "paper=true trix=false startup_telegram=false",
+        "paper=true trix=false startup_telegram=false scanner_reports=false",
         RUNTIME_VERSION, strongest, weakest, max_per_day, max_open,
     )
 
@@ -115,7 +114,7 @@ def main() -> None:
         min_net_rr=0.0,
         min_net_profit_eur=0.0,
         max_signals_per_cycle=max_per_cycle,
-        enable_daily_signal_report=settings.enable_daily_signal_report,
+        enable_daily_signal_report=False,
         daily_signal_report_hours=settings.daily_signal_report_hours,
         strongest_count=strongest,
         weakest_count=weakest,
