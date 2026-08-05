@@ -40,14 +40,9 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
             min_net_rr=0.0,
             min_net_profit_eur=0.0,
             enable_daily_signal_report=False,
-            strongest_count=3,
-            weakest_count=1,
-            min_abs_score=0.45,
-            volume_ratio_min=0.80,
-            stop_atr=1.20,
-            target_r=2.0,
             initial_budget_eur=10.0,
-            min_net_target_eur=0.10,
+            min_net_target_eur=0.05,
+            min_quality_score=55.0,
             max_hold_candles=48,
         )
         self.personal_monitor = PersonalIntradayMonitor(
@@ -61,7 +56,7 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
             slippage_rate=public_monitor.slippage_rate,
         )
         self.logger.info(
-            "DUAL_PORTFOLIO enabled public=relative_strength private=spot_long_06_00_12h budget=10EUR"
+            "DUAL_PORTFOLIO public=RS_BALANCED_V4 private=BEST_OPPORTUNITY_V2 time=06:00 budget=10EUR max_hold=12h"
         )
 
     @staticmethod
@@ -82,15 +77,12 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
         self._run_private_cycle(data_ready=True)
 
     def _run_data_collector_sync(self, timeframes: list[str]) -> None:
-        # Reimplement the parent cycle so both monitors use the same freshly synced candles.
         try:
             results = self.data_collector.sync_all_pairs(
                 self.settings.collector_pairs,
                 list(dict.fromkeys(timeframes)),
             )
-            successful = [
-                item for item in results if getattr(item, "status", None) == "SUCCESS"
-            ]
+            successful = [item for item in results if getattr(item, "status", None) == "SUCCESS"]
             ok15 = any(getattr(item, "timeframe", "") == "15m" for item in successful)
             ok1h = any(getattr(item, "timeframe", "") == "1h" for item in successful)
             if ok15 and self.position_monitor is not None:
