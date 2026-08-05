@@ -56,7 +56,8 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
             slippage_rate=public_monitor.slippage_rate,
         )
         self.logger.info(
-            "DUAL_PORTFOLIO public=RS_BALANCED_V4 private=BEST_OPPORTUNITY_V2 time=06:00 budget=10EUR max_hold=12h"
+            "DUAL_PORTFOLIO public=RS_BALANCED_ROBUST_VOLUME_V5 "
+            "private=BEST_OPPORTUNITY_V3 time=06:00 budget=10EUR max_hold=12h"
         )
 
     @staticmethod
@@ -82,9 +83,18 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
                 self.settings.collector_pairs,
                 list(dict.fromkeys(timeframes)),
             )
-            successful = [item for item in results if getattr(item, "status", None) == "SUCCESS"]
-            ok15 = any(getattr(item, "timeframe", "") == "15m" for item in successful)
-            ok1h = any(getattr(item, "timeframe", "") == "1h" for item in successful)
+            successful = [
+                item for item in results
+                if getattr(item, "status", None) == "SUCCESS"
+            ]
+            ok15 = any(
+                getattr(item, "timeframe", "") == "15m"
+                for item in successful
+            )
+            ok1h = any(
+                getattr(item, "timeframe", "") == "1h"
+                for item in successful
+            )
             if ok15 and self.position_monitor is not None:
                 self.position_monitor.monitor_open_signals()
             if ok15:
@@ -97,5 +107,6 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
             self.logger.exception("DUAL_PORTFOLIO_CYCLE failed")
         finally:
             from project.shared.memory import release_unused_memory
+
             release_unused_memory()
             self._collector_lock.release()
