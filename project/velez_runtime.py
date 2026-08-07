@@ -55,10 +55,7 @@ def main() -> None:
         "VELEZ_RUNTIME version=%s timeframe=15m pairs=%s budget=%.2f per_trade=%.2f "
         "fixed_tp=false protection=1.5R_to_1R exit=protected_stop_or_ema20_close_or_12h "
         "relative_strength=false trix=false ichimoku=false paper=true notifier=strict",
-        RUNTIME_VERSION,
-        pairs,
-        PUBLIC_BUDGET_EUR,
-        PER_TRADE_EUR,
+        RUNTIME_VERSION, pairs, PUBLIC_BUDGET_EUR, PER_TRADE_EUR,
     )
 
     try:
@@ -83,9 +80,7 @@ def main() -> None:
 
     collector = build_collector(settings, event_bus, postgres)
     scanner = VelezMode2Scanner(
-        postgres,
-        event_bus,
-        settings.collector_pairs,
+        postgres, event_bus, settings.collector_pairs,
         exchange=settings.exchange_name,
         trade_notional_eur=PER_TRADE_EUR,
         buy_fee_rate=settings.binance_buy_fee_rate,
@@ -105,8 +100,7 @@ def main() -> None:
         pullback_bars=3,
     )
     monitor = Velez15mMonitor(
-        postgres,
-        event_bus,
+        postgres, event_bus,
         ambiguous_candle_mode=settings.ambiguous_candle_mode,
         max_shadow_signals_per_cycle=300,
         sell_fee_rate=settings.binance_sell_fee_rate,
@@ -122,11 +116,16 @@ def main() -> None:
     )
     notification.subscribe()
 
-    # IMPORTANT: reconcile every still-active delivered signal BEFORE retiring old runtimes.
-    # This closes any position whose stored hard stop was already reached and emits its
-    # normal P&L/budget Telegram outcome. Only surviving legacy positions are then expired.
+    # First repair signals that an older deploy marked EXPIRED before persisting
+    # their actual market outcome. This is what catches cases such as #307.
+    repaired = monitor.reconcile_migration_expired_outcomes()
+    logger.info("VELEZ_MIGRATION_OUTCOME_RECONCILIATION repaired=%s", repaired)
+
+    # Then reconcile all positions that are genuinely still active.
     reconciled = monitor.reconcile_all_active_hard_stops()
     logger.info("VELEZ_STARTUP_STOP_RECONCILIATION closed=%s", reconciled)
+
+    # Only after both audits may surviving legacy-runtime positions be retired.
     _retire_previous_open_signals(postgres)
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
