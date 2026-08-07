@@ -27,7 +27,7 @@ PUBLIC_MAX_CONSECUTIVE_LOSSES = 3
 
 
 class PublicRelativeStrengthV5Scanner(RelativeStrengthV5Scanner):
-    """Robust-volume scanner with coherent allocation and loss guards."""
+    """Practical V5 scanner targeting a few qualified opportunities per day."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs["trade_notional_eur"] = min(
@@ -39,26 +39,30 @@ class PublicRelativeStrengthV5Scanner(RelativeStrengthV5Scanner):
             PUBLIC_MAX_OPEN,
         )
         kwargs["max_signals_per_day"] = min(
-            int(kwargs.get("max_signals_per_day", 8)),
-            8,
+            int(kwargs.get("max_signals_per_day", 6)),
+            6,
         )
         kwargs["max_signals_per_cycle"] = min(
             int(kwargs.get("max_signals_per_cycle", 2)),
             2,
         )
-        # Threshold now refers to robust one-hour volume, not one 15m candle.
-        kwargs["volume_ratio_min"] = max(
-            0.60,
-            float(kwargs.get("volume_ratio_min", 0.60)),
+        kwargs["strongest_count"] = max(
+            5,
+            int(kwargs.get("strongest_count", 5)),
         )
-        kwargs["min_abs_score"] = max(
-            0.45,
-            float(kwargs.get("min_abs_score", 0.45)),
+        kwargs["weakest_count"] = max(
+            5,
+            int(kwargs.get("weakest_count", 5)),
         )
-        kwargs["max_extension_atr"] = min(
-            1.25,
-            float(kwargs.get("max_extension_atr", 1.25)),
-        )
+        # Robust one-hour relative volume. A moderately active market is enough;
+        # volume is confirmation, not a veto for all but exceptional candles.
+        kwargs["volume_ratio_min"] = 0.45
+        # RS ranking remains mandatory, but a moderate edge is now actionable.
+        kwargs["min_abs_score"] = 0.20
+        # Allow normal intraday expansion without chasing very extended moves.
+        kwargs["max_extension_atr"] = 1.50
+        kwargs["pullback_lookback"] = 6
+        kwargs["breakout_lookback"] = 6
         super().__init__(*args, **kwargs)
 
     def _loss_guard_active(self) -> bool:
