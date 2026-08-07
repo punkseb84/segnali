@@ -1,4 +1,4 @@
-"""Telegram presentation for the clean Velez 15m PAPER engine."""
+"""Telegram presentation for the Velez 15m Mode 2 PAPER engine."""
 from __future__ import annotations
 
 import html
@@ -39,21 +39,23 @@ def format_velez_signal(payload: dict[str, Any]) -> str:
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
     runtime = state.get("runtime_version") or "n/d"
     return (
-        f"{icon} <b>NUOVO SEGNALE VELEZ · PAPER</b> <code>#{_esc(signal_id)}</code>\n"
+        f"{icon} <b>NUOVO SEGNALE VELEZ MODE 2 · PAPER</b> <code>#{_esc(signal_id)}</code>\n"
         f"<b>{_esc(payload.get('pair'))}</b> · <b>{direction}</b> · 15m\n"
         f"Mercato: <b>{_esc(payload.get('exchange') or 'Kraken')}</b>\n"
         f"Motore: <code>{_esc(runtime)}</code>\n\n"
         f"Entrata: <b>{_price(payload.get('entry'))}</b>\n"
         f"Stop iniziale: <b>{_price(payload.get('stop_loss'))}</b>\n"
-        f"Target previsto: <b>{_price(payload.get('take_profit'))}</b>\n"
         f"EMA20: <b>{_price(state.get('ema20'))}</b>\n"
         f"EMA200: <b>{_price(state.get('ema200'))}</b>\n"
         f"Setup: <b>pullback EMA20 + rottura barra precedente</b>\n\n"
-        "Indicatori di setup: <b>solo EMA20 e EMA200</b>.\n\n"
-        "Gestione automatica:\n"
-        "• +0,8R → stop a pareggio netto\n"
-        "• +1R → trailing stop\n"
-        "• chiusura a target, stop/trailing o durata massima\n\n"
+        "Gestione Mode 2:\n"
+        "• <b>nessun Take Profit fisso</b>\n"
+        "• <b>nessun pareggio automatico</b>\n"
+        "• <b>nessun trailing stop</b>\n"
+        "• uscita se viene colpito lo stop iniziale\n"
+        "• uscita LONG se una 15m chiude sotto EMA20\n"
+        "• uscita SHORT se una 15m chiude sopra EMA20\n"
+        "• uscita forzata dopo massimo 12 ore\n\n"
         "⚠️ Solo PAPER TRADING: nessun ordine reale."
     )
 
@@ -71,14 +73,9 @@ def format_velez_outcome(payload: dict[str, Any]) -> str:
     total = _f(payload.get("total_costs_eur"), entry_fee + exit_fee + spread + slippage)
     resolution = str(payload.get("outcome_resolution") or "n/d")
     labels = {
-        "RELATIVE_STRENGTH_TARGET": "Take Profit raggiunto",
-        "RELATIVE_STRENGTH_LIVE_TARGET": "Take Profit raggiunto",
-        "RELATIVE_STRENGTH_STOP": "Stop Loss iniziale raggiunto",
-        "RELATIVE_STRENGTH_LIVE_STOP": "Stop Loss iniziale raggiunto",
-        "RELATIVE_STRENGTH_BREAKEVEN_STOP": "Stop a pareggio netto raggiunto",
-        "RELATIVE_STRENGTH_TRAILING_STOP": "Trailing Stop raggiunto",
-        "RELATIVE_STRENGTH_TIME_EXIT": "Durata massima raggiunta",
-        "RELATIVE_STRENGTH_AMBIGUOUS_BOTH_HIT": "Stop e target nella stessa candela",
+        "VELEZ_HARD_STOP": "Stop Loss iniziale raggiunto",
+        "VELEZ_EMA20_EXIT": "Chiusura 15m contro EMA20",
+        "VELEZ_12H_TIME_EXIT": "Limite massimo di 12 ore raggiunto",
     }
     title = (
         "🟢 <b>POSIZIONE CHIUSA IN PROFITTO · PAPER</b>"
