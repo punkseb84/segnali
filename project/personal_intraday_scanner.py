@@ -21,22 +21,24 @@ class PersonalIntradayScanner(RelativeStrengthV5Scanner):
         self,
         *args: Any,
         initial_budget_eur: float = 10.0,
-        min_net_target_eur: float = 0.05,
-        min_quality_score: float = 55.0,
+        min_net_target_eur: float = 0.03,
+        min_quality_score: float = 50.0,
         max_hold_candles: int = 48,
         **kwargs: Any,
     ) -> None:
         kwargs.update(
-            strongest_count=8,
+            strongest_count=10,
             weakest_count=1,
             max_signals_per_day=1,
             max_open_positions=1,
             max_per_pair_day=1,
             max_signals_per_cycle=1,
             max_hold_candles=max_hold_candles,
-            min_abs_score=0.20,
-            volume_ratio_min=0.55,
-            max_extension_atr=1.60,
+            min_abs_score=0.10,
+            volume_ratio_min=0.45,
+            max_extension_atr=1.80,
+            pullback_lookback=6,
+            breakout_lookback=6,
             target_r=1.50,
         )
         super().__init__(*args, **kwargs)
@@ -68,38 +70,49 @@ class PersonalIntradayScanner(RelativeStrengthV5Scanner):
     def _quality(item: dict[str, Any]) -> tuple[float, list[str]]:
         frame = item["asset_15m"]
         latest = frame.iloc[-1]
+        previous = frame.iloc[-2]
         entry = float(latest["close"])
         ema20 = float(latest["ema20"])
+        previous_ema20 = float(previous["ema20"])
         atr = float(latest["atr"])
         extension = abs(entry - ema20) / atr if atr > 0 else 99.0
         rs = float(item.get("rs_score") or 0.0)
+        rel_1h = float(item.get("relative_1h") or 0.0)
+        ratio_momentum = float(item.get("ratio_momentum") or 0.0)
         volume = float(item.get("volume_ratio") or 0.0)
         volume_valid = bool(item.get("volume_data_valid"))
         bullish_candle = entry > float(latest["open"])
         above_ema = entry > ema20
+        ema_rising = ema20 >= previous_ema20
         btc_ok = bool(item.get("btc_bullish"))
+        momentum_ok = rel_1h > 0 or ratio_momentum > 0
 
-        quality = 35.0
-        quality += min(25.0, max(0.0, rs) * 18.0)
-        quality += min(15.0, max(0.0, volume - 0.45) * 15.0)
-        quality += 10.0 if bullish_candle else 0.0
+        quality = 30.0
+        quality += min(25.0, max(0.0, rs) * 20.0)
+        quality += min(12.0, max(0.0, volume - 0.35) * 15.0)
+        quality += 8.0 if bullish_candle else 0.0
         quality += 10.0 if above_ema else 0.0
-        quality += 10.0 if btc_ok else -20.0
-        quality += 5.0 if extension <= 1.0 else 0.0
+        quality += 8.0 if ema_rising else 0.0
+        quality += 12.0 if btc_ok else -15.0
+        quality += 8.0 if momentum_ok else 0.0
+        quality += 5.0 if extension <= 1.20 else 0.0
 
         reasons: list[str] = []
         if not btc_ok:
             reasons.append("regime BTC non favorevole")
-        if not bullish_candle:
-            reasons.append("ultima candela non rialzista")
         if not above_ema:
             reasons.append("prezzo sotto EMA20")
-        if volume_valid and volume < 0.55:
+        if not ema_rising:
+            reasons.append("EMA20 non crescente")
+        if volume_valid and volume < 0.45:
             reasons.append(f"volume 1h basso {volume:.2f}x")
-        if extension > 1.60:
+        if extension > 1.80:
             reasons.append(f"estensione elevata {extension:.2f} ATR")
-        if rs < 0.20:
+        if rs < 0.10:
             reasons.append(f"forza relativa debole {rs:+.2f}")
+        if not momentum_ok:
+            reasons.append("momentum relativo non positivo")
+        # A single red 15m candle is no longer a hard veto if the trend and momentum agree.
         return max(0.0, min(100.0, quality)), reasons
 
     def _publish_decision(
@@ -185,7 +198,7 @@ class PersonalIntradayScanner(RelativeStrengthV5Scanner):
                 f"{'idonea' if not reasons else ', '.join(reasons[:2])}"
             )
 
-        for rank, item in enumerate(ranked[:8], start=1):
+        for rank, item in enumerate(ranked[:10], start=1):
             quality = float(item["quality_score"])
             if quality < self.min_quality_score or item["quality_reasons"]:
                 continue
@@ -202,7 +215,7 @@ class PersonalIntradayScanner(RelativeStrengthV5Scanner):
             breakdown.update(
                 {
                     "runtime_version": RUNTIME_VERSION,
-                    "strategy_version": "PRIVATE_BEST_OPPORTUNITY_V3",
+                    "strategy_version": "PRIVATE_BEST_OPPORTUNITY_V3_1",
                     "private_portfolio": True,
                     "quality_score": quality,
                     "initial_budget_eur": self.initial_budget_eur,
