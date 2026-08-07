@@ -74,7 +74,6 @@ def main() -> None:
     logger.info("PostgreSQL %s", parse_postgres_connection_info(settings.database_url).display())
     run_migrations(postgres)
     run_capital_protection_migration(postgres)
-    _retire_previous_open_signals(postgres)
 
     monitor_module.RUNTIME_VERSION = RUNTIME_VERSION
 
@@ -122,6 +121,13 @@ def main() -> None:
         postgres=postgres,
     )
     notification.subscribe()
+
+    # IMPORTANT: reconcile every still-active delivered signal BEFORE retiring old runtimes.
+    # This closes any position whose stored hard stop was already reached and emits its
+    # normal P&L/budget Telegram outcome. Only surviving legacy positions are then expired.
+    reconciled = monitor.reconcile_all_active_hard_stops()
+    logger.info("VELEZ_STARTUP_STOP_RECONCILIATION closed=%s", reconciled)
+    _retire_previous_open_signals(postgres)
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
