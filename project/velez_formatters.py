@@ -13,7 +13,12 @@ def _f(value: Any, default: float = 0.0) -> float:
 
 
 def _price(value: Any) -> str:
-    number = _f(value)
+    if value is None or value == "":
+        return "n/d"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "n/d"
     decimals = 2 if abs(number) >= 1000 else 3 if abs(number) >= 1 else 5 if abs(number) >= 0.01 else 8
     return f"{number:,.{decimals}f}"
 
