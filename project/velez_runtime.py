@@ -1,4 +1,4 @@
-"""Clean Railway runtime for Oliver Velez 15m PAPER Mode 2."""
+"""Clean Railway runtime for Oliver Velez 15m PAPER Mode 2 protected lifecycle."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -28,7 +28,7 @@ def _retire_previous_open_signals(postgres: object) -> None:
     postgres.execute(
         """UPDATE signals.generated_signals
            SET status='EXPIRED', closed_at=COALESCE(closed_at,NOW()),
-               outcome_resolution='REPLACED_BY_VELEZ_MODE2_RUNTIME'
+               outcome_resolution='REPLACED_BY_VELEZ_MODE2_PROTECT_RUNTIME'
            WHERE status IN ('NEW','OPEN')
              AND COALESCE(score_breakdown->>'runtime_version','') <> %s""",
         (RUNTIME_VERSION,),
@@ -49,11 +49,11 @@ def main() -> None:
     )
     logger = get_module_logger("system")
     logger.info("======================================")
-    logger.info("PROJECT MAIN: VELEZ 15M MODE 2 PAPER ONLY")
+    logger.info("PROJECT MAIN: VELEZ 15M MODE 2 PROTECTED PAPER ONLY")
     logger.info("======================================")
     logger.info(
         "VELEZ_RUNTIME version=%s timeframe=15m pairs=%s budget=%.2f per_trade=%.2f "
-        "exit=hard_stop_or_ema20_close_or_12h fixed_tp=false breakeven=false trailing=false "
+        "fixed_tp=false protection=1.5R_to_1R exit=protected_stop_or_ema20_close_or_12h "
         "relative_strength=false trix=false ichimoku=false paper=true notifier=strict",
         RUNTIME_VERSION,
         pairs,
@@ -76,7 +76,6 @@ def main() -> None:
     run_capital_protection_migration(postgres)
     _retire_previous_open_signals(postgres)
 
-    # Reused persistence helpers read the active runtime id from this module global.
     monitor_module.RUNTIME_VERSION = RUNTIME_VERSION
 
     event_bus = EventBus()
