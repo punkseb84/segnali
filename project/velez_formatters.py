@@ -74,6 +74,9 @@ def format_velez_outcome(payload: dict[str, Any]) -> str:
     labels = {
         "VELEZ_HARD_STOP": "Stop Loss iniziale raggiunto",
         "VELEZ_STARTUP_HARD_STOP_RECONCILIATION": "Stop Loss già raggiunto · rilevato dalla riconciliazione",
+        "VELEZ_MIGRATION_HARD_STOP_RECONCILIATION": "Stop Loss storico · corretto dopo migrazione runtime",
+        "VELEZ_MIGRATION_TARGET_RECONCILIATION": "Target storico · corretto dopo migrazione runtime",
+        "VELEZ_LEGACY_AMBIGUOUS_BOTH_HIT": "Stop e target nella stessa candela · sequenza intrabar non determinabile",
         "VELEZ_PROTECTED_STOP": "Stop protetto a +1R raggiunto",
         "VELEZ_EMA20_EXIT": "Chiusura 15m contro EMA20",
         "VELEZ_12H_TIME_EXIT": "Limite massimo di 12 ore raggiunto",
