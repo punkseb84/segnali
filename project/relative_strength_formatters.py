@@ -53,7 +53,7 @@ def format_relative_strength_signal(payload: dict[str, Any]) -> str:
             f"Rank globale: <b>{_esc(state.get('rank'))}/{_esc(state.get('universe_size'))}</b>\n"
             f"RS score vs BTC: <b>{_f(state.get('rs_score')):+.3f}</b>\n\n"
             "Azione: compra la crypto indicata usando il capitale personale dedicato.\n"
-            "Il bot invierà l'avviso per vendere e tornare in USDT a target, stop, inversione RS o entro 12 ore.\n"
+            "Il bot invierà l'avviso per vendere e tornare in USDT a target, stop o entro 12 ore.\n"
             "⚠️ PAPER/decision support: verifica sempre il prezzo sullo stesso mercato di riferimento."
         )
 
@@ -75,7 +75,8 @@ def format_relative_strength_signal(payload: dict[str, Any]) -> str:
         f"RS 4h: <b>{_f(state.get('relative_4h')) * 100:+.2f}%</b>\n"
         f"RS 1h: <b>{_f(state.get('relative_1h')) * 100:+.2f}%</b>\n"
         f"{volume_line}\n\n"
-        "Il bot monitorerà automaticamente target, stop, inversione RS e durata massima sul mercato indicato.\n"
+        "Gestione: <b>+0,8R → stop a pareggio netto</b> · <b>+1R → trailing 0,75R</b>.\n"
+        "L'inversione RS non chiude più automaticamente la posizione.\n"
         "Alla chiusura riceverai P&amp;L lordo, costi, risultato netto e budget aggiornato.\n"
         "⚠️ Solo PAPER TRADING: nessun ordine reale."
     )
@@ -96,9 +97,11 @@ def format_relative_strength_outcome(payload: dict[str, Any]) -> str:
     labels = {
         "RELATIVE_STRENGTH_TARGET": "Take Profit raggiunto",
         "RELATIVE_STRENGTH_LIVE_TARGET": "Take Profit raggiunto (prezzo live)",
-        "RELATIVE_STRENGTH_STOP": "Stop Loss raggiunto",
-        "RELATIVE_STRENGTH_LIVE_STOP": "Stop Loss raggiunto (prezzo live)",
-        "RELATIVE_STRENGTH_REVERSAL": "Forza relativa invertita",
+        "RELATIVE_STRENGTH_STOP": "Stop Loss iniziale raggiunto",
+        "RELATIVE_STRENGTH_LIVE_STOP": "Stop Loss iniziale raggiunto (prezzo live)",
+        "RELATIVE_STRENGTH_BREAKEVEN_STOP": "Stop a pareggio netto raggiunto",
+        "RELATIVE_STRENGTH_TRAILING_STOP": "Trailing Stop raggiunto",
+        "RELATIVE_STRENGTH_REVERSAL": "Forza relativa invertita (legacy)",
         "RELATIVE_STRENGTH_TIME_EXIT": "Durata massima raggiunta",
         "RELATIVE_STRENGTH_AMBIGUOUS_BOTH_HIT": "Stop e target nella stessa candela (ordine intrabar non determinabile)",
         "PRIVATE_SPOT_TARGET": "Take Profit raggiunto",
