@@ -18,8 +18,8 @@ def validate_v5_configuration(
     errors: list[str] = []
     if RUNTIME_VERSION_V5 != "RELATIVE_STRENGTH_BALANCED_ROBUST_VOLUME_1H_15M_V5":
         errors.append("unexpected V5 runtime version")
-    if STRATEGY_VERSION_V5 != "RELATIVE_STRENGTH_BALANCED_ROBUST_VOLUME_V5":
-        errors.append("unexpected V5 strategy version")
+    if STRATEGY_VERSION_V5 != "RELATIVE_STRENGTH_BALANCED_ROBUST_VOLUME_V5_1":
+        errors.append("unexpected V5.1 strategy version")
     if not issubclass(RelativeStrengthV5Scanner, object):
         errors.append("V5 scanner class unavailable")
     if not issubclass(RelativeStrengthV3Monitor, object):
