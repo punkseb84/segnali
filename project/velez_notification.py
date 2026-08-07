@@ -1,15 +1,11 @@
-"""Strict notification guard for the active Velez runtime.
-
-Prevents stale/legacy strategy payloads from being sent to Telegram if an old
-scanner event reaches the current process during a deploy transition.
-"""
+"""Strict notification guard for the active Velez Mode 2 runtime."""
 from __future__ import annotations
 
 from typing import Any
 
 from project.reliable_notification import ReliableNotificationEngine
 from project.shared.events import Event, EventType
-from project.velez_15m_scanner import RUNTIME_VERSION
+from project.velez_mode2_scanner import RUNTIME_VERSION
 
 
 class VelezNotificationEngine(ReliableNotificationEngine):
