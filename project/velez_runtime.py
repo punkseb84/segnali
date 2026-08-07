@@ -14,6 +14,7 @@ from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 from project.velez_formatters import format_velez_outcome, format_velez_signal
 from project.velez_legacy_reconcile import reconcile_legacy_expired_safe
+from project.velez_targeted_reconcile import reconcile_known_legacy_ids
 from project.velez_mode2_scanner import RUNTIME_VERSION, VelezMode2Scanner
 from project.velez_monitor import Velez15mMonitor
 from project.velez_notification import VelezNotificationEngine
@@ -117,12 +118,13 @@ def main() -> None:
     )
     notification.subscribe()
 
-    # Keep the old audit fail-safe for diagnostics, then run the parameterized
-    # implementation that correctly handles the %velez% pattern in psycopg.
     legacy_diagnostic = monitor.reconcile_migration_expired_outcomes()
     logger.info("VELEZ_MIGRATION_DIAGNOSTIC repaired=%s", legacy_diagnostic)
     repaired = reconcile_legacy_expired_safe(monitor)
     logger.info("VELEZ_SAFE_MIGRATION_OUTCOME_RECONCILIATION repaired=%s", repaired)
+
+    targeted = reconcile_known_legacy_ids(monitor)
+    logger.info("VELEZ_TARGETED_OUTCOME_RECONCILIATION repaired=%s", targeted)
 
     reconciled = monitor.reconcile_all_active_hard_stops()
     logger.info("VELEZ_STARTUP_STOP_RECONCILIATION closed=%s", reconciled)
