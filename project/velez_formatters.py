@@ -73,6 +73,7 @@ def format_velez_outcome(payload: dict[str, Any]) -> str:
     resolution = str(payload.get("outcome_resolution") or "n/d")
     labels = {
         "VELEZ_HARD_STOP": "Stop Loss iniziale raggiunto",
+        "VELEZ_STARTUP_HARD_STOP_RECONCILIATION": "Stop Loss già raggiunto · rilevato dalla riconciliazione",
         "VELEZ_PROTECTED_STOP": "Stop protetto a +1R raggiunto",
         "VELEZ_EMA20_EXIT": "Chiusura 15m contro EMA20",
         "VELEZ_12H_TIME_EXIT": "Limite massimo di 12 ore raggiunto",
