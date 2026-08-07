@@ -37,10 +37,12 @@ def format_velez_signal(payload: dict[str, Any]) -> str:
     direction = str(state.get("direction", "LONG"))
     icon = "🟢" if direction == "LONG" else "🔴"
     signal_id = payload.get("signal_id") or payload.get("id") or "n/d"
+    runtime = state.get("runtime_version") or "n/d"
     return (
         f"{icon} <b>NUOVO SEGNALE VELEZ · PAPER</b> <code>#{_esc(signal_id)}</code>\n"
         f"<b>{_esc(payload.get('pair'))}</b> · <b>{direction}</b> · 15m\n"
-        f"Mercato: <b>{_esc(payload.get('exchange') or 'Kraken')}</b>\n\n"
+        f"Mercato: <b>{_esc(payload.get('exchange') or 'Kraken')}</b>\n"
+        f"Motore: <code>{_esc(runtime)}</code>\n\n"
         f"Entrata: <b>{_price(payload.get('entry'))}</b>\n"
         f"Stop iniziale: <b>{_price(payload.get('stop_loss'))}</b>\n"
         f"Target previsto: <b>{_price(payload.get('take_profit'))}</b>\n"
@@ -57,7 +59,9 @@ def format_velez_signal(payload: dict[str, Any]) -> str:
 
 
 def format_velez_outcome(payload: dict[str, Any]) -> str:
-    direction = str(payload.get("direction") or _state(payload).get("direction") or "LONG")
+    state = _state(payload)
+    direction = str(payload.get("direction") or state.get("direction") or "LONG")
+    runtime = state.get("runtime_version") or "n/d"
     result = _f(payload.get("realized_net_eur"))
     gross = _f(payload.get("gross_pnl_eur"))
     entry_fee = _f(payload.get("entry_fee_eur"))
@@ -93,7 +97,8 @@ def format_velez_outcome(payload: dict[str, Any]) -> str:
     return (
         f"{title}\n"
         f"🆔 <code>#{_esc(signal_id)}</code>\n"
-        f"<b>{_esc(payload.get('pair'))}</b> · <b>{direction}</b> · 15m\n\n"
+        f"<b>{_esc(payload.get('pair'))}</b> · <b>{direction}</b> · 15m\n"
+        f"Motore: <code>{_esc(runtime)}</code>\n\n"
         f"Entrata: <b>{_price(payload.get('entry'))}</b>\n"
         f"Uscita: <b>{_price(payload.get('outcome_price'))}</b>\n"
         f"Motivo: <b>{_esc(labels.get(resolution, resolution))}</b>\n\n"
