@@ -34,6 +34,139 @@ class Velez15mMonitor(RelativeStrengthMonitor):
         protected_stop = entry + 1.0 * risk if direction == "LONG" else entry - 1.0 * risk
         return entry, hard_stop, trigger, protected_stop
 
+    def _all_active_signals(self) -> list[dict[str, Any]]:
+        """Load every delivered NEW/OPEN signal, regardless of legacy runtime version."""
+        rows = self.postgres.fetch_all(
+            """SELECT id, strategy, pair, timeframe, entry, stop_loss, take_profit,
+                      reference_candle_time, created_at, telegram_sent_at,
+                      COALESCE(exchange, 'Kraken'), quantity,
+                      COALESCE(estimated_buy_fee_eur, 0),
+                      COALESCE(score_breakdown, '{}'::jsonb)
+               FROM signals.generated_signals
+               WHERE status IN ('NEW','OPEN')
+                 AND telegram_sent_at IS NOT NULL
+               ORDER BY created_at ASC"""
+        )
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            state = row[13]
+            if isinstance(state, str):
+                try:
+                    state = json.loads(state)
+                except json.JSONDecodeError:
+                    state = {}
+            result.append(
+                {
+                    "id": int(row[0]),
+                    "strategy": str(row[1]),
+                    "pair": str(row[2]),
+                    "timeframe": str(row[3]),
+                    "entry": float(row[4]),
+                    "stop_loss": float(row[5]),
+                    "take_profit": float(row[6] or 0.0),
+                    "reference_candle_time": row[7],
+                    "created_at": row[8],
+                    "telegram_sent_at": row[9],
+                    "exchange": str(row[10]),
+                    "quantity": float(row[11] or 0.0),
+                    "estimated_buy_fee_eur": float(row[12] or 0.0),
+                    "state": dict(state or {}),
+                }
+            )
+        return result
+
+    def _historical_stop_row(self, signal: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the first completed 15m candle after entry that touched the stored hard stop."""
+        exchange = str(signal.get("exchange") or "Kraken")
+        direction = str(signal["state"].get("direction") or "LONG").upper()
+        stop = float(signal["stop_loss"])
+        reference = self._utc(
+            signal.get("reference_candle_time")
+            or signal.get("telegram_sent_at")
+            or signal.get("created_at")
+        ).floor("15min")
+        comparator = "low <= %s" if direction == "LONG" else "high >= %s"
+        rows = self.postgres.fetch_all(
+            f"""SELECT timestamp, open, high, low, close
+                  FROM market_data.ohlc
+                 WHERE LOWER(TRIM(exchange)) = LOWER(TRIM(%s))
+                   AND pair = %s
+                   AND timeframe = '15m'
+                   AND timestamp > %s
+                   AND {comparator}
+                 ORDER BY timestamp ASC
+                 LIMIT 1""",
+            (exchange, signal["pair"], reference.to_pydatetime(), stop),
+        )
+        if not rows:
+            return None
+        ts, open_, high, low, close = rows[0]
+        # Never use a still-forming candle for historical reconciliation.
+        timestamp = self._utc(ts)
+        if timestamp + pd.Timedelta(minutes=15) > pd.Timestamp.now(tz="UTC"):
+            return None
+        return {
+            "timestamp": timestamp,
+            "open": float(open_),
+            "high": float(high),
+            "low": float(low),
+            "close": float(close),
+        }
+
+    def reconcile_all_active_hard_stops(self) -> int:
+        """One-shot startup audit: close every active signal whose stored stop has been reached."""
+        active = self._all_active_signals()
+        closed = 0
+        self.logger.info(
+            "VELEZ_STARTUP_STOP_AUDIT active=%s ids=%s",
+            len(active),
+            [signal["id"] for signal in active],
+        )
+        for signal in active:
+            try:
+                direction = str(signal["state"].get("direction") or "LONG").upper()
+                stop = float(signal["stop_loss"])
+
+                # Current Kraken price catches a stop that has been reached since the latest closed candle.
+                if str(signal.get("exchange") or "Kraken").lower() == "kraken":
+                    live = self._live_price(signal["pair"])
+                    live_hit = live is not None and (
+                        live <= stop if direction == "LONG" else live >= stop
+                    )
+                    if live_hit:
+                        self.logger.warning(
+                            "VELEZ_STARTUP_STOP_HIT_LIVE id=%s pair=%s direction=%s live=%.8f stop=%.8f",
+                            signal["id"], signal["pair"], direction, float(live), stop,
+                        )
+                        if self._close(signal, stop, self._live_row(float(live)), "VELEZ_STARTUP_HARD_STOP_RECONCILIATION"):
+                            closed += 1
+                        continue
+
+                row = self._historical_stop_row(signal)
+                if row is not None:
+                    self.logger.warning(
+                        "VELEZ_STARTUP_STOP_HIT_HISTORY id=%s pair=%s direction=%s candle=%s high=%.8f low=%.8f stop=%.8f",
+                        signal["id"], signal["pair"], direction, row["timestamp"],
+                        row["high"], row["low"], stop,
+                    )
+                    if self._close(signal, stop, row, "VELEZ_STARTUP_HARD_STOP_RECONCILIATION"):
+                        closed += 1
+                else:
+                    self.logger.info(
+                        "VELEZ_STARTUP_STOP_CLEAR id=%s pair=%s direction=%s stop=%.8f",
+                        signal["id"], signal["pair"], direction, stop,
+                    )
+            except Exception:
+                self.logger.exception(
+                    "VELEZ_STARTUP_STOP_AUDIT_FAILED id=%s pair=%s",
+                    signal.get("id"), signal.get("pair"),
+                )
+        self.logger.info(
+            "VELEZ_STARTUP_STOP_AUDIT_DONE active=%s closed=%s",
+            len(active), closed,
+        )
+        return closed
+
     def _persist_protection(self, signal: dict[str, Any], trigger: float, protected_stop: float) -> None:
         state = signal["state"]
         if bool(state.get("profit_protection_armed")):
