@@ -1,4 +1,4 @@
-"""Clean Railway runtime for the Oliver Velez style 15m PAPER strategy."""
+"""Clean Railway runtime for Oliver Velez 15m PAPER Mode 2."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -9,12 +9,12 @@ from project.capital_protection_migration import run_capital_protection_migratio
 from project.config.settings import load_settings
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
-from project.relative_strength_v3_monitor import RelativeStrengthV3Monitor
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.velez_15m_scanner import RUNTIME_VERSION, Velez15mScanner
 from project.velez_formatters import format_velez_outcome, format_velez_signal
+from project.velez_mode2_scanner import RUNTIME_VERSION, VelezMode2Scanner
+from project.velez_monitor import Velez15mMonitor
 from project.velez_notification import VelezNotificationEngine
 from project.velez_scheduler import Velez15mScheduler
 from project.velez_universe import resolve_top_market_cap_pairs
@@ -28,7 +28,7 @@ def _retire_previous_open_signals(postgres: object) -> None:
     postgres.execute(
         """UPDATE signals.generated_signals
            SET status='EXPIRED', closed_at=COALESCE(closed_at,NOW()),
-               outcome_resolution='REPLACED_BY_VELEZ_15M_RUNTIME'
+               outcome_resolution='REPLACED_BY_VELEZ_MODE2_RUNTIME'
            WHERE status IN ('NEW','OPEN')
              AND COALESCE(score_breakdown->>'runtime_version','') <> %s""",
         (RUNTIME_VERSION,),
@@ -49,10 +49,11 @@ def main() -> None:
     )
     logger = get_module_logger("system")
     logger.info("======================================")
-    logger.info("PROJECT MAIN: VELEZ 15M PAPER ONLY")
+    logger.info("PROJECT MAIN: VELEZ 15M MODE 2 PAPER ONLY")
     logger.info("======================================")
     logger.info(
         "VELEZ_RUNTIME version=%s timeframe=15m pairs=%s budget=%.2f per_trade=%.2f "
+        "exit=hard_stop_or_ema20_close_or_12h fixed_tp=false breakeven=false trailing=false "
         "relative_strength=false trix=false ichimoku=false paper=true notifier=strict",
         RUNTIME_VERSION,
         pairs,
@@ -75,6 +76,7 @@ def main() -> None:
     run_capital_protection_migration(postgres)
     _retire_previous_open_signals(postgres)
 
+    # Reused persistence helpers read the active runtime id from this module global.
     monitor_module.RUNTIME_VERSION = RUNTIME_VERSION
 
     event_bus = EventBus()
@@ -82,7 +84,7 @@ def main() -> None:
     notification_service.format_outcome_message = format_velez_outcome
 
     collector = build_collector(settings, event_bus, postgres)
-    scanner = Velez15mScanner(
+    scanner = VelezMode2Scanner(
         postgres,
         event_bus,
         settings.collector_pairs,
@@ -101,10 +103,10 @@ def main() -> None:
         max_open_positions=MAX_OPEN,
         max_per_pair_day=2,
         target_r=1.5,
-        max_hold_candles=12,
+        max_hold_candles=48,
         pullback_bars=3,
     )
-    monitor = RelativeStrengthV3Monitor(
+    monitor = Velez15mMonitor(
         postgres,
         event_bus,
         ambiguous_candle_mode=settings.ambiguous_candle_mode,
