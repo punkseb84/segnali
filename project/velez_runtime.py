@@ -9,13 +9,13 @@ from project.capital_protection_migration import run_capital_protection_migratio
 from project.config.settings import load_settings
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
-from project.reliable_notification import ReliableNotificationEngine
 from project.relative_strength_v3_monitor import RelativeStrengthV3Monitor
 from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 from project.velez_15m_scanner import RUNTIME_VERSION, Velez15mScanner
 from project.velez_formatters import format_velez_outcome, format_velez_signal
+from project.velez_notification import VelezNotificationEngine
 from project.velez_scheduler import Velez15mScheduler
 from project.velez_universe import resolve_top_market_cap_pairs
 
@@ -53,7 +53,7 @@ def main() -> None:
     logger.info("======================================")
     logger.info(
         "VELEZ_RUNTIME version=%s timeframe=15m pairs=%s budget=%.2f per_trade=%.2f "
-        "relative_strength=false trix=false ichimoku=false paper=true",
+        "relative_strength=false trix=false ichimoku=false paper=true notifier=strict",
         RUNTIME_VERSION,
         pairs,
         PUBLIC_BUDGET_EUR,
@@ -75,7 +75,6 @@ def main() -> None:
     run_capital_protection_migration(postgres)
     _retire_previous_open_signals(postgres)
 
-    # The generic monitor is reused only for PAPER lifecycle and reads this runtime id.
     monitor_module.RUNTIME_VERSION = RUNTIME_VERSION
 
     event_bus = EventBus()
@@ -114,7 +113,7 @@ def main() -> None:
         spread_rate=settings.binance_spread_rate,
         slippage_rate=settings.binance_slippage_rate,
     )
-    notification = ReliableNotificationEngine(
+    notification = VelezNotificationEngine(
         event_bus,
         enabled=True,
         max_message_length=settings.telegram_max_message_length,
