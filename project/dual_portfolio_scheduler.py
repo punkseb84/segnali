@@ -41,8 +41,8 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
             min_net_profit_eur=0.0,
             enable_daily_signal_report=False,
             initial_budget_eur=10.0,
-            min_net_target_eur=0.05,
-            min_quality_score=55.0,
+            min_net_target_eur=0.03,
+            min_quality_score=50.0,
             max_hold_candles=48,
         )
         self.personal_monitor = PersonalIntradayMonitor(
@@ -56,8 +56,8 @@ class DualPortfolioScheduler(RelativeStrengthScheduler):
             slippage_rate=public_monitor.slippage_rate,
         )
         self.logger.info(
-            "DUAL_PORTFOLIO public=RS_BALANCED_ROBUST_VOLUME_V5 "
-            "private=BEST_OPPORTUNITY_V3 time=06:00 budget=10EUR max_hold=12h"
+            "DUAL_PORTFOLIO public=RS_BALANCED_ROBUST_VOLUME_V5_1 "
+            "private=BEST_OPPORTUNITY_V3_1 time=06:00 budget=10EUR max_hold=12h"
         )
 
     @staticmethod
