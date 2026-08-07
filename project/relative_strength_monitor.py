@@ -26,9 +26,24 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         self.kraken_api_base = os.getenv("KRAKEN_API_BASE", "https://api.kraken.com/0/public").rstrip("/")
 
     def monitor_open_signals(self) -> int:
+        signals = self._open_signals()
+        self.logger.info(
+            "RS_MONITOR_CYCLE runtime=%s open_signals=%s ids=%s",
+            RUNTIME_VERSION,
+            len(signals),
+            [signal["id"] for signal in signals],
+        )
         closed = 0
-        for signal in self._open_signals():
-            closed += 1 if self._check(signal) else 0
+        for signal in signals:
+            try:
+                closed += 1 if self._check(signal) else 0
+            except Exception:
+                self.logger.exception(
+                    "RS_MONITOR_SIGNAL_FAILED id=%s pair=%s",
+                    signal.get("id"),
+                    signal.get("pair"),
+                )
+        self.logger.info("RS_MONITOR_CYCLE_END closed=%s", closed)
         return closed
 
     def _open_signals(self) -> list[dict[str, Any]]:
@@ -65,13 +80,14 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
             })
         return result
 
-    def _frame(self, pair: str) -> pd.DataFrame:
+    def _frame(self, pair: str, exchange: str = "Kraken") -> pd.DataFrame:
         rows = self.postgres.fetch_all(
             """SELECT timestamp, open, high, low, close
                FROM market_data.ohlc
-               WHERE pair = %s AND timeframe = '15m'
+               WHERE LOWER(TRIM(exchange)) = LOWER(TRIM(%s))
+                 AND pair = %s AND timeframe = '15m'
                ORDER BY timestamp DESC LIMIT 160""",
-            (pair,),
+            (exchange, pair),
         )
         frame = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close"])
         if frame.empty:
@@ -83,9 +99,7 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         return frame[end <= pd.Timestamp.now(tz="UTC").timestamp()].sort_values("timestamp").reset_index(drop=True)
 
     def _live_price(self, pair: str) -> float | None:
-        """Fetch Kraken last-trade price for fast PAPER TP/SL monitoring."""
-        if str(self.exchange if hasattr(self, "exchange") else "Kraken").lower() != "kraken":
-            return None
+        """Fetch Kraken last-trade price when the normal monitor cycle runs."""
         try:
             response = requests.get(
                 f"{self.kraken_api_base}/Ticker",
@@ -112,26 +126,27 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         return {"timestamp": now, "open": price, "high": price, "low": price, "close": price}
 
     def _check_live_levels(self, signal: dict[str, Any]) -> bool:
-        """Close immediately when current Kraken price is beyond TP or SL."""
+        if str(signal.get("exchange") or "Kraken").lower() != "kraken":
+            return False
         price = self._live_price(signal["pair"])
         if price is None:
             return False
         direction = str(signal["state"].get("direction", "LONG"))
         stop = float(signal["stop_loss"])
         target = float(signal["take_profit"])
+        self.logger.info(
+            "RS_MONITOR_LIVE id=%s pair=%s price=%.8f stop=%.8f target=%.8f direction=%s",
+            signal["id"], signal["pair"], price, stop, target, direction,
+        )
         if direction == "LONG":
             if price <= stop:
-                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=STOP price=%.8f level=%.8f", signal["id"], signal["pair"], price, stop)
                 return self._close(signal, stop, self._live_row(price), "RELATIVE_STRENGTH_LIVE_STOP")
             if price >= target:
-                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=TARGET price=%.8f level=%.8f", signal["id"], signal["pair"], price, target)
                 return self._close(signal, target, self._live_row(price), "RELATIVE_STRENGTH_LIVE_TARGET")
         else:
             if price >= stop:
-                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=STOP price=%.8f level=%.8f", signal["id"], signal["pair"], price, stop)
                 return self._close(signal, stop, self._live_row(price), "RELATIVE_STRENGTH_LIVE_STOP")
             if price <= target:
-                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=TARGET price=%.8f level=%.8f", signal["id"], signal["pair"], price, target)
                 return self._close(signal, target, self._live_row(price), "RELATIVE_STRENGTH_LIVE_TARGET")
         return False
 
@@ -174,8 +189,8 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         cumulative = float(rows[0][0] or 0.0) if rows else 0.0
         return self.initial_budget + cumulative
 
-    def _relative_return(self, pair: str, candles: int = 4) -> float | None:
-        asset, btc = self._frame(pair), self._frame("BTC/USD")
+    def _relative_return(self, pair: str, exchange: str = "Kraken", candles: int = 4) -> float | None:
+        asset, btc = self._frame(pair, exchange), self._frame("BTC/USD", exchange)
         if len(asset) <= candles or len(btc) <= candles:
             return None
         return float(asset["close"].iloc[-1] / asset["close"].iloc[-1-candles] - 1.0) - float(btc["close"].iloc[-1] / btc["close"].iloc[-1-candles] - 1.0)
@@ -183,24 +198,41 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
     def _check(self, signal: dict[str, Any]) -> bool:
         if self._check_live_levels(signal):
             return True
-        frame = self._frame(signal["pair"])
+        exchange = str(signal.get("exchange") or "Kraken")
+        frame = self._frame(signal["pair"], exchange)
         if frame.empty:
+            self.logger.warning("RS_MONITOR_NO_FRAME id=%s pair=%s exchange=%s", signal["id"], signal["pair"], exchange)
             return False
         direction = str(signal["state"].get("direction", "LONG"))
         delivery = self._utc(signal.get("telegram_sent_at") or signal.get("created_at") or signal.get("reference_candle_time"))
         eligible = frame[frame["timestamp"] >= delivery.floor("15min")]
         if eligible.empty:
+            self.logger.warning("RS_MONITOR_NO_ELIGIBLE id=%s pair=%s delivery=%s", signal["id"], signal["pair"], delivery)
             return False
+
+        stop, target = float(signal["stop_loss"]), float(signal["take_profit"])
+        self.logger.info(
+            "RS_MONITOR_CHECK id=%s pair=%s exchange=%s direction=%s entry=%.8f stop=%.8f target=%.8f candles=%s first=%s last=%s max_high=%.8f min_low=%.8f",
+            signal["id"], signal["pair"], exchange, direction, float(signal["entry"]), stop, target,
+            len(eligible), eligible.iloc[0]["timestamp"], eligible.iloc[-1]["timestamp"],
+            float(eligible["high"].max()), float(eligible["low"].min()),
+        )
         for _, row in eligible.iterrows():
             high, low = float(row["high"]), float(row["low"])
-            stop, target = float(signal["stop_loss"]), float(signal["take_profit"])
             stop_hit = low <= stop if direction == "LONG" else high >= stop
             target_hit = high >= target if direction == "LONG" else low <= target
+            self.logger.info(
+                "RS_MONITOR_CANDLE id=%s pair=%s candle=%s high=%.8f low=%.8f stop_hit=%s target_hit=%s",
+                signal["id"], signal["pair"], row["timestamp"], high, low, stop_hit, target_hit,
+            )
+            if stop_hit and target_hit:
+                return self._close(signal, float(row["close"]), row, "RELATIVE_STRENGTH_AMBIGUOUS_BOTH_HIT")
             if stop_hit:
                 return self._close(signal, stop, row, "RELATIVE_STRENGTH_STOP")
             if target_hit:
                 return self._close(signal, target, row, "RELATIVE_STRENGTH_TARGET")
-        relative = self._relative_return(signal["pair"])
+
+        relative = self._relative_return(signal["pair"], exchange)
         reversal = relative is not None and ((direction == "LONG" and relative < 0) or (direction == "SHORT" and relative > 0))
         max_hold = int(signal["state"].get("max_hold_candles", 8))
         if reversal or len(eligible) >= max_hold:
@@ -226,17 +258,21 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
             "budget_before_eur": budget_before,
             "budget_after_eur": budget_after,
         }
+        self.logger.info(
+            "RS_MONITOR_CLOSE id=%s pair=%s resolution=%s outcome=%s price=%.8f net=%.4f budget_before=%.4f budget_after=%.4f",
+            signal["id"], signal["pair"], resolution, status, price, result, budget_before, budget_after,
+        )
         self.postgres.execute(
             """UPDATE signals.generated_signals
                SET status=%s, outcome_price=%s, outcome_open_price=%s,
                    outcome_high_price=%s, outcome_low_price=%s, outcome_close_price=%s,
-                   outcome_candle_time=%s, closed_at=NOW(), outcome_ambiguous=FALSE,
+                   outcome_candle_time=%s, closed_at=NOW(), outcome_ambiguous=%s,
                    outcome_resolution=%s, net_profit_tp1_eur=%s, net_loss_sl_eur=%s,
                    score_breakdown=COALESCE(score_breakdown,'{}'::jsonb)||%s::jsonb
                WHERE id=%s AND status IN ('NEW','OPEN')""",
             (status, price, float(row["open"]), float(row["high"]), float(row["low"]),
-             float(row["close"]), row["timestamp"], resolution, net_profit, net_loss,
-             json.dumps(patch), signal["id"]),
+             float(row["close"]), row["timestamp"], resolution == "RELATIVE_STRENGTH_AMBIGUOUS_BOTH_HIT",
+             resolution, net_profit, net_loss, json.dumps(patch), signal["id"]),
         )
         payload = {**signal, **patch, "signal_id": signal["id"],
                    "direction": signal["state"].get("direction", "LONG"),
