@@ -1,52 +1,113 @@
-"""Position lifecycle for Velez intraday mode 2.
+"""Position lifecycle for Velez intraday Mode 2 with profit protection.
 
-The entry setup belongs to the Velez EMA20/EMA200 scanner. Once a PAPER position
-is open there is deliberately no fixed take profit, no automatic breakeven and
-no trailing stop. Exits are limited to:
-1) the original structural stop;
-2) a CLOSED 15m candle crossing EMA20 against the trade;
-3) a maximum holding time of 12 hours (48 completed 15m candles).
+There is no fixed take profit. The original structural stop is active from entry.
+When price reaches +1.5R, the full position remains open and the stop is promoted
+to +1R. Afterwards the position exits on that protected stop, on a CLOSED 15m
+candle crossing EMA20 against the trade, or after 12 hours (48 completed 15m bars).
 
-The trigger candle is excluded from exit evaluation because the simulated entry
-occurs only after that candle has closed.
+For deterministic recovery from closed candles, a protection level reached inside
+a candle becomes executable from the following candle. Live monitoring can arm it
+immediately when the Kraken price reaches +1.5R.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pandas as pd
 
 from project.relative_strength_monitor import RelativeStrengthMonitor
+from project.shared.events import Event, EventType
 
 
 class Velez15mMonitor(RelativeStrengthMonitor):
     MAX_HOLD_CANDLES = 48
+    PROTECTION_TRIGGER_R = 1.5
+    PROTECTED_STOP_R = 1.0
 
-    def _check_live_hard_stop(self, signal: dict[str, Any]) -> bool:
-        """Use Kraken live price only for the original hard stop; never for EMA exits."""
+    @staticmethod
+    def _levels(signal: dict[str, Any], direction: str) -> tuple[float, float, float, float]:
+        entry = float(signal["entry"])
+        hard_stop = float(signal["stop_loss"])
+        risk = abs(entry - hard_stop)
+        trigger = entry + 1.5 * risk if direction == "LONG" else entry - 1.5 * risk
+        protected_stop = entry + 1.0 * risk if direction == "LONG" else entry - 1.0 * risk
+        return entry, hard_stop, trigger, protected_stop
+
+    def _persist_protection(self, signal: dict[str, Any], trigger: float, protected_stop: float) -> None:
+        state = signal["state"]
+        if bool(state.get("profit_protection_armed")):
+            return
+        patch = {
+            "profit_protection_armed": True,
+            "profit_protection_trigger_price": trigger,
+            "profit_protected_stop_price": protected_stop,
+            "profit_protection_trigger_r": self.PROTECTION_TRIGGER_R,
+            "profit_protection_stop_r": self.PROTECTED_STOP_R,
+        }
+        self.postgres.execute(
+            """UPDATE signals.generated_signals
+               SET score_breakdown=COALESCE(score_breakdown,'{}'::jsonb)||%s::jsonb
+               WHERE id=%s AND status IN ('NEW','OPEN')""",
+            (json.dumps(patch), signal["id"]),
+        )
+        state.update(patch)
+        direction = str(state.get("direction", "LONG"))
+        message = (
+            "🛡️ <b>PROTEZIONE PROFITTO ATTIVATA · PAPER</b>\n"
+            f"🆔 <code>#{signal['id']}</code>\n"
+            f"<b>{signal['pair']}</b> · <b>{direction}</b> · 15m\n\n"
+            f"Raggiunto: <b>+1,5R</b> ({trigger:.8f})\n"
+            f"Nuovo stop protetto: <b>+1R</b> ({protected_stop:.8f})\n\n"
+            "La posizione resta aperta. Uscita su stop protetto, chiusura 15m contro EMA20 o limite 12 ore."
+        )
+        self.event_bus.publish(
+            Event(
+                EventType.REPORT_READY,
+                {
+                    "message": message,
+                    "trusted_html": True,
+                    "signal_id": signal["id"],
+                    "pair": signal["pair"],
+                    "timeframe": "15m",
+                    "management_update": "VELEZ_PROFIT_PROTECTION_ARMED",
+                },
+            )
+        )
+        self.logger.info(
+            "VELEZ_PROTECTION_ARMED id=%s pair=%s trigger=%.8f protected_stop=%.8f",
+            signal["id"], signal["pair"], trigger, protected_stop,
+        )
+
+    def _check_live_levels(self, signal: dict[str, Any]) -> bool:
         if str(signal.get("exchange") or "Kraken").lower() != "kraken":
             return False
         price = self._live_price(signal["pair"])
         if price is None:
             return False
+
         direction = str(signal["state"].get("direction", "LONG"))
-        stop = float(signal["stop_loss"])
-        hit = price <= stop if direction == "LONG" else price >= stop
+        _, hard_stop, trigger, protected_stop = self._levels(signal, direction)
+        armed = bool(signal["state"].get("profit_protection_armed"))
+        active_stop = protected_stop if armed else hard_stop
+
         self.logger.info(
-            "VELEZ_MONITOR_LIVE id=%s pair=%s price=%.8f hard_stop=%.8f direction=%s stop_hit=%s",
-            signal["id"], signal["pair"], price, stop, direction, hit,
+            "VELEZ_MONITOR_LIVE id=%s pair=%s price=%.8f active_stop=%.8f trigger=%.8f armed=%s direction=%s",
+            signal["id"], signal["pair"], price, active_stop, trigger, armed, direction,
         )
-        if hit:
-            return self._close(
-                signal,
-                stop,
-                self._live_row(price),
-                "VELEZ_HARD_STOP",
-            )
+
+        stop_hit = price <= active_stop if direction == "LONG" else price >= active_stop
+        if stop_hit:
+            reason = "VELEZ_PROTECTED_STOP" if armed else "VELEZ_HARD_STOP"
+            return self._close(signal, active_stop, self._live_row(price), reason)
+
+        trigger_hit = price >= trigger if direction == "LONG" else price <= trigger
+        if trigger_hit and not armed:
+            self._persist_protection(signal, trigger, protected_stop)
         return False
 
     def _check(self, signal: dict[str, Any]) -> bool:
-        if self._check_live_hard_stop(signal):
+        if self._check_live_levels(signal):
             return True
 
         exchange = str(signal.get("exchange") or "Kraken")
@@ -58,7 +119,6 @@ class Velez15mMonitor(RelativeStrengthMonitor):
             )
             return False
 
-        # EMA20 is recomputed from the same closed 15m Kraken candles used by the scanner.
         frame = frame.copy()
         frame["ema20"] = frame["close"].ewm(span=20, adjust=False).mean()
 
@@ -68,18 +128,19 @@ class Velez15mMonitor(RelativeStrengthMonitor):
             or signal.get("telegram_sent_at")
             or signal.get("created_at")
         )
-        # Entry is after the trigger candle close, therefore never evaluate that candle as an exit.
         eligible = frame[frame["timestamp"] > reference.floor("15min")].copy()
         if eligible.empty:
             return False
 
-        hard_stop = float(signal["stop_loss"])
+        _, hard_stop, trigger, protected_stop = self._levels(signal, direction)
+        armed = bool(signal["state"].get("profit_protection_armed"))
         max_hold = int(signal["state"].get("max_hold_candles") or self.MAX_HOLD_CANDLES)
         max_hold = max(1, min(max_hold, self.MAX_HOLD_CANDLES))
 
         self.logger.info(
-            "VELEZ_MONITOR_START id=%s pair=%s direction=%s hard_stop=%.8f candles=%s max_hold=%s",
-            signal["id"], signal["pair"], direction, hard_stop, len(eligible), max_hold,
+            "VELEZ_MONITOR_START id=%s pair=%s direction=%s hard_stop=%.8f trigger=%.8f protected_stop=%.8f armed=%s candles=%s max_hold=%s",
+            signal["id"], signal["pair"], direction, hard_stop, trigger, protected_stop,
+            armed, len(eligible), max_hold,
         )
 
         for index, (_, row) in enumerate(eligible.iterrows(), start=1):
@@ -87,21 +148,29 @@ class Velez15mMonitor(RelativeStrengthMonitor):
             low = float(row["low"])
             close = float(row["close"])
             ema20 = float(row["ema20"])
-            stop_hit = low <= hard_stop if direction == "LONG" else high >= hard_stop
+            active_stop = protected_stop if armed else hard_stop
+            stop_hit = low <= active_stop if direction == "LONG" else high >= active_stop
             ema_exit = close < ema20 if direction == "LONG" else close > ema20
 
             self.logger.info(
-                "VELEZ_MONITOR_CANDLE id=%s n=%s candle=%s close=%.8f ema20=%.8f stop_hit=%s ema_exit=%s",
-                signal["id"], index, row["timestamp"], close, ema20, stop_hit, ema_exit,
+                "VELEZ_MONITOR_CANDLE id=%s n=%s candle=%s high=%.8f low=%.8f close=%.8f ema20=%.8f active_stop=%.8f armed=%s stop_hit=%s ema_exit=%s",
+                signal["id"], index, row["timestamp"], high, low, close, ema20,
+                active_stop, armed, stop_hit, ema_exit,
             )
 
-            # The structural stop has priority because it can be touched intrabar.
             if stop_hit:
-                return self._close(signal, hard_stop, row, "VELEZ_HARD_STOP")
+                reason = "VELEZ_PROTECTED_STOP" if armed else "VELEZ_HARD_STOP"
+                return self._close(signal, active_stop, row, reason)
 
-            # EMA20 exit is based ONLY on a completed 15m candle close.
             if ema_exit:
                 return self._close(signal, close, row, "VELEZ_EMA20_EXIT")
+
+            if not armed:
+                trigger_hit = high >= trigger if direction == "LONG" else low <= trigger
+                if trigger_hit:
+                    # Protection becomes active after this completed candle to avoid lookahead.
+                    armed = True
+                    self._persist_protection(signal, trigger, protected_stop)
 
             if index >= max_hold:
                 return self._close(signal, close, row, "VELEZ_12H_TIME_EXIT")
