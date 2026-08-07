@@ -1,10 +1,9 @@
-"""Clean 15m Velez-style pullback/restart PAPER scanner.
+"""Clean 15m Oliver Velez style pullback/restart PAPER scanner.
 
-This module deliberately does not depend on Relative Strength, TRIX or Ichimoku.
-The rules are objective adaptations of Velez's published intraday principles:
-20/200 moving-average structure, pullback, then proof of strength/weakness through
-breaking the prior 15m bar. It is a codified interpretation of the published
-method, not a claim of a verbatim transcription of a specific video.
+Signal selection deliberately uses only price action plus EMA20 and EMA200.
+Relative Strength, TRIX, Ichimoku, RSI, ADX, Bollinger and ATR are not used to
+qualify a setup. Costs and position sizing are applied only after the technical
+setup exists.
 """
 from __future__ import annotations
 
@@ -18,8 +17,8 @@ import pandas as pd
 from project.simple_strategy_scanner import SimpleStrategyScanner
 from project.strategy_engine.service import GeneratedSignal
 
-STRATEGY_NAME = "Oliver Velez 15m Pullback Restart"
-RUNTIME_VERSION = "VELEZ_15M_PULLBACK_RESTART_V1"
+STRATEGY_NAME = "Oliver Velez EMA20 EMA200 15m Pullback Restart"
+RUNTIME_VERSION = "VELEZ_15M_EMA20_EMA200_V2"
 
 
 class Velez15mScanner(SimpleStrategyScanner):
@@ -32,7 +31,6 @@ class Velez15mScanner(SimpleStrategyScanner):
         target_r: float = 1.5,
         max_hold_candles: int = 12,
         pullback_bars: int = 3,
-        touch_atr: float = 0.35,
         **kwargs: Any,
     ) -> None:
         kwargs["max_signals_per_cycle"] = min(int(kwargs.get("max_signals_per_cycle", 2)), 2)
@@ -46,8 +44,7 @@ class Velez15mScanner(SimpleStrategyScanner):
         self.max_per_pair_day = max(1, int(max_per_pair_day))
         self.target_r = max(1.0, float(target_r))
         self.max_hold_candles = max(4, int(max_hold_candles))
-        self.pullback_bars = max(3, int(pullback_bars))
-        self.touch_atr = max(0.05, float(touch_atr))
+        self.pullback_bars = max(2, int(pullback_bars))
         self.logger.name = "velez-15m"
 
     def _count(self, *, open_only: bool = False, today_only: bool = False) -> int:
@@ -89,19 +86,10 @@ class Velez15mScanner(SimpleStrategyScanner):
         return -1 if self._pair_today(candidate.pair) >= self.max_per_pair_day else None
 
     @staticmethod
-    def _ma(frame: pd.DataFrame) -> pd.DataFrame:
+    def _ema(frame: pd.DataFrame) -> pd.DataFrame:
         data = frame.copy()
-        data["sma20"] = data["close"].rolling(20).mean()
-        data["sma200"] = data["close"].rolling(200).mean()
-        tr = pd.concat(
-            [
-                data["high"] - data["low"],
-                (data["high"] - data["close"].shift(1)).abs(),
-                (data["low"] - data["close"].shift(1)).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
-        data["atr"] = tr.rolling(14).mean()
+        data["ema20"] = data["close"].ewm(span=20, adjust=False).mean()
+        data["ema200"] = data["close"].ewm(span=200, adjust=False).mean()
         return data
 
     def evaluate(self) -> GeneratedSignal | None:
@@ -164,29 +152,24 @@ class Velez15mScanner(SimpleStrategyScanner):
         raw = self.fetch_closed_frame(pair, "15m", 280)
         if len(raw) < 220:
             return None, "INSUFFICIENT_OHLC"
-        frame = self._ma(raw).dropna().reset_index(drop=True)
+        frame = self._ema(raw).dropna().reset_index(drop=True)
         if len(frame) < 205:
-            return None, "INSUFFICIENT_MA_HISTORY"
+            return None, "INSUFFICIENT_EMA_HISTORY"
 
         latest = frame.iloc[-1]
         previous = frame.iloc[-2]
         pullback = frame.iloc[-1-self.pullback_bars:-1]
-        atr = float(latest["atr"])
-        if atr <= 0:
-            return None, "ATR_INVALID"
 
         long_trend = bool(
-            latest["sma20"] > latest["sma200"]
-            and frame.iloc[-1]["sma20"] > frame.iloc[-3]["sma20"]
-            and float(latest["close"]) > float(latest["sma200"])
+            float(latest["close"]) > float(latest["ema20"]) > float(latest["ema200"])
+            and float(frame.iloc[-1]["ema20"]) > float(frame.iloc[-3]["ema20"])
         )
         short_trend = bool(
-            latest["sma20"] < latest["sma200"]
-            and frame.iloc[-1]["sma20"] < frame.iloc[-3]["sma20"]
-            and float(latest["close"]) < float(latest["sma200"])
+            float(latest["close"]) < float(latest["ema20"]) < float(latest["ema200"])
+            and float(frame.iloc[-1]["ema20"]) < float(frame.iloc[-3]["ema20"])
         )
         if not long_trend and not short_trend:
-            return None, "NO_20_200_TREND"
+            return None, "NO_EMA20_EMA200_TREND"
 
         if long_trend:
             direction = "LONG"
@@ -194,13 +177,13 @@ class Velez15mScanner(SimpleStrategyScanner):
                 float(pullback.iloc[i]["high"]) >= float(pullback.iloc[i + 1]["high"])
                 for i in range(len(pullback) - 1)
             )
-            touched20 = bool((pullback["low"] <= pullback["sma20"] + self.touch_atr * pullback["atr"]).any())
-            held_structure = bool((pullback["close"] > pullback["sma200"]).all())
+            touched20 = bool((pullback["low"] <= pullback["ema20"]).any())
+            held200 = bool((pullback["close"] > pullback["ema200"]).all())
             trigger = bool(
                 float(latest["close"]) > float(latest["open"])
                 and float(latest["high"]) > float(previous["high"])
                 and float(latest["close"]) > float(previous["high"])
-                and float(latest["close"]) > float(latest["sma20"])
+                and float(latest["close"]) > float(latest["ema20"])
             )
         else:
             direction = "SHORT"
@@ -208,31 +191,32 @@ class Velez15mScanner(SimpleStrategyScanner):
                 float(pullback.iloc[i]["low"]) <= float(pullback.iloc[i + 1]["low"])
                 for i in range(len(pullback) - 1)
             )
-            touched20 = bool((pullback["high"] >= pullback["sma20"] - self.touch_atr * pullback["atr"]).any())
-            held_structure = bool((pullback["close"] < pullback["sma200"]).all())
+            touched20 = bool((pullback["high"] >= pullback["ema20"]).any())
+            held200 = bool((pullback["close"] < pullback["ema200"]).all())
             trigger = bool(
                 float(latest["close"]) < float(latest["open"])
                 and float(latest["low"]) < float(previous["low"])
                 and float(latest["close"]) < float(previous["low"])
-                and float(latest["close"]) < float(latest["sma20"])
+                and float(latest["close"]) < float(latest["ema20"])
             )
 
         if not ordered_pullback:
             return None, "PULLBACK_NOT_ORDERED"
         if not touched20:
-            return None, "NO_PULLBACK_TO_20"
-        if not held_structure:
-            return None, "STRUCTURE_FAILED"
+            return None, "NO_PULLBACK_TO_EMA20"
+        if not held200:
+            return None, "EMA200_STRUCTURE_FAILED"
         if not trigger:
-            return None, "NO_TRIGGER_BAR_BREAK"
+            return None, "NO_PRIOR_BAR_BREAK_TRIGGER"
 
         entry = float(latest["close"])
         pullback_low = float(pullback["low"].min())
         pullback_high = float(pullback["high"].max())
-        buffer = max(entry * 0.0005, atr * 0.10)
+        # Small execution buffer only; it is not a setup indicator.
+        buffer = entry * 0.0005
         stop = (pullback_low - buffer) if direction == "LONG" else (pullback_high + buffer)
         risk = (entry - stop) if direction == "LONG" else (stop - entry)
-        if risk <= 0 or risk > 2.5 * atr:
+        if risk <= 0 or risk / entry > 0.03:
             return None, "STOP_GEOMETRY_INVALID"
         target = entry + self.target_r * risk if direction == "LONG" else entry - self.target_r * risk
         if target <= 0:
@@ -244,24 +228,23 @@ class Velez15mScanner(SimpleStrategyScanner):
         if float(economics["net_profit_tp1_eur"]) <= 0:
             return None, "TARGET_NOT_NET_POSITIVE"
 
-        slope20 = abs(float(frame.iloc[-1]["sma20"] / frame.iloc[-3]["sma20"] - 1.0))
-        separation = abs(float(latest["sma20"] / latest["sma200"] - 1.0))
-        score = min(100.0, 65.0 + min(15.0, slope20 * 8000.0) + min(15.0, separation * 1200.0) + 5.0)
+        slope20 = abs(float(frame.iloc[-1]["ema20"] / frame.iloc[-3]["ema20"] - 1.0))
+        separation = abs(float(latest["ema20"] / latest["ema200"] - 1.0))
+        score = min(100.0, 65.0 + min(15.0, slope20 * 8000.0) + min(20.0, separation * 1200.0))
         reasons = [
-            "20/200 allineate sul timeframe 15m",
-            f"pullback ordinato di {self.pullback_bars} barre verso SMA20",
-            "barra trigger supera il massimo/minimo della barra precedente",
-            "stop oltre l'estremo del pullback",
-            "gestione sullo stesso timeframe 15m",
+            "EMA20 e EMA200 allineate sul timeframe 15m",
+            f"pullback ordinato di {self.pullback_bars} barre verso EMA20",
+            "EMA200 mantiene la struttura del trend",
+            "barra trigger chiude oltre il massimo/minimo della barra precedente",
+            "nessun indicatore aggiuntivo usato per qualificare il setup",
         ]
         breakdown = {
             "runtime_version": RUNTIME_VERSION,
-            "strategy_version": "VELEZ_15M_V1",
+            "strategy_version": "VELEZ_EMA20_EMA200_V2",
             "direction": direction,
-            "setup_type": "PULLBACK_RESTART_PRIOR_BAR_BREAK",
-            "sma20": round(float(latest["sma20"]), 10),
-            "sma200": round(float(latest["sma200"]), 10),
-            "atr": round(atr, 10),
+            "setup_type": "EMA20_PULLBACK_PRIOR_BAR_BREAK",
+            "ema20": round(float(latest["ema20"]), 10),
+            "ema200": round(float(latest["ema200"]), 10),
             "risk_distance": round(risk, 10),
             "initial_stop": round(stop, 10),
             "target_price": round(target, 10),
@@ -269,6 +252,7 @@ class Velez15mScanner(SimpleStrategyScanner):
             "breakeven_trigger_r": 0.8,
             "trailing_trigger_r": 1.0,
             "trailing_distance_r": 0.75,
+            "signal_indicators": ["EMA20", "EMA200"],
             "paper_only": True,
         }
         now = datetime.now(timezone.utc)
@@ -302,16 +286,16 @@ class Velez15mScanner(SimpleStrategyScanner):
             net_rr=float(economics["net_rr"]),
             stop_distance=risk,
             stop_pct=risk / entry * 100.0,
-            atr=atr,
-            stop_atr_ratio=risk / atr,
-            tp_atr_ratio=(self.target_r * risk) / atr,
+            atr=0.0,
+            stop_atr_ratio=0.0,
+            tp_atr_ratio=0.0,
             historical_sample_size=0,
             historical_win_rate=None,
             historical_expected_value_eur=None,
             historical_mfe_percentile=0.0,
             historical_mae_percentile=0.0,
             probability_confidence="FORWARD_TEST",
-            validation_status="VELEZ_RULES_PASSED",
+            validation_status="VELEZ_EMA_RULES_PASSED",
             validation_reason="; ".join(reasons),
             signal_class="B",
             score=score,
