@@ -1,4 +1,4 @@
-"""Telegram presentation for the Velez 15m Mode 2 PAPER engine."""
+"""Telegram presentation for the Velez 15m protected Mode 2 PAPER engine."""
 from __future__ import annotations
 
 import html
@@ -45,16 +45,15 @@ def format_velez_signal(payload: dict[str, Any]) -> str:
         f"Motore: <code>{_esc(runtime)}</code>\n\n"
         f"Entrata: <b>{_price(payload.get('entry'))}</b>\n"
         f"Stop iniziale: <b>{_price(payload.get('stop_loss'))}</b>\n"
+        f"Livello attivazione protezione (+1,5R): <b>{_price(state.get('profit_protection_trigger_price'))}</b>\n"
+        f"Stop protetto dopo attivazione (+1R): <b>{_price(state.get('profit_protected_stop_price'))}</b>\n"
         f"EMA20: <b>{_price(state.get('ema20'))}</b>\n"
         f"EMA200: <b>{_price(state.get('ema200'))}</b>\n"
         f"Setup: <b>pullback EMA20 + rottura barra precedente</b>\n\n"
-        "Gestione Mode 2:\n"
+        "Gestione Mode 2 protetta:\n"
         "• <b>nessun Take Profit fisso</b>\n"
-        "• <b>nessun pareggio automatico</b>\n"
-        "• <b>nessun trailing stop</b>\n"
-        "• uscita se viene colpito lo stop iniziale\n"
-        "• uscita LONG se una 15m chiude sotto EMA20\n"
-        "• uscita SHORT se una 15m chiude sopra EMA20\n"
+        "• a <b>+1,5R</b> la posizione resta aperta e lo stop sale a <b>+1R</b>\n"
+        "• poi uscita su stop protetto oppure chiusura 15m contro EMA20\n"
         "• uscita forzata dopo massimo 12 ore\n\n"
         "⚠️ Solo PAPER TRADING: nessun ordine reale."
     )
@@ -74,6 +73,7 @@ def format_velez_outcome(payload: dict[str, Any]) -> str:
     resolution = str(payload.get("outcome_resolution") or "n/d")
     labels = {
         "VELEZ_HARD_STOP": "Stop Loss iniziale raggiunto",
+        "VELEZ_PROTECTED_STOP": "Stop protetto a +1R raggiunto",
         "VELEZ_EMA20_EXIT": "Chiusura 15m contro EMA20",
         "VELEZ_12H_TIME_EXIT": "Limite massimo di 12 ore raggiunto",
     }
