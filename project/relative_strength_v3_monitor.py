@@ -1,8 +1,8 @@
-"""Outcome monitor for Relative Strength V3.
+"""Outcome monitor for Relative Strength V3+ with live level checks.
 
-A 15m candle that touches both stop and target is not forced into a stop-loss.
-With OHLC data the intrabar order is unknowable, so the trade is closed at the
-candle close and explicitly tagged ambiguous for later audit.
+Fast monitoring first checks the current Kraken last-trade price for immediate
+TP/SL notification. Closed 15m OHLC remains the safety net for intrabar touches
+that occur between live polls, and ambiguous candles are not forced into a loss.
 """
 from __future__ import annotations
 
@@ -13,6 +13,9 @@ from project.relative_strength_monitor import RelativeStrengthMonitor
 
 class RelativeStrengthV3Monitor(RelativeStrengthMonitor):
     def _check(self, signal: dict[str, Any]) -> bool:
+        if self._check_live_levels(signal):
+            return True
+
         frame = self._frame(signal["pair"])
         if frame.empty:
             return False
