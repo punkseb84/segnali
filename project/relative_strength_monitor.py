@@ -6,8 +6,10 @@ import os
 from typing import Any
 
 import pandas as pd
+import requests
 
 from project.daily_paper_position_monitor import DailyPaperPositionMonitor
+from project.data_collector.kraken_client import kraken_pair
 from project.relative_strength_scanner import RUNTIME_VERSION
 from project.shared.events import Event, EventType
 
@@ -21,6 +23,7 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         self.spread_rate = max(0.0, float(spread_rate))
         self.slippage_rate = max(0.0, float(slippage_rate))
         self.initial_budget = float(os.getenv("PAPER_INITIAL_BUDGET_EUR", "100"))
+        self.kraken_api_base = os.getenv("KRAKEN_API_BASE", "https://api.kraken.com/0/public").rstrip("/")
 
     def monitor_open_signals(self) -> int:
         closed = 0
@@ -79,6 +82,59 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         end = frame["timestamp"].astype("int64") // 1_000_000_000 + 900
         return frame[end <= pd.Timestamp.now(tz="UTC").timestamp()].sort_values("timestamp").reset_index(drop=True)
 
+    def _live_price(self, pair: str) -> float | None:
+        """Fetch Kraken last-trade price for fast PAPER TP/SL monitoring."""
+        if str(self.exchange if hasattr(self, "exchange") else "Kraken").lower() != "kraken":
+            return None
+        try:
+            response = requests.get(
+                f"{self.kraken_api_base}/Ticker",
+                params={"pair": kraken_pair(pair)},
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("error"):
+                self.logger.warning("RS_LIVE_PRICE kraken_error pair=%s error=%s", pair, payload.get("error"))
+                return None
+            result = payload.get("result") or {}
+            ticker = next(iter(result.values()), None)
+            if not ticker:
+                return None
+            return float(ticker["c"][0])
+        except Exception as exc:
+            self.logger.warning("RS_LIVE_PRICE failed pair=%s error=%s", pair, exc)
+            return None
+
+    @staticmethod
+    def _live_row(price: float) -> dict[str, Any]:
+        now = pd.Timestamp.now(tz="UTC")
+        return {"timestamp": now, "open": price, "high": price, "low": price, "close": price}
+
+    def _check_live_levels(self, signal: dict[str, Any]) -> bool:
+        """Close immediately when current Kraken price is beyond TP or SL."""
+        price = self._live_price(signal["pair"])
+        if price is None:
+            return False
+        direction = str(signal["state"].get("direction", "LONG"))
+        stop = float(signal["stop_loss"])
+        target = float(signal["take_profit"])
+        if direction == "LONG":
+            if price <= stop:
+                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=STOP price=%.8f level=%.8f", signal["id"], signal["pair"], price, stop)
+                return self._close(signal, stop, self._live_row(price), "RELATIVE_STRENGTH_LIVE_STOP")
+            if price >= target:
+                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=TARGET price=%.8f level=%.8f", signal["id"], signal["pair"], price, target)
+                return self._close(signal, target, self._live_row(price), "RELATIVE_STRENGTH_LIVE_TARGET")
+        else:
+            if price >= stop:
+                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=STOP price=%.8f level=%.8f", signal["id"], signal["pair"], price, stop)
+                return self._close(signal, stop, self._live_row(price), "RELATIVE_STRENGTH_LIVE_STOP")
+            if price <= target:
+                self.logger.info("RS_LIVE_EXIT id=%s pair=%s reason=TARGET price=%.8f level=%.8f", signal["id"], signal["pair"], price, target)
+                return self._close(signal, target, self._live_row(price), "RELATIVE_STRENGTH_LIVE_TARGET")
+        return False
+
     @staticmethod
     def _utc(value: Any) -> pd.Timestamp:
         ts = pd.Timestamp(value)
@@ -125,6 +181,8 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
         return float(asset["close"].iloc[-1] / asset["close"].iloc[-1-candles] - 1.0) - float(btc["close"].iloc[-1] / btc["close"].iloc[-1-candles] - 1.0)
 
     def _check(self, signal: dict[str, Any]) -> bool:
+        if self._check_live_levels(signal):
+            return True
         frame = self._frame(signal["pair"])
         if frame.empty:
             return False
@@ -138,7 +196,6 @@ class RelativeStrengthMonitor(DailyPaperPositionMonitor):
             stop, target = float(signal["stop_loss"]), float(signal["take_profit"])
             stop_hit = low <= stop if direction == "LONG" else high >= stop
             target_hit = high >= target if direction == "LONG" else low <= target
-            # Conservative rule when both levels occur in one candle: stop first.
             if stop_hit:
                 return self._close(signal, stop, row, "RELATIVE_STRENGTH_STOP")
             if target_hit:
