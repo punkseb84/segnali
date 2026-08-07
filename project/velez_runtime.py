@@ -13,6 +13,7 @@ from project.shared.events import EventBus
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 from project.velez_formatters import format_velez_outcome, format_velez_signal
+from project.velez_legacy_reconcile import reconcile_legacy_expired_safe
 from project.velez_mode2_scanner import RUNTIME_VERSION, VelezMode2Scanner
 from project.velez_monitor import Velez15mMonitor
 from project.velez_notification import VelezNotificationEngine
@@ -116,16 +117,16 @@ def main() -> None:
     )
     notification.subscribe()
 
-    # First repair signals that an older deploy marked EXPIRED before persisting
-    # their actual market outcome. This is what catches cases such as #307.
-    repaired = monitor.reconcile_migration_expired_outcomes()
-    logger.info("VELEZ_MIGRATION_OUTCOME_RECONCILIATION repaired=%s", repaired)
+    # Keep the old audit fail-safe for diagnostics, then run the parameterized
+    # implementation that correctly handles the %velez% pattern in psycopg.
+    legacy_diagnostic = monitor.reconcile_migration_expired_outcomes()
+    logger.info("VELEZ_MIGRATION_DIAGNOSTIC repaired=%s", legacy_diagnostic)
+    repaired = reconcile_legacy_expired_safe(monitor)
+    logger.info("VELEZ_SAFE_MIGRATION_OUTCOME_RECONCILIATION repaired=%s", repaired)
 
-    # Then reconcile all positions that are genuinely still active.
     reconciled = monitor.reconcile_all_active_hard_stops()
     logger.info("VELEZ_STARTUP_STOP_RECONCILIATION closed=%s", reconciled)
 
-    # Only after both audits may surviving legacy-runtime positions be retired.
     _retire_previous_open_signals(postgres)
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
