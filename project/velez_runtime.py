@@ -12,6 +12,7 @@ from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 from project.cost_aware_strategy_audit import CostAwareStrategyAudit
 from project.cost_aware_edge_breakdown_audit import CostAwareEdgeBreakdownAudit
+from project.cost_aware_walkforward_audit import CostAwareWalkForwardAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_path_audit import VelezPathAudit
@@ -45,7 +46,7 @@ def main()->None:
             if message:event_bus.publish(Event(EventType.REPORT_READY,{'message':message,'trusted_html':True,'report_type':report_type}))
         except Exception:logger.exception('%s_FATAL_GUARD action=CONTINUE_RUNTIME',report_type)
     common=dict(exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate)
-    for audit_cls,name,report_type in [(CostAwareStrategyAudit,'cost-aware-strategy-audit','COST_AWARE_STRATEGY_AUDIT'),(CostAwareEdgeBreakdownAudit,'cost-aware-edge-breakdown-audit','COST_AWARE_EDGE_BREAKDOWN_AUDIT')]:
+    for audit_cls,name,report_type in [(CostAwareStrategyAudit,'cost-aware-strategy-audit','COST_AWARE_STRATEGY_AUDIT'),(CostAwareEdgeBreakdownAudit,'cost-aware-edge-breakdown-audit','COST_AWARE_EDGE_BREAKDOWN_AUDIT'),(CostAwareWalkForwardAudit,'cost-aware-walkforward-audit','COST_AWARE_WALKFORWARD_AUDIT')]:
         try:
             audit=audit_cls(postgres,get_module_logger(name),settings.collector_pairs,**common);summary=audit.run()
             if not summary.get('skipped'):
