@@ -12,6 +12,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
+from project.v1_historical_audit import V1HistoricalAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
@@ -157,6 +158,26 @@ def main() -> None:
         logger.info("VELEZ_ENTRY_AUDIT_REPORT_SENT trades=%s", entry_summary.get("trades", 0))
     except Exception:
         logger.exception("VELEZ_ENTRY_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
+
+    try:
+        v1_audit = V1HistoricalAudit(
+            postgres,
+            get_module_logger("v1-historical-audit"),
+            notional_eur=PER_TRADE_EUR,
+            buy_fee_rate=settings.binance_buy_fee_rate,
+            sell_fee_rate=settings.binance_sell_fee_rate,
+            spread_rate=settings.binance_spread_rate,
+            slippage_rate=settings.binance_slippage_rate,
+        )
+        v1_summary = v1_audit.run()
+        event_bus.publish(Event(EventType.REPORT_READY, {
+            "message": v1_audit.format_report(v1_summary),
+            "trusted_html": True,
+            "report_type": "V1_HISTORICAL_AUDIT",
+        }))
+        logger.info("V1_HISTORICAL_AUDIT_REPORT_SENT signals=%s", v1_summary.get("signals", 0))
+    except Exception:
+        logger.exception("V1_HISTORICAL_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
