@@ -15,6 +15,7 @@ from project.simple_main import apply_simple_policy, build_collector, build_post
 from project.v1_historical_audit import V1HistoricalAudit
 from project.v1_cost_path_audit import V1CostPathAudit
 from project.v1_stop_exit_grid_audit import V1StopExitGridAudit
+from project.v1_entry_edge_audit import V1EntryEdgeAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
@@ -119,7 +120,6 @@ def main() -> None:
     logger.info("VELEZ_STARTUP_STOP_RECONCILIATION closed=%s", reconciled)
     _retire_previous_open_signals(postgres)
 
-    # Diagnostic only: these audits never change signals, entries, stops, or live exits.
     try:
         exit_audit = VelezExitAudit(postgres, get_module_logger("velez-exit-audit"))
         exit_summary = exit_audit.run()
@@ -155,6 +155,11 @@ def main() -> None:
         grid_summary = grid_audit.run()
         event_bus.publish(Event(EventType.REPORT_READY, {"message": grid_audit.format_report(grid_summary), "trusted_html": True, "report_type": "V1_STOP_EXIT_GRID_AUDIT"}))
         logger.info("V1_STOP_EXIT_GRID_AUDIT_REPORT_SENT signals=%s", grid_summary.get("signals", 0))
+
+        edge_audit = V1EntryEdgeAudit(v1_audit, get_module_logger("v1-entry-edge-audit"))
+        edge_summary = edge_audit.run()
+        event_bus.publish(Event(EventType.REPORT_READY, {"message": edge_audit.format_report(edge_summary), "trusted_html": True, "report_type": "V1_ENTRY_EDGE_AUDIT"}))
+        logger.info("V1_ENTRY_EDGE_AUDIT_REPORT_SENT rows=%s", edge_summary.get("rows", 0))
     except Exception:
         logger.exception("V1_HISTORICAL_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
