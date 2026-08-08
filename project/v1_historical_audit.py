@@ -31,6 +31,7 @@ class Trade:
     mfe_r: float = 0.0
     mae_r: float = 0.0
     tp2_touched: bool = False
+    intrabar_ambiguous: bool = False
 
     @property
     def risk(self) -> float:
@@ -153,8 +154,11 @@ class V1HistoricalAudit:
         return trades, coverage
 
     @staticmethod
-    def _resolve_fixed(trade: Trade, future: pd.DataFrame, target_r: float) -> Trade:
-        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0, tp2_touched=False)
+    def _resolve_fixed(trade: Trade, future: pd.DataFrame, target_r: float, *, stop_first: bool = False) -> Trade:
+        t = replace(
+            trade, outcome="OPEN", exit_price=None, exit_time=None,
+            mfe_r=0.0, mae_r=0.0, tp2_touched=False, intrabar_ambiguous=False,
+        )
         risk = t.risk
         target = t.entry + target_r*risk if t.direction == "LONG" else t.entry-target_r*risk
         max_fav = max_adv = 0.0
@@ -170,7 +174,11 @@ class V1HistoricalAudit:
                 t.tp2_touched = t.tp2_touched or low <= t.tp2
             t.mfe_r, t.mae_r = max_fav/risk, max_adv/risk
             if sl and tp:
-                t.outcome, t.exit_price, t.exit_time = "AMBIGUOUS", float(row["close"]), row["timestamp"]
+                t.intrabar_ambiguous = True
+                if stop_first:
+                    t.outcome, t.exit_price, t.exit_time = "SL", t.stop, row["timestamp"]
+                else:
+                    t.outcome, t.exit_price, t.exit_time = "AMBIGUOUS", float(row["close"]), row["timestamp"]
                 return t
             if sl:
                 t.outcome, t.exit_price, t.exit_time = "SL", t.stop, row["timestamp"]
@@ -185,7 +193,7 @@ class V1HistoricalAudit:
 
     @staticmethod
     def _resolve_lock(trade: Trade, future: pd.DataFrame, trigger_r: float, lock_r: float) -> Trade:
-        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0)
+        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0, intrabar_ambiguous=False)
         risk = t.risk
         active_stop = t.stop
         pending_stop: float | None = None
@@ -219,7 +227,7 @@ class V1HistoricalAudit:
 
     @staticmethod
     def _resolve_ema20(trade: Trade, future: pd.DataFrame) -> Trade:
-        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0)
+        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0, intrabar_ambiguous=False)
         risk = t.risk
         max_fav = max_adv = 0.0
         for _, row in future.iterrows():
@@ -266,27 +274,31 @@ class V1HistoricalAudit:
     def _stats(self, trades: list[Trade]) -> dict[str, Any]:
         resolved = [t for t in trades if t.outcome not in {"UNRESOLVED","AMBIGUOUS","OPEN"} and t.exit_price is not None]
         net_values = [self._net_eur(t) for t in resolved]
-        wins = [v for v in net_values if v > 0]
-        losses = [-v for v in net_values if v < 0]
+        net_wins = [v for v in net_values if v > 0]
+        net_losses = [-v for v in net_values if v < 0]
         r_values = [self._realized_r(t) for t in resolved]
-        r_wins = [v for v in r_values if v > 0]
-        r_losses = [-v for v in r_values if v < 0]
+        technical_wins = [v for v in r_values if v > 0]
+        technical_losses = [-v for v in r_values if v < 0]
         equity, peak, max_dd = 100.0, 100.0, 0.0
         for t in sorted(resolved, key=lambda x: x.exit_time):
             equity += self._net_eur(t)
             peak = max(peak, equity)
             max_dd = max(max_dd, peak-equity)
         return {
-            "resolved": len(resolved), "wins": len(wins), "losses": len(losses),
-            "win_rate": len(wins)/len(resolved) if resolved else 0.0,
+            "resolved": len(resolved),
+            "wins": len(technical_wins),
+            "losses": len(technical_losses),
+            "win_rate": len(technical_wins)/len(resolved) if resolved else 0.0,
+            "net_positive_rate": len(net_wins)/len(resolved) if resolved else 0.0,
             "net_eur": sum(net_values), "ending_capital": 100.0+sum(net_values),
-            "pf_net_eur": (sum(wins)/sum(losses)) if losses else None,
-            "pf_gross_r": (sum(r_wins)/sum(r_losses)) if r_losses else None,
+            "pf_net_eur": (sum(net_wins)/sum(net_losses)) if net_losses else None,
+            "pf_gross_r": (sum(technical_wins)/sum(technical_losses)) if technical_losses else None,
             "expectancy_eur": sum(net_values)/len(resolved) if resolved else 0.0,
             "expectancy_r": sum(r_values)/len(resolved) if resolved else 0.0,
             "max_drawdown_eur": max_dd,
-            "avg_win_eur": sum(wins)/len(wins) if wins else 0.0,
-            "avg_loss_eur": sum(losses)/len(losses) if losses else 0.0,
+            "avg_win_eur": sum(net_wins)/len(net_wins) if net_wins else 0.0,
+            "avg_loss_eur": sum(net_losses)/len(net_losses) if net_losses else 0.0,
+            "intrabar_ambiguous": sum(1 for t in trades if t.intrabar_ambiguous),
         }
 
     def run(self) -> dict[str, Any]:
@@ -303,7 +315,8 @@ class V1HistoricalAudit:
         def future(t: Trade) -> pd.DataFrame:
             return frames[t.pair][frames[t.pair]["timestamp"] > t.time]
 
-        original = [self._resolve_fixed(t, future(t), 1.5) for t in base_signals]
+        # Original audit preserves unresolved intrabar ordering as AMBIGUOUS.
+        original = [self._resolve_fixed(t, future(t), 1.5, stop_first=False) for t in base_signals]
         original_resolved = [t for t in original if t.outcome in {"TP","SL"}]
         original_stats = self._stats(original)
         original_stats.update({
@@ -317,9 +330,13 @@ class V1HistoricalAudit:
             "avg_risk_pct_losses": sum(t.risk_pct for t in original_resolved if t.outcome=="SL")/max(1,sum(t.outcome=="SL" for t in original_resolved)),
         })
 
-        fixed = {}
+        # Exit comparisons use conservative STOP-FIRST when both levels are touched
+        # inside the same 15m candle. This avoids discarding more low-target trades
+        # merely because OHLC data cannot reveal the intrabar sequence.
+        fixed: dict[str, dict[str, Any]] = {}
         for target_r in (0.50,0.75,1.00,1.25,1.50,2.00):
-            fixed[f"{target_r:.2f}R"] = self._stats([self._resolve_fixed(t, future(t), target_r) for t in base_signals])
+            simulated = [self._resolve_fixed(t, future(t), target_r, stop_first=True) for t in base_signals]
+            fixed[f"{target_r:.2f}R"] = self._stats(simulated)
 
         locks = {}
         for trigger_r, lock_r in ((0.50,0.00),(0.75,0.25),(1.00,0.50),(1.50,1.00)):
@@ -338,23 +355,32 @@ class V1HistoricalAudit:
             return "n/d" if v is None else f"{v:.2f}"
         fixed_lines = []
         for label, x in s.get("fixed_targets",{}).items():
-            fixed_lines.append(f"• TP {label}: WR <b>{100*x['win_rate']:.1f}%</b> · PF <b>{pf(x['pf_net_eur'])}</b> · P&L <b>€{x['net_eur']:+.2f}</b>")
+            fixed_lines.append(
+                f"• TP {label}: WR tecnico <b>{100*x['win_rate']:.1f}%</b> · "
+                f"net+ <b>{100*x.get('net_positive_rate',0):.1f}%</b> · PF netto <b>{pf(x['pf_net_eur'])}</b> · "
+                f"P&L <b>€{x['net_eur']:+.2f}</b> · ambigui stop-first <b>{x.get('intrabar_ambiguous',0)}</b>"
+            )
         lock_lines = []
         for label, x in s.get("locks",{}).items():
-            lock_lines.append(f"• Protezione {label}: PF <b>{pf(x['pf_net_eur'])}</b> · P&L <b>€{x['net_eur']:+.2f}</b>")
+            lock_lines.append(
+                f"• Protezione {label}: WR tecnico <b>{100*x['win_rate']:.1f}%</b> · "
+                f"PF netto <b>{pf(x['pf_net_eur'])}</b> · P&L <b>€{x['net_eur']:+.2f}</b>"
+            )
         ema = s.get("ema20_exit",{})
         return (
-            "📊 <b>AUDIT V1 · ECONOMIA E USCITE</b>\n"
+            "📊 <b>AUDIT V1 · ECONOMIA E USCITE · CORRETTO</b>\n"
             f"Segnali: <b>{s.get('signals',0)}</b> · risolti originali: <b>{s.get('resolved',0)}</b>\n"
-            f"Win rate TP1 1,5R: <b>{100*s.get('win_rate',0):.1f}%</b>\n"
+            f"Win rate tecnico TP1 1,5R: <b>{100*s.get('win_rate',0):.1f}%</b>\n"
+            f"Trade net-positive dopo costi: <b>{100*s.get('net_positive_rate',0):.1f}%</b>\n"
             f"P&L netto originale: <b>€{s.get('net_eur',0):+.2f}</b>\n"
             f"PF netto in euro: <b>{pf(pf_eur)}</b> · PF in R: <b>{pf(pf_r)}</b>\n"
             f"Expectancy: <b>€{s.get('expectancy_eur',0):+.3f}</b> · <b>{s.get('expectancy_r',0):+.3f}R</b>/trade\n"
-            f"Vincita media: <b>€{s.get('avg_win_eur',0):.3f}</b> · perdita media: <b>€{s.get('avg_loss_eur',0):.3f}</b>\n"
+            f"Vincita netta media: <b>€{s.get('avg_win_eur',0):.3f}</b> · perdita netta media: <b>€{s.get('avg_loss_eur',0):.3f}</b>\n"
             f"Rischio % medio winner: <b>{100*s.get('avg_risk_pct_wins',0):.2f}%</b> · loser: <b>{100*s.get('avg_risk_pct_losses',0):.2f}%</b>\n"
             f"MFE medio: <b>+{s.get('avg_mfe_r',0):.2f}R</b> · MAE: <b>-{s.get('avg_mae_r',0):.2f}R</b>\n\n"
-            "🎯 <b>Target fissi · stessi ingressi</b>\n" + "\n".join(fixed_lines) +
+            "🎯 <b>Target fissi · stessi ingressi · stop-first conservativo</b>\n" + "\n".join(fixed_lines) +
             "\n\n🛡 <b>Protezioni progressive</b>\n" + "\n".join(lock_lines) +
-            f"\n\n📉 <b>Uscita EMA20</b>: WR <b>{100*ema.get('win_rate',0):.1f}%</b> · PF <b>{pf(ema.get('pf_net_eur'))}</b> · P&L <b>€{ema.get('net_eur',0):+.2f}</b>\n"
-            "\n⚠️ Diagnostico: nessuna modifica al bot live; costi inclusi."
+            f"\n\n📉 <b>Uscita EMA20</b>: WR tecnico <b>{100*ema.get('win_rate',0):.1f}%</b> · "
+            f"PF netto <b>{pf(ema.get('pf_net_eur'))}</b> · P&L <b>€{ema.get('net_eur',0):+.2f}</b>\n"
+            "\n⚠️ WR = esito tecnico lordo in R. PF/P&L = dopo costi. Nei target fissi, doppio tocco SL+TP nella stessa 15m è conteggiato conservativamente come SL e segnalato a parte."
         )
