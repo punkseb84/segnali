@@ -13,6 +13,7 @@ from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 from project.velez_1h_audit import Velez1hAudit
+from project.velez_15m_trigger_1h_structure_audit import Velez15mTrigger1hStructureAudit
 from project.velez_candidate_audit import VelezCandidateAudit
 from project.velez_edge_validation_audit import VelezEdgeValidationAudit
 from project.velez_utc0612_net_audit import VelezUTC0612NetAudit
@@ -133,6 +134,16 @@ def main() -> None:
             logger.info("VELEZ_PULLBACK_ENTRY_AUDIT_REPORT_SENT rows=%s hold=%s",pullback_summary.get("rows",0),pullback_summary.get("hold",0))
         else: logger.info("VELEZ_PULLBACK_ENTRY_AUDIT_SKIP already_completed=true")
     except Exception: logger.exception("VELEZ_PULLBACK_ENTRY_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
+
+    try:
+        hybrid_audit=Velez15mTrigger1hStructureAudit(postgres,get_module_logger("velez-15m-trigger-1h-structure-audit"),settings.collector_pairs,exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate)
+        hybrid_summary=hybrid_audit.run()
+        if not hybrid_summary.get("skipped"):
+            message=hybrid_audit.format_report(hybrid_summary)
+            if message: event_bus.publish(Event(EventType.REPORT_READY,{"message":message,"trusted_html":True,"report_type":"VELEZ_15M_TRIGGER_1H_STRUCTURE_AUDIT"}))
+            logger.info("VELEZ_15M_TRIGGER_1H_STRUCTURE_AUDIT_REPORT_SENT rows=%s hold=%s",hybrid_summary.get("rows",0),hybrid_summary.get("hold",0))
+        else: logger.info("VELEZ_15M_TRIGGER_1H_STRUCTURE_AUDIT_SKIP already_completed=true")
+    except Exception: logger.exception("VELEZ_15M_TRIGGER_1H_STRUCTURE_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings,collector,None,None,scanner,monitor).run_forever()
 
