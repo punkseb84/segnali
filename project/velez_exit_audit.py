@@ -37,16 +37,13 @@ class VelezExitAudit:
                 LIMIT %s""",
             ("%velez%", "VELEZ%", limit),
         )
-        out = []
-        for r in rows:
-            out.append({
-                "id": int(r[0]), "pair": str(r[1]), "entry": float(r[2]), "stop": float(r[3]),
-                "reference": r[4] or r[6] or r[5], "created": r[5], "sent": r[6],
-                "closed": r[7], "exchange": str(r[8]), "state": self._state(r[9]),
-                "net": float(r[10] or 0) - float(r[11] or 0), "status": str(r[12]),
-                "resolution": str(r[13]),
-            })
-        return out
+        return [{
+            "id": int(r[0]), "pair": str(r[1]), "entry": float(r[2]), "stop": float(r[3]),
+            "reference": r[4] or r[6] or r[5], "created": r[5], "sent": r[6],
+            "closed": r[7], "exchange": str(r[8]), "state": self._state(r[9]),
+            "net": float(r[10] or 0)-float(r[11] or 0), "status": str(r[12]),
+            "resolution": str(r[13]),
+        } for r in rows]
 
     def _candles(self, trade: dict[str, Any]) -> pd.DataFrame:
         start = pd.Timestamp(trade["reference"])
@@ -54,12 +51,9 @@ class VelezExitAudit:
         end = pd.Timestamp(trade["closed"])
         end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
         rows = self.postgres.fetch_all(
-            """SELECT timestamp,open,high,low,close
-                 FROM market_data.ohlc
-                WHERE LOWER(TRIM(exchange))=LOWER(TRIM(%s))
-                  AND pair=%s AND timeframe='15m'
-                  AND timestamp>%s AND timestamp<=%s
-                ORDER BY timestamp ASC""",
+            """SELECT timestamp,open,high,low,close FROM market_data.ohlc
+                WHERE LOWER(TRIM(exchange))=LOWER(TRIM(%s)) AND pair=%s AND timeframe='15m'
+                  AND timestamp>%s AND timestamp<=%s ORDER BY timestamp ASC""",
             (trade["exchange"], trade["pair"], start.floor("15min").to_pydatetime(), end.to_pydatetime()),
         )
         return pd.DataFrame(rows, columns=["timestamp","open","high","low","close"])
@@ -67,43 +61,66 @@ class VelezExitAudit:
     @staticmethod
     def _mfe_mae_r(trade: dict[str, Any], frame: pd.DataFrame) -> tuple[float,float]:
         if frame.empty:
-            return 0.0, 0.0
+            return 0.0,0.0
         entry, stop = trade["entry"], trade["stop"]
         risk = abs(entry-stop)
         if risk <= 0:
-            return 0.0, 0.0
+            return 0.0,0.0
         direction = str(trade["state"].get("direction","LONG")).upper()
         if direction == "LONG":
-            mfe = (float(frame["high"].max())-entry)/risk
-            mae = (entry-float(frame["low"].min()))/risk
-        else:
-            mfe = (entry-float(frame["low"].min()))/risk
-            mae = (float(frame["high"].max())-entry)/risk
-        return float(mfe), float(mae)
+            return (float(frame["high"].max())-entry)/risk, (entry-float(frame["low"].min()))/risk
+        return (entry-float(frame["low"].min()))/risk, (float(frame["high"].max())-entry)/risk
 
     @staticmethod
     def _simulate_lock(trade: dict[str, Any], frame: pd.DataFrame, trigger_r: float, lock_r: float) -> float:
-        """Return outcome in R. Trigger candle arms protection for following candle only."""
+        """Outcome in R. Protection becomes executable only from the next candle."""
         entry, stop = trade["entry"], trade["stop"]
         risk = abs(entry-stop)
         if risk <= 0 or frame.empty:
             return 0.0
         direction = str(trade["state"].get("direction","LONG")).upper()
-        armed = False
-        active_stop = stop
+        armed, active_stop = False, stop
         for _, row in frame.iterrows():
-            high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
+            high, low = float(row["high"]), float(row["low"])
             stop_hit = low <= active_stop if direction == "LONG" else high >= active_stop
             if stop_hit:
-                return ((active_stop-entry)/risk) if direction == "LONG" else ((entry-active_stop)/risk)
-            trigger_price = entry + trigger_r*risk if direction == "LONG" else entry-trigger_r*risk
-            if not armed:
-                hit = high >= trigger_price if direction == "LONG" else low <= trigger_price
-                if hit:
-                    armed = True
-                    active_stop = entry + lock_r*risk if direction == "LONG" else entry-lock_r*risk
+                return (active_stop-entry)/risk if direction == "LONG" else (entry-active_stop)/risk
+            trigger = entry+trigger_r*risk if direction == "LONG" else entry-trigger_r*risk
+            if not armed and (high >= trigger if direction == "LONG" else low <= trigger):
+                armed = True
+                active_stop = entry+lock_r*risk if direction == "LONG" else entry-lock_r*risk
         last = float(frame.iloc[-1]["close"])
-        return ((last-entry)/risk) if direction == "LONG" else ((entry-last)/risk)
+        return (last-entry)/risk if direction == "LONG" else (entry-last)/risk
+
+    @staticmethod
+    def format_report(s: dict[str, Any]) -> str:
+        if not s.get("trades"):
+            return "📊 <b>AUDIT EXIT VELEZ</b>\n\nNessun trade Velez chiuso disponibile per l'audit."
+        th = s["loser_threshold_counts"]
+        sim = s["simulated_avg_r"]
+        return (
+            "📊 <b>AUDIT EXIT VELEZ 15m</b>\n\n"
+            f"Trade analizzati: <b>{s['trades']}</b>\n"
+            f"🟢 Vincenti: <b>{s['winners']}</b>\n"
+            f"🔴 Perdenti: <b>{s['losers']}</b>\n"
+            f"P&amp;L netto registrato: <b>€{s['actual_net_eur']:+.2f}</b>\n\n"
+            "<b>Quanto erano saliti i trade poi perdenti?</b>\n"
+            f"MFE medio perdenti: <b>+{s['loser_mfe_avg_r']:.2f}R</b>\n"
+            f"MAE medio perdenti: <b>-{s['loser_mae_avg_r']:.2f}R</b>\n"
+            f"≥ +0,25R: <b>{th[0.25]}</b>\n"
+            f"≥ +0,50R: <b>{th[0.5]}</b>\n"
+            f"≥ +0,75R: <b>{th[0.75]}</b>\n"
+            f"≥ +1,00R: <b>{th[1.0]}</b>\n"
+            f"≥ +1,50R: <b>{th[1.5]}</b>\n"
+            f"≥ +2,00R: <b>{th[2.0]}</b>\n\n"
+            "<b>Simulazione protezioni · media R/trade</b>\n"
+            f"+0,50R → stop 0R: <b>{sim['t0.50_l0.00']:+.3f}R</b>\n"
+            f"+0,75R → stop +0,25R: <b>{sim['t0.75_l0.25']:+.3f}R</b>\n"
+            f"+1,00R → stop +0,50R: <b>{sim['t1.00_l0.50']:+.3f}R</b>\n"
+            f"+1,50R → stop +1,00R (attuale): <b>{sim['t1.50_l1.00']:+.3f}R</b>\n\n"
+            f"Migliore delle quattro sul campione: <code>{s['best_rule']}</code>\n"
+            "⚠️ È diagnostica in-sample: non modifica la strategia e non prova che la regola migliore resterà tale in futuro."
+        )
 
     def run(self) -> dict[str, Any]:
         self.logger.info("VELEZ_EXIT_AUDIT_START")
@@ -111,33 +128,30 @@ class VelezExitAudit:
             trades = self._trades()
         except Exception:
             self.logger.exception("VELEZ_EXIT_AUDIT_QUERY_FAILED")
-            return {"trades": 0}
-        rows = []
-        rules = [(0.50,0.00),(0.75,0.25),(1.00,0.50),(1.50,1.00)]
+            return {"trades":0}
+        rows, rules = [], [(0.50,0.00),(0.75,0.25),(1.00,0.50),(1.50,1.00)]
         for trade in trades:
             try:
                 frame = self._candles(trade)
                 mfe, mae = self._mfe_mae_r(trade, frame)
-                sims = {f"t{t:.2f}_l{l:.2f}": self._simulate_lock(trade, frame, t, l) for t,l in rules}
+                sims = {f"t{t:.2f}_l{l:.2f}":self._simulate_lock(trade,frame,t,l) for t,l in rules}
                 rows.append({**trade,"mfe":mfe,"mae":mae,**sims})
-                self.logger.info("VELEZ_EXIT_AUDIT_TRADE id=%s pair=%s net=%.4f mfe_r=%.3f mae_r=%.3f sims=%s", trade["id"],trade["pair"],trade["net"],mfe,mae,sims)
+                self.logger.info("VELEZ_EXIT_AUDIT_TRADE id=%s pair=%s net=%.4f mfe_r=%.3f mae_r=%.3f sims=%s",trade["id"],trade["pair"],trade["net"],mfe,mae,sims)
             except Exception:
-                self.logger.exception("VELEZ_EXIT_AUDIT_TRADE_FAILED id=%s", trade.get("id"))
+                self.logger.exception("VELEZ_EXIT_AUDIT_TRADE_FAILED id=%s",trade.get("id"))
         if not rows:
             self.logger.info("VELEZ_EXIT_AUDIT_DONE trades=0")
             return {"trades":0}
-        losers = [r for r in rows if r["net"] < 0]
-        winners = [r for r in rows if r["net"] > 0]
-        thresholds = {x: sum(1 for r in losers if r["mfe"] >= x) for x in (0.25,0.50,0.75,1.00,1.50,2.00)}
-        sim_avg = {f"t{t:.2f}_l{l:.2f}": sum(r[f"t{t:.2f}_l{l:.2f}"] for r in rows)/len(rows) for t,l in rules}
-        best = max(sim_avg, key=sim_avg.get)
+        losers, winners = [r for r in rows if r["net"]<0], [r for r in rows if r["net"]>0]
+        thresholds = {x:sum(1 for r in losers if r["mfe"]>=x) for x in (0.25,0.50,0.75,1.00,1.50,2.00)}
+        sim_avg = {f"t{t:.2f}_l{l:.2f}":sum(r[f"t{t:.2f}_l{l:.2f}"] for r in rows)/len(rows) for t,l in rules}
         summary = {
-            "trades": len(rows), "winners": len(winners), "losers": len(losers),
-            "actual_net_eur": sum(r["net"] for r in rows),
-            "loser_mfe_avg_r": (sum(r["mfe"] for r in losers)/len(losers)) if losers else 0.0,
-            "loser_mae_avg_r": (sum(r["mae"] for r in losers)/len(losers)) if losers else 0.0,
-            "loser_threshold_counts": thresholds,
-            "simulated_avg_r": sim_avg, "best_rule": best,
+            "trades":len(rows),"winners":len(winners),"losers":len(losers),
+            "actual_net_eur":sum(r["net"] for r in rows),
+            "loser_mfe_avg_r":sum(r["mfe"] for r in losers)/len(losers) if losers else 0.0,
+            "loser_mae_avg_r":sum(r["mae"] for r in losers)/len(losers) if losers else 0.0,
+            "loser_threshold_counts":thresholds,"simulated_avg_r":sim_avg,
+            "best_rule":max(sim_avg,key=sim_avg.get),
         }
-        self.logger.warning("VELEZ_EXIT_AUDIT_SUMMARY %s", summary)
+        self.logger.warning("VELEZ_EXIT_AUDIT_SUMMARY %s",summary)
         return summary
