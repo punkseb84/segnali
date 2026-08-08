@@ -9,9 +9,10 @@ from project.capital_protection_migration import run_capital_protection_migratio
 from project.config.settings import load_settings
 from project.database.migrations import run_migrations
 from project.database.postgres import parse_postgres_connection_info, sanitize_postgres_error
-from project.shared.events import EventBus
+from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
+from project.velez_exit_audit import VelezExitAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
 from project.velez_legacy_reconcile import reconcile_legacy_expired_safe
 from project.velez_targeted_reconcile import reconcile_known_legacy_ids
@@ -130,6 +131,19 @@ def main() -> None:
     logger.info("VELEZ_STARTUP_STOP_RECONCILIATION closed=%s", reconciled)
 
     _retire_previous_open_signals(postgres)
+
+    # Diagnostic only: this never changes signals, stops, entries, or live exits.
+    try:
+        exit_audit = VelezExitAudit(postgres, get_module_logger("velez-exit-audit"))
+        audit_summary = exit_audit.run()
+        event_bus.publish(Event(EventType.REPORT_READY, {
+            "message": exit_audit.format_report(audit_summary),
+            "trusted_html": True,
+            "report_type": "VELEZ_EXIT_AUDIT",
+        }))
+        logger.info("VELEZ_EXIT_AUDIT_REPORT_SENT trades=%s", audit_summary.get("trades", 0))
+    except Exception:
+        logger.exception("VELEZ_EXIT_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
