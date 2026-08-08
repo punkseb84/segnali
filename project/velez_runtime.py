@@ -14,6 +14,7 @@ from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 from project.v1_historical_audit import V1HistoricalAudit
 from project.v1_cost_path_audit import V1CostPathAudit
+from project.v1_stop_exit_grid_audit import V1StopExitGridAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
@@ -54,8 +55,6 @@ def main() -> None:
         scheduler_collector_seconds=900,
         telegram_send_startup_message=False,
         enable_daily_signal_report=False,
-        # Current PAPER execution assumes immediate/market-style fills, therefore
-        # Binance Spot VIP 1 taker fees apply on both entry and exit.
         binance_buy_fee_rate=BINANCE_VIP1_TAKER_FEE_RATE,
         binance_sell_fee_rate=BINANCE_VIP1_TAKER_FEE_RATE,
     )
@@ -64,77 +63,49 @@ def main() -> None:
     logger.info("PROJECT MAIN: VELEZ 15M MODE 2 PROTECTED PAPER ONLY")
     logger.info("======================================")
     logger.info(
-        "VELEZ_RUNTIME version=%s timeframe=15m pairs=%s budget=%.2f per_trade=%.2f "
-        "fixed_tp=false protection=1.5R_to_1R exit=protected_stop_or_ema20_close_or_12h "
-        "relative_strength=false trix=false ichimoku=false paper=true notifier=strict",
+        "VELEZ_RUNTIME version=%s timeframe=15m pairs=%s budget=%.2f per_trade=%.2f fixed_tp=false protection=1.5R_to_1R exit=protected_stop_or_ema20_close_or_12h relative_strength=false trix=false ichimoku=false paper=true notifier=strict",
         RUNTIME_VERSION, pairs, PUBLIC_BUDGET_EUR, PER_TRADE_EUR,
     )
     logger.info(
-        "BINANCE_FEES vip=1 spot_maker=%.4f%% spot_taker=%.4f%% "
-        "paper_entry=taker paper_exit=taker buy_fee=%.4f%% sell_fee=%.4f%% spread=%.4f%% slippage=%.4f%%",
-        BINANCE_VIP1_MAKER_FEE_RATE * 100,
-        BINANCE_VIP1_TAKER_FEE_RATE * 100,
-        settings.binance_buy_fee_rate * 100,
-        settings.binance_sell_fee_rate * 100,
-        settings.binance_spread_rate * 100,
-        settings.binance_slippage_rate * 100,
+        "BINANCE_FEES vip=1 spot_maker=%.4f%% spot_taker=%.4f%% paper_entry=taker paper_exit=taker buy_fee=%.4f%% sell_fee=%.4f%% spread=%.4f%% slippage=%.4f%%",
+        BINANCE_VIP1_MAKER_FEE_RATE * 100, BINANCE_VIP1_TAKER_FEE_RATE * 100,
+        settings.binance_buy_fee_rate * 100, settings.binance_sell_fee_rate * 100,
+        settings.binance_spread_rate * 100, settings.binance_slippage_rate * 100,
     )
 
     try:
         postgres = build_postgres(settings)
     except Exception as exc:
-        logger.error(
-            "PostgreSQL connection failed: %s",
-            sanitize_postgres_error(str(exc), settings.database_url),
-        )
+        logger.error("PostgreSQL connection failed: %s", sanitize_postgres_error(str(exc), settings.database_url))
         raise SystemExit(1) from exc
 
     logger.info("PostgreSQL connection: OK")
     logger.info("PostgreSQL %s", parse_postgres_connection_info(settings.database_url).display())
     run_migrations(postgres)
     run_capital_protection_migration(postgres)
-
     monitor_module.RUNTIME_VERSION = RUNTIME_VERSION
 
     event_bus = EventBus()
     notification_service.format_signal_message = format_velez_signal
     notification_service.format_outcome_message = format_velez_outcome
-
     collector = build_collector(settings, event_bus, postgres)
     scanner = VelezMode2Scanner(
-        postgres, event_bus, settings.collector_pairs,
-        exchange=settings.exchange_name,
-        trade_notional_eur=PER_TRADE_EUR,
-        buy_fee_rate=settings.binance_buy_fee_rate,
-        sell_fee_rate=settings.binance_sell_fee_rate,
-        spread_rate=settings.binance_spread_rate,
-        slippage_rate=settings.binance_slippage_rate,
-        quantity_step=settings.binance_quantity_step,
-        min_qty=settings.binance_min_qty,
-        min_notional_eur=settings.binance_min_notional_eur,
-        signal_cooldown_minutes=60,
-        max_signals_per_cycle=2,
-        max_signals_per_day=8,
-        max_open_positions=MAX_OPEN,
-        max_per_pair_day=2,
-        target_r=1.5,
-        max_hold_candles=48,
-        pullback_bars=3,
+        postgres, event_bus, settings.collector_pairs, exchange=settings.exchange_name,
+        trade_notional_eur=PER_TRADE_EUR, buy_fee_rate=settings.binance_buy_fee_rate,
+        sell_fee_rate=settings.binance_sell_fee_rate, spread_rate=settings.binance_spread_rate,
+        slippage_rate=settings.binance_slippage_rate, quantity_step=settings.binance_quantity_step,
+        min_qty=settings.binance_min_qty, min_notional_eur=settings.binance_min_notional_eur,
+        signal_cooldown_minutes=60, max_signals_per_cycle=2, max_signals_per_day=8,
+        max_open_positions=MAX_OPEN, max_per_pair_day=2, target_r=1.5, max_hold_candles=48, pullback_bars=3,
     )
     monitor = Velez15mMonitor(
-        postgres, event_bus,
-        ambiguous_candle_mode=settings.ambiguous_candle_mode,
-        max_shadow_signals_per_cycle=300,
-        sell_fee_rate=settings.binance_sell_fee_rate,
-        spread_rate=settings.binance_spread_rate,
-        slippage_rate=settings.binance_slippage_rate,
+        postgres, event_bus, ambiguous_candle_mode=settings.ambiguous_candle_mode,
+        max_shadow_signals_per_cycle=300, sell_fee_rate=settings.binance_sell_fee_rate,
+        spread_rate=settings.binance_spread_rate, slippage_rate=settings.binance_slippage_rate,
     )
     notification = VelezNotificationEngine(
-        event_bus,
-        enabled=True,
-        max_message_length=settings.telegram_max_message_length,
-        max_retries=settings.telegram_max_retries,
-        postgres=postgres,
+        event_bus, enabled=True, max_message_length=settings.telegram_max_message_length,
+        max_retries=settings.telegram_max_retries, postgres=postgres,
     )
     notification.subscribe()
 
@@ -142,24 +113,17 @@ def main() -> None:
     logger.info("VELEZ_MIGRATION_DIAGNOSTIC repaired=%s", legacy_diagnostic)
     repaired = reconcile_legacy_expired_safe(monitor)
     logger.info("VELEZ_SAFE_MIGRATION_OUTCOME_RECONCILIATION repaired=%s", repaired)
-
     targeted = reconcile_known_legacy_ids(monitor)
     logger.info("VELEZ_TARGETED_OUTCOME_RECONCILIATION repaired=%s", targeted)
-
     reconciled = monitor.reconcile_all_active_hard_stops()
     logger.info("VELEZ_STARTUP_STOP_RECONCILIATION closed=%s", reconciled)
-
     _retire_previous_open_signals(postgres)
 
     # Diagnostic only: these audits never change signals, entries, stops, or live exits.
     try:
         exit_audit = VelezExitAudit(postgres, get_module_logger("velez-exit-audit"))
         exit_summary = exit_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {
-            "message": exit_audit.format_report(exit_summary),
-            "trusted_html": True,
-            "report_type": "VELEZ_EXIT_AUDIT",
-        }))
+        event_bus.publish(Event(EventType.REPORT_READY, {"message": exit_audit.format_report(exit_summary), "trusted_html": True, "report_type": "VELEZ_EXIT_AUDIT"}))
         logger.info("VELEZ_EXIT_AUDIT_REPORT_SENT trades=%s", exit_summary.get("trades", 0))
     except Exception:
         logger.exception("VELEZ_EXIT_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
@@ -167,41 +131,30 @@ def main() -> None:
     try:
         entry_audit = VelezEntryAudit(postgres, get_module_logger("velez-entry-audit"))
         entry_summary = entry_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {
-            "message": entry_audit.format_report(entry_summary),
-            "trusted_html": True,
-            "report_type": "VELEZ_ENTRY_AUDIT",
-        }))
+        event_bus.publish(Event(EventType.REPORT_READY, {"message": entry_audit.format_report(entry_summary), "trusted_html": True, "report_type": "VELEZ_ENTRY_AUDIT"}))
         logger.info("VELEZ_ENTRY_AUDIT_REPORT_SENT trades=%s", entry_summary.get("trades", 0))
     except Exception:
         logger.exception("VELEZ_ENTRY_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     try:
         v1_audit = V1HistoricalAudit(
-            postgres,
-            get_module_logger("v1-historical-audit"),
-            notional_eur=PER_TRADE_EUR,
-            buy_fee_rate=settings.binance_buy_fee_rate,
-            sell_fee_rate=settings.binance_sell_fee_rate,
-            spread_rate=settings.binance_spread_rate,
-            slippage_rate=settings.binance_slippage_rate,
+            postgres, get_module_logger("v1-historical-audit"), notional_eur=PER_TRADE_EUR,
+            buy_fee_rate=settings.binance_buy_fee_rate, sell_fee_rate=settings.binance_sell_fee_rate,
+            spread_rate=settings.binance_spread_rate, slippage_rate=settings.binance_slippage_rate,
         )
         v1_summary = v1_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {
-            "message": v1_audit.format_report(v1_summary),
-            "trusted_html": True,
-            "report_type": "V1_HISTORICAL_AUDIT",
-        }))
+        event_bus.publish(Event(EventType.REPORT_READY, {"message": v1_audit.format_report(v1_summary), "trusted_html": True, "report_type": "V1_HISTORICAL_AUDIT"}))
         logger.info("V1_HISTORICAL_AUDIT_REPORT_SENT signals=%s", v1_summary.get("signals", 0))
 
         cost_path_audit = V1CostPathAudit(v1_audit, get_module_logger("v1-cost-path-audit"))
         cost_path_summary = cost_path_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {
-            "message": cost_path_audit.format_report(cost_path_summary),
-            "trusted_html": True,
-            "report_type": "V1_COST_PATH_AUDIT",
-        }))
+        event_bus.publish(Event(EventType.REPORT_READY, {"message": cost_path_audit.format_report(cost_path_summary), "trusted_html": True, "report_type": "V1_COST_PATH_AUDIT"}))
         logger.info("V1_COST_PATH_AUDIT_REPORT_SENT trades=%s", cost_path_summary.get("trades", 0))
+
+        grid_audit = V1StopExitGridAudit(v1_audit, get_module_logger("v1-stop-exit-grid-audit"))
+        grid_summary = grid_audit.run()
+        event_bus.publish(Event(EventType.REPORT_READY, {"message": grid_audit.format_report(grid_summary), "trusted_html": True, "report_type": "V1_STOP_EXIT_GRID_AUDIT"}))
+        logger.info("V1_STOP_EXIT_GRID_AUDIT_REPORT_SENT signals=%s", grid_summary.get("signals", 0))
     except Exception:
         logger.exception("V1_HISTORICAL_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
