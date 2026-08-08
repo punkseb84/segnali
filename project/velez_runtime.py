@@ -17,6 +17,7 @@ from project.velez_candidate_audit import VelezCandidateAudit
 from project.velez_edge_validation_audit import VelezEdgeValidationAudit
 from project.velez_utc0612_net_audit import VelezUTC0612NetAudit
 from project.velez_structure_economics_audit import VelezStructureEconomicsAudit
+from project.velez_pullback_entry_audit import VelezPullbackEntryAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_path_audit import VelezPathAudit
@@ -114,13 +115,7 @@ def main() -> None:
     except Exception: logger.exception("VELEZ_UTC0612_NET_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     try:
-        structure_audit=VelezStructureEconomicsAudit(
-            postgres,get_module_logger("velez-structure-economics-audit"),settings.collector_pairs,
-            exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,
-            notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,
-            sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,
-            slippage_rate=settings.binance_slippage_rate,
-        )
+        structure_audit=VelezStructureEconomicsAudit(postgres,get_module_logger("velez-structure-economics-audit"),settings.collector_pairs,exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate)
         structure_summary=structure_audit.run()
         if not structure_summary.get("skipped"):
             message=structure_audit.format_report(structure_summary)
@@ -128,6 +123,16 @@ def main() -> None:
             logger.info("VELEZ_STRUCTURE_ECONOMICS_AUDIT_REPORT_SENT rows=%s hold=%s",structure_summary.get("rows",0),structure_summary.get("hold",0))
         else: logger.info("VELEZ_STRUCTURE_ECONOMICS_AUDIT_SKIP already_completed=true")
     except Exception: logger.exception("VELEZ_STRUCTURE_ECONOMICS_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
+
+    try:
+        pullback_audit=VelezPullbackEntryAudit(postgres,get_module_logger("velez-pullback-entry-audit"),settings.collector_pairs,exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,notional_eur=PER_TRADE_EUR,maker_fee_rate=BINANCE_VIP1_MAKER_FEE_RATE,taker_fee_rate=BINANCE_VIP1_TAKER_FEE_RATE,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate)
+        pullback_summary=pullback_audit.run()
+        if not pullback_summary.get("skipped"):
+            message=pullback_audit.format_report(pullback_summary)
+            if message: event_bus.publish(Event(EventType.REPORT_READY,{"message":message,"trusted_html":True,"report_type":"VELEZ_PULLBACK_ENTRY_AUDIT"}))
+            logger.info("VELEZ_PULLBACK_ENTRY_AUDIT_REPORT_SENT rows=%s hold=%s",pullback_summary.get("rows",0),pullback_summary.get("hold",0))
+        else: logger.info("VELEZ_PULLBACK_ENTRY_AUDIT_SKIP already_completed=true")
+    except Exception: logger.exception("VELEZ_PULLBACK_ENTRY_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings,collector,None,None,scanner,monitor).run_forever()
 
