@@ -149,6 +149,8 @@ def main() -> None:
     except Exception:
         logger.exception("VELEZ_PATH_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
+    # V1 audits are retained as diagnostics in Railway logs only.
+    # They are intentionally NOT published to EventBus/Telegram anymore.
     try:
         v1_audit = V1HistoricalAudit(
             postgres, get_module_logger("v1-historical-audit"), notional_eur=PER_TRADE_EUR,
@@ -156,23 +158,19 @@ def main() -> None:
             spread_rate=settings.binance_spread_rate, slippage_rate=settings.binance_slippage_rate,
         )
         v1_summary = v1_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {"message": v1_audit.format_report(v1_summary), "trusted_html": True, "report_type": "V1_HISTORICAL_AUDIT"}))
-        logger.info("V1_HISTORICAL_AUDIT_REPORT_SENT signals=%s", v1_summary.get("signals", 0))
+        logger.info("V1_HISTORICAL_AUDIT_LOG_ONLY signals=%s", v1_summary.get("signals", 0))
 
         cost_path_audit = V1CostPathAudit(v1_audit, get_module_logger("v1-cost-path-audit"))
         cost_path_summary = cost_path_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {"message": cost_path_audit.format_report(cost_path_summary), "trusted_html": True, "report_type": "V1_COST_PATH_AUDIT"}))
-        logger.info("V1_COST_PATH_AUDIT_REPORT_SENT trades=%s", cost_path_summary.get("trades", 0))
+        logger.info("V1_COST_PATH_AUDIT_LOG_ONLY trades=%s", cost_path_summary.get("trades", 0))
 
         grid_audit = V1StopExitGridAudit(v1_audit, get_module_logger("v1-stop-exit-grid-audit"))
         grid_summary = grid_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {"message": grid_audit.format_report(grid_summary), "trusted_html": True, "report_type": "V1_STOP_EXIT_GRID_AUDIT"}))
-        logger.info("V1_STOP_EXIT_GRID_AUDIT_REPORT_SENT signals=%s", grid_summary.get("signals", 0))
+        logger.info("V1_STOP_EXIT_GRID_AUDIT_LOG_ONLY signals=%s", grid_summary.get("signals", 0))
 
         edge_audit = V1EntryEdgeAudit(v1_audit, get_module_logger("v1-entry-edge-audit"))
         edge_summary = edge_audit.run()
-        event_bus.publish(Event(EventType.REPORT_READY, {"message": edge_audit.format_report(edge_summary), "trusted_html": True, "report_type": "V1_ENTRY_EDGE_AUDIT"}))
-        logger.info("V1_ENTRY_EDGE_AUDIT_REPORT_SENT rows=%s", edge_summary.get("rows", 0))
+        logger.info("V1_ENTRY_EDGE_AUDIT_LOG_ONLY rows=%s", edge_summary.get("rows", 0))
     except Exception:
         logger.exception("V1_HISTORICAL_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
