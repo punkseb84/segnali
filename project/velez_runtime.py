@@ -18,6 +18,7 @@ from project.v1_stop_exit_grid_audit import V1StopExitGridAudit
 from project.v1_entry_edge_audit import V1EntryEdgeAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
+from project.velez_path_audit import VelezPathAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
 from project.velez_legacy_reconcile import reconcile_legacy_expired_safe
 from project.velez_targeted_reconcile import reconcile_known_legacy_ids
@@ -135,6 +136,18 @@ def main() -> None:
         logger.info("VELEZ_ENTRY_AUDIT_REPORT_SENT trades=%s", entry_summary.get("trades", 0))
     except Exception:
         logger.exception("VELEZ_ENTRY_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
+
+    try:
+        path_audit = VelezPathAudit(
+            postgres, get_module_logger("velez-path-audit"), notional_eur=PER_TRADE_EUR,
+            buy_fee_rate=settings.binance_buy_fee_rate, sell_fee_rate=settings.binance_sell_fee_rate,
+            spread_rate=settings.binance_spread_rate, slippage_rate=settings.binance_slippage_rate,
+        )
+        path_summary = path_audit.run()
+        event_bus.publish(Event(EventType.REPORT_READY, {"message": path_audit.format_report(path_summary), "trusted_html": True, "report_type": "VELEZ_PATH_AUDIT"}))
+        logger.info("VELEZ_PATH_AUDIT_REPORT_SENT trades=%s", path_summary.get("trades", 0))
+    except Exception:
+        logger.exception("VELEZ_PATH_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     try:
         v1_audit = V1HistoricalAudit(
