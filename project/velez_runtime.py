@@ -12,6 +12,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
+from project.velez_candidate_audit import VelezCandidateAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_path_audit import VelezPathAudit
@@ -144,6 +145,23 @@ def main() -> None:
         logger.info("VELEZ_PATH_AUDIT_REPORT_SENT trades=%s", path_summary.get("trades", 0))
     except Exception:
         logger.exception("VELEZ_PATH_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
+
+    # One-shot historical candidate audit. The DB version marker prevents costly reruns.
+    try:
+        candidate_audit = VelezCandidateAudit(
+            postgres, get_module_logger("velez-candidate-audit"), settings.collector_pairs,
+            exchange=settings.exchange_name, pullback_bars=3, max_bars_per_pair=3200,
+        )
+        candidate_summary = candidate_audit.run()
+        if not candidate_summary.get("skipped"):
+            message = candidate_audit.format_report(candidate_summary)
+            if message:
+                event_bus.publish(Event(EventType.REPORT_READY, {"message": message, "trusted_html": True, "report_type": "VELEZ_CANDIDATE_AUDIT"}))
+            logger.info("VELEZ_CANDIDATE_AUDIT_REPORT_SENT candidates=%s qualified=%s", candidate_summary.get("candidates", 0), candidate_summary.get("qualified", 0))
+        else:
+            logger.info("VELEZ_CANDIDATE_AUDIT_SKIP already_completed=true")
+    except Exception:
+        logger.exception("VELEZ_CANDIDATE_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
