@@ -15,6 +15,7 @@ from project.simple_main import apply_simple_policy, build_collector, build_post
 from project.velez_1h_audit import Velez1hAudit
 from project.velez_candidate_audit import VelezCandidateAudit
 from project.velez_edge_validation_audit import VelezEdgeValidationAudit
+from project.velez_utc0612_net_audit import VelezUTC0612NetAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_path_audit import VelezPathAudit
@@ -77,7 +78,6 @@ def main() -> None:
             if message: event_bus.publish(Event(EventType.REPORT_READY,{"message":message,"trusted_html":True,"report_type":report_type}))
         except Exception: logger.exception("%s_FATAL_GUARD action=CONTINUE_RUNTIME",report_type)
 
-    # Heavy historical audits are one-shot and DB-versioned to avoid Railway cost on restart.
     for audit_cls,name,report_type in [
         (VelezCandidateAudit,"velez-candidate-audit","VELEZ_CANDIDATE_AUDIT"),
         (VelezEdgeValidationAudit,"velez-edge-validation-audit","VELEZ_EDGE_VALIDATION_AUDIT"),
@@ -93,21 +93,24 @@ def main() -> None:
         except Exception: logger.exception("%s_FATAL_GUARD action=CONTINUE_RUNTIME",report_type)
 
     try:
-        audit_1h=Velez1hAudit(
-            postgres,get_module_logger("velez-1h-audit"),settings.collector_pairs,
-            exchange=settings.exchange_name,notional_eur=PER_TRADE_EUR,
-            buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,
-            spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate,
-            pullback_bars=3,max_bars_per_pair=1800,
-        )
+        audit_1h=Velez1hAudit(postgres,get_module_logger("velez-1h-audit"),settings.collector_pairs,exchange=settings.exchange_name,notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate,pullback_bars=3,max_bars_per_pair=1800)
         summary_1h=audit_1h.run()
         if not summary_1h.get("skipped"):
             message=audit_1h.format_report(summary_1h)
             if message: event_bus.publish(Event(EventType.REPORT_READY,{"message":message,"trusted_html":True,"report_type":"VELEZ_1H_AUDIT"}))
             logger.info("VELEZ_1H_AUDIT_REPORT_SENT qualified=%s",summary_1h.get("qualified",0))
         else: logger.info("VELEZ_1H_AUDIT_SKIP already_completed=true")
-    except Exception:
-        logger.exception("VELEZ_1H_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
+    except Exception: logger.exception("VELEZ_1H_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
+
+    try:
+        net_audit=VelezUTC0612NetAudit(postgres,get_module_logger("velez-utc0612-net-audit"),settings.collector_pairs,exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate)
+        net_summary=net_audit.run()
+        if not net_summary.get("skipped"):
+            message=net_audit.format_report(net_summary)
+            if message: event_bus.publish(Event(EventType.REPORT_READY,{"message":message,"trusted_html":True,"report_type":"VELEZ_UTC0612_NET_AUDIT"}))
+            logger.info("VELEZ_UTC0612_NET_AUDIT_REPORT_SENT utc_n=%s holdout_n=%s",net_summary.get("utc_n",0),net_summary.get("utc_hold_n",0))
+        else: logger.info("VELEZ_UTC0612_NET_AUDIT_SKIP already_completed=true")
+    except Exception: logger.exception("VELEZ_UTC0612_NET_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings,collector,None,None,scanner,monitor).run_forever()
 
