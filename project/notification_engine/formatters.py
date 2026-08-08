@@ -136,17 +136,9 @@ def _classification_lines(payload: dict[str, Any]) -> str:
 def _requirements_lines(payload: dict[str, Any]) -> str:
     breakdown = _score_breakdown(payload)
     net_profit = float(_float(payload.get("net_profit_tp1_eur")) or 0.0)
-    min_profit = float(
-        _float(breakdown.get("min_net_profit_required_raw"))
-        or _float(_reason_value(payload, "min_net_profit_required="))
-        or 0.30
-    )
+    min_profit = float(_float(breakdown.get("min_net_profit_required_raw")) or _float(_reason_value(payload, "min_net_profit_required=")) or 0.30)
     net_rr = float(_float(payload.get("net_rr")) or 0.0)
-    min_rr = float(
-        _float(breakdown.get("min_net_rr_required_raw"))
-        or _float(_reason_value(payload, "min_net_rr_required="))
-        or 1.05
-    )
+    min_rr = float(_float(breakdown.get("min_net_rr_required_raw")) or _float(_reason_value(payload, "min_net_rr_required=")) or 1.05)
     score = float(_float(payload.get("score")) or 0.0)
     min_score = float(_float(breakdown.get("min_total_score_required_raw")) or 55.0)
     live_score = float(_float(breakdown.get("live_setup_raw")) or 0.0)
@@ -154,45 +146,27 @@ def _requirements_lines(payload: dict[str, Any]) -> str:
     regime_aligned = bool(float(_float(breakdown.get("regime_aligned_flag")) or 0.0))
     validation = str(payload.get("validation_status") or "n/d")
     validation_ok = validation == "PASSED"
-    return "\n".join(
-        [
-            _pass_line(net_profit + 1e-9 >= min_profit, "Profitto netto", f"€{net_profit:.4f}", f"≥ €{min_profit:.4f}"),
-            _pass_line(net_rr + 1e-9 >= min_rr, "R/R netto", f"{net_rr:.4f}", f"≥ {min_rr:.4f}"),
-            _pass_line(score >= min_score, "Score totale", f"{score:.1f}/100", f"≥ {min_score:.1f}"),
-            _pass_line(live_score >= min_live, "Score setup live", f"{live_score:.1f}/100", f"≥ {min_live:.1f}"),
-            _pass_line(regime_aligned, "Regime", "coerente" if regime_aligned else "non coerente"),
-            _pass_line(validation_ok, "Validazione", validation),
-        ]
-    )
+    return "\n".join([
+        _pass_line(net_profit + 1e-9 >= min_profit, "Profitto netto", f"€{net_profit:.4f}", f"≥ €{min_profit:.4f}"),
+        _pass_line(net_rr + 1e-9 >= min_rr, "R/R netto", f"{net_rr:.4f}", f"≥ {min_rr:.4f}"),
+        _pass_line(score >= min_score, "Score totale", f"{score:.1f}/100", f"≥ {min_score:.1f}"),
+        _pass_line(live_score >= min_live, "Score setup live", f"{live_score:.1f}/100", f"≥ {min_live:.1f}"),
+        _pass_line(regime_aligned, "Regime", "coerente" if regime_aligned else "non coerente"),
+        _pass_line(validation_ok, "Validazione", validation),
+    ])
 
 
 def _reason_text(reason: Any) -> str | None:
     text = str(reason or "").strip()
     if not text or text.startswith("score_breakdown="):
         return None
-    if text.startswith(
-        (
-            "classification_primary_reason=",
-            "classification_blockers=",
-            "classification_confidence_notes=",
-            "probability_sample=",
-            "net_rr_exact=",
-            "min_net_rr_required=",
-            "min_net_profit_required=",
-        )
-    ):
+    if text.startswith(("classification_primary_reason=", "classification_blockers=", "classification_confidence_notes=", "probability_sample=", "net_rr_exact=", "min_net_rr_required=", "min_net_profit_required=")):
         return None
     mappings = {
-        "profit_factor=": "Profit factor storico",
-        "expectancy=": "Expectancy storica",
-        "reward_risk=": "R/R tecnico",
-        "atr_multiplier=": "Moltiplicatore ATR",
-        "regime=": "Regime",
-        "signal_class=": "Classe",
-        "historical_ev=": "EV storico",
-        "historical_ev_decision=": "Valutazione EV",
-        "research_trades=": "Trade ricerca specifica",
-        "live_setup_score=": "Score setup live",
+        "profit_factor=": "Profit factor storico", "expectancy=": "Expectancy storica",
+        "reward_risk=": "R/R tecnico", "atr_multiplier=": "Moltiplicatore ATR", "regime=": "Regime",
+        "signal_class=": "Classe", "historical_ev=": "EV storico", "historical_ev_decision=": "Valutazione EV",
+        "research_trades=": "Trade ricerca specifica", "live_setup_score=": "Score setup live",
         "economic_target_feasible=": "Target economicamente fattibile",
     }
     for prefix, label in mappings.items():
@@ -247,11 +221,7 @@ def format_signal_message(payload: dict[str, Any]) -> str:
     signal_class = _escape(payload.get("signal_class", "B"))
     breakdown = _score_breakdown(payload)
     research_trades = int(_float(breakdown.get("research_trades_raw")) or 0)
-    probability_sample = int(
-        _float(breakdown.get("probability_sample_raw"))
-        or _float(payload.get("historical_sample_size"))
-        or 0
-    )
+    probability_sample = int(_float(breakdown.get("probability_sample_raw")) or _float(payload.get("historical_sample_size")) or 0)
     live_score = _float(breakdown.get("live_setup_raw"))
     return (
         f"🟢 <b>NUOVO SEGNALE LONG</b> · Classe <b>{signal_class}</b>\n"
@@ -286,47 +256,15 @@ def format_signal_message(payload: dict[str, Any]) -> str:
 
 
 def format_watchlist_message(payload: dict[str, Any]) -> str:
-    breakdown = _score_breakdown(payload)
-    research_trades = int(_float(breakdown.get("research_trades_raw")) or 0)
-    research_missing = bool(_float(breakdown.get("research_trades_missing_flag")) or 0.0)
-    probability_sample = int(
-        _float(breakdown.get("probability_sample_raw"))
-        or _float(payload.get("historical_sample_size"))
-        or 0
-    )
-    return (
-        "🟡 <b>WATCHLIST</b> · Classe <b>C</b>\n"
-        f"🆔 Osservazione {_signal_id(payload)}\n\n"
-        f"<b>{_escape(payload.get('pair'))}</b> · {_escape(payload.get('timeframe'))}\n"
-        f"Strategia: <b>{_escape(payload.get('strategy'))}</b>\n"
-        f"Regime: <b>{_escape(payload.get('regime'))}</b>\n\n"
-        "👀 <b>SETUP NON ANCORA OPERATIVO · NON È UN SEGNALE DI INGRESSO</b>\n\n"
-        "💰 <b>Livelli teorici</b>\n"
-        f"• Entry: <code>{_price(payload.get('entry'))}</code>\n"
-        f"• Stop: <code>{_price(payload.get('stop_loss'))}</code>\n"
-        f"• Target: <code>{_price(payload.get('effective_take_profit') or payload.get('take_profit'))}</code>\n\n"
-        "🚦 <b>Verifica requisiti A/B</b>\n"
-        f"{_requirements_lines(payload)}\n\n"
-        "⛔ <b>Motivo effettivo della classe C</b>\n"
-        f"{_classification_lines(payload)}\n\n"
-        "📐 <b>Confidenza statistica</b>\n"
-        f"• Trade ricerca specifica: <b>{'non disponibili' if research_missing else research_trades}</b>\n"
-        f"• Campione probabilistico: <b>{probability_sample}</b>\n"
-        f"• Confidenza probabilistica: <b>{_escape(payload.get('probability_confidence'))}</b>\n"
-        f"• Validazione: <b>{_escape(payload.get('validation_status'))}</b>"
-        f" ({_escape(payload.get('validation_reason'))})\n\n"
-        "📌 <b>Elementi osservati</b>\n"
-        f"{_reason_lines(payload.get('reasons'))}\n\n"
-        "⚠️ <b>Solo monitoraggio:</b> entrare soltanto quando il bot pubblica un nuovo segnale A/B."
-    )
+    return "📋 <b>WATCHLIST</b>\n" + _escape(payload)
 
 
 def format_outcome_message(payload: dict[str, Any]) -> str:
-    is_stop = payload.get("outcome") == "STOP_LOSS"
-    title = "🔴 <b>STOP LOSS RAGGIUNTO</b>" if is_stop else "🎯 <b>TARGET RAGGIUNTO</b>"
-    result_value = payload.get("net_loss_sl_eur") if is_stop else payload.get("net_profit_tp1_eur")
-    result_text = f"-€{abs(_float(result_value) or 0):.2f}" if is_stop else _money(result_value, signed=True)
-    link_note = "Tocca l’ID o la risposta Telegram per aprire il segnale originale."
+    result = _float(payload.get("realized_net_eur"))
+    result_text = _money(result, signed=True)
+    outcome = str(payload.get("outcome") or "")
+    title = "🟢 <b>OPERAZIONE CHIUSA</b>" if (result or 0) >= 0 else "🔴 <b>OPERAZIONE CHIUSA</b>"
+    link_note = "Apri il segnale originale dal collegamento sull'ID." if payload.get("telegram_message_link") else "Riferimento al segnale originale non disponibile."
     return (
         f"{title}\n"
         f"🆔 Segnale {_signal_id(payload, linked=True)}\n\n"
@@ -351,6 +289,12 @@ def format_report_message(payload: dict[str, Any]) -> str:
     raw = payload.get("message")
     if raw is None:
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    # Audit/diagnostic formatters already produce Telegram-safe HTML. Escaping them
+    # again would display literal tags such as <b> in the chat.
+    if payload.get("trusted_html") is True:
+        return str(raw)
+
     lines = [line.strip() for line in str(raw).splitlines() if line.strip()]
     body: list[str] = []
     for line in lines[1:] if lines and "report" in lines[0].lower() else lines:
