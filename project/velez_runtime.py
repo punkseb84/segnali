@@ -28,6 +28,8 @@ from project.velez_universe import resolve_top_market_cap_pairs
 PUBLIC_BUDGET_EUR = 100.0
 MAX_OPEN = 4
 PER_TRADE_EUR = PUBLIC_BUDGET_EUR / MAX_OPEN
+BINANCE_VIP1_MAKER_FEE_RATE = 0.0007
+BINANCE_VIP1_TAKER_FEE_RATE = 0.0016
 
 
 def _retire_previous_open_signals(postgres: object) -> None:
@@ -52,6 +54,10 @@ def main() -> None:
         scheduler_collector_seconds=900,
         telegram_send_startup_message=False,
         enable_daily_signal_report=False,
+        # Current PAPER execution assumes immediate/market-style fills, therefore
+        # Binance Spot VIP 1 taker fees apply on both entry and exit.
+        binance_buy_fee_rate=BINANCE_VIP1_TAKER_FEE_RATE,
+        binance_sell_fee_rate=BINANCE_VIP1_TAKER_FEE_RATE,
     )
     logger = get_module_logger("system")
     logger.info("======================================")
@@ -62,6 +68,16 @@ def main() -> None:
         "fixed_tp=false protection=1.5R_to_1R exit=protected_stop_or_ema20_close_or_12h "
         "relative_strength=false trix=false ichimoku=false paper=true notifier=strict",
         RUNTIME_VERSION, pairs, PUBLIC_BUDGET_EUR, PER_TRADE_EUR,
+    )
+    logger.info(
+        "BINANCE_FEES vip=1 spot_maker=%.4f%% spot_taker=%.4f%% "
+        "paper_entry=taker paper_exit=taker buy_fee=%.4f%% sell_fee=%.4f%% spread=%.4f%% slippage=%.4f%%",
+        BINANCE_VIP1_MAKER_FEE_RATE * 100,
+        BINANCE_VIP1_TAKER_FEE_RATE * 100,
+        settings.binance_buy_fee_rate * 100,
+        settings.binance_sell_fee_rate * 100,
+        settings.binance_spread_rate * 100,
+        settings.binance_slippage_rate * 100,
     )
 
     try:
