@@ -12,10 +12,6 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.v1_historical_audit import V1HistoricalAudit
-from project.v1_cost_path_audit import V1CostPathAudit
-from project.v1_stop_exit_grid_audit import V1StopExitGridAudit
-from project.v1_entry_edge_audit import V1EntryEdgeAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_path_audit import VelezPathAudit
@@ -148,31 +144,6 @@ def main() -> None:
         logger.info("VELEZ_PATH_AUDIT_REPORT_SENT trades=%s", path_summary.get("trades", 0))
     except Exception:
         logger.exception("VELEZ_PATH_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
-
-    # V1 audits are retained as diagnostics in Railway logs only.
-    # They are intentionally NOT published to EventBus/Telegram anymore.
-    try:
-        v1_audit = V1HistoricalAudit(
-            postgres, get_module_logger("v1-historical-audit"), notional_eur=PER_TRADE_EUR,
-            buy_fee_rate=settings.binance_buy_fee_rate, sell_fee_rate=settings.binance_sell_fee_rate,
-            spread_rate=settings.binance_spread_rate, slippage_rate=settings.binance_slippage_rate,
-        )
-        v1_summary = v1_audit.run()
-        logger.info("V1_HISTORICAL_AUDIT_LOG_ONLY signals=%s", v1_summary.get("signals", 0))
-
-        cost_path_audit = V1CostPathAudit(v1_audit, get_module_logger("v1-cost-path-audit"))
-        cost_path_summary = cost_path_audit.run()
-        logger.info("V1_COST_PATH_AUDIT_LOG_ONLY trades=%s", cost_path_summary.get("trades", 0))
-
-        grid_audit = V1StopExitGridAudit(v1_audit, get_module_logger("v1-stop-exit-grid-audit"))
-        grid_summary = grid_audit.run()
-        logger.info("V1_STOP_EXIT_GRID_AUDIT_LOG_ONLY signals=%s", grid_summary.get("signals", 0))
-
-        edge_audit = V1EntryEdgeAudit(v1_audit, get_module_logger("v1-entry-edge-audit"))
-        edge_summary = edge_audit.run()
-        logger.info("V1_ENTRY_EDGE_AUDIT_LOG_ONLY rows=%s", edge_summary.get("rows", 0))
-    except Exception:
-        logger.exception("V1_HISTORICAL_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
