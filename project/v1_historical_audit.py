@@ -1,11 +1,11 @@
 """Historical audit for the original 2026-06-25 Kraken signal bot.
 
 Diagnostic only. Reconstructs original V1 signals from stored OHLCV and evaluates
-whether TP1/SL would have been reached first. Does not alter live Velez trading.
+alternative exits without changing the live Velez runtime.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 import math
 
@@ -31,6 +31,14 @@ class Trade:
     mfe_r: float = 0.0
     mae_r: float = 0.0
     tp2_touched: bool = False
+
+    @property
+    def risk(self) -> float:
+        return abs(self.entry - self.stop)
+
+    @property
+    def risk_pct(self) -> float:
+        return self.risk / self.entry if self.entry else 0.0
 
 
 class V1HistoricalAudit:
@@ -96,16 +104,13 @@ class V1HistoricalAudit:
     @staticmethod
     def _align_trend(main_ts: pd.Timestamp, trend: pd.DataFrame) -> pd.Series | None:
         eligible = trend[trend["timestamp"] <= main_ts.floor("1h")]
-        if eligible.empty:
-            return None
-        return eligible.iloc[-1]
+        return None if eligible.empty else eligible.iloc[-1]
 
     def _signals_for_pair(self, pair: str) -> tuple[list[Trade], dict[str, Any]]:
         main = self._frame(pair, "15m")
         trend = self._frame(pair, "1h")
         coverage = {
-            "pair": pair,
-            "bars15": len(main), "bars1h": len(trend),
+            "pair": pair, "bars15": len(main), "bars1h": len(trend),
             "start15": str(main["timestamp"].iloc[0]) if not main.empty else None,
             "end15": str(main["timestamp"].iloc[-1]) if not main.empty else None,
             "has_volume": bool(not main.empty and main["volume"].notna().all()),
@@ -115,7 +120,6 @@ class V1HistoricalAudit:
         main = self._indicators(main)
         trend = self._indicators(trend)
         trades: list[Trade] = []
-        last_key: dict[str, pd.Timestamp] = {}
         for i in range(1, len(main)):
             prev, cur = main.iloc[i-1], main.iloc[i]
             needed = [cur.get(k) for k in ["ema20","ema50","ema200","rsi14","macd_hist","atr14","volume_avg20"]]
@@ -136,11 +140,6 @@ class V1HistoricalAudit:
             if not long_ok and not short_ok:
                 continue
             direction = "LONG" if long_ok else "SHORT"
-            key = f"{pair}:{direction}"
-            candle_ts = pd.Timestamp(cur["timestamp"])
-            if last_key.get(key) == candle_ts:
-                continue
-            last_key[key] = candle_ts
             entry = float(cur["close"])
             atr = float(cur["atr14"])
             risk = 1.5 * atr
@@ -150,51 +149,101 @@ class V1HistoricalAudit:
                 stop, tp1, tp2 = entry-risk, entry+1.5*risk, entry+3*risk
             else:
                 stop, tp1, tp2 = entry+risk, entry-1.5*risk, entry-3*risk
-            trades.append(Trade(pair,direction,candle_ts,entry,stop,tp1,tp2,atr))
+            trades.append(Trade(pair,direction,pd.Timestamp(cur["timestamp"]),entry,stop,tp1,tp2,atr))
         return trades, coverage
 
     @staticmethod
-    def _resolve_trade(trade: Trade, future: pd.DataFrame) -> Trade:
-        risk = abs(trade.entry-trade.stop)
-        max_fav = 0.0
-        max_adv = 0.0
+    def _resolve_fixed(trade: Trade, future: pd.DataFrame, target_r: float) -> Trade:
+        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0, tp2_touched=False)
+        risk = t.risk
+        target = t.entry + target_r*risk if t.direction == "LONG" else t.entry-target_r*risk
+        max_fav = max_adv = 0.0
         for _, row in future.iterrows():
             high, low = float(row["high"]), float(row["low"])
-            if trade.direction == "LONG":
-                max_fav = max(max_fav, high-trade.entry)
-                max_adv = max(max_adv, trade.entry-low)
-                sl = low <= trade.stop
-                tp1 = high >= trade.tp1
-                tp2 = high >= trade.tp2
+            if t.direction == "LONG":
+                max_fav, max_adv = max(max_fav, high-t.entry), max(max_adv, t.entry-low)
+                sl, tp = low <= t.stop, high >= target
+                t.tp2_touched = t.tp2_touched or high >= t.tp2
             else:
-                max_fav = max(max_fav, trade.entry-low)
-                max_adv = max(max_adv, high-trade.entry)
-                sl = high >= trade.stop
-                tp1 = low <= trade.tp1
-                tp2 = low <= trade.tp2
-            trade.tp2_touched = trade.tp2_touched or tp2
-            trade.mfe_r = max_fav/risk if risk else 0.0
-            trade.mae_r = max_adv/risk if risk else 0.0
-            if sl and tp1:
-                trade.outcome = "AMBIGUOUS"
-                trade.exit_price = float(row["close"])
-                trade.exit_time = row["timestamp"]
-                return trade
+                max_fav, max_adv = max(max_fav, t.entry-low), max(max_adv, high-t.entry)
+                sl, tp = high >= t.stop, low <= target
+                t.tp2_touched = t.tp2_touched or low <= t.tp2
+            t.mfe_r, t.mae_r = max_fav/risk, max_adv/risk
+            if sl and tp:
+                t.outcome, t.exit_price, t.exit_time = "AMBIGUOUS", float(row["close"]), row["timestamp"]
+                return t
             if sl:
-                trade.outcome = "SL"
-                trade.exit_price = trade.stop
-                trade.exit_time = row["timestamp"]
-                return trade
-            if tp1:
-                trade.outcome = "TP1"
-                trade.exit_price = trade.tp1
-                trade.exit_time = row["timestamp"]
-                return trade
-        trade.outcome = "UNRESOLVED"
+                t.outcome, t.exit_price, t.exit_time = "SL", t.stop, row["timestamp"]
+                return t
+            if tp:
+                t.outcome, t.exit_price, t.exit_time = "TP", target, row["timestamp"]
+                return t
+        t.outcome = "UNRESOLVED"
         if not future.empty:
-            trade.exit_price = float(future.iloc[-1]["close"])
-            trade.exit_time = future.iloc[-1]["timestamp"]
-        return trade
+            t.exit_price, t.exit_time = float(future.iloc[-1]["close"]), future.iloc[-1]["timestamp"]
+        return t
+
+    @staticmethod
+    def _resolve_lock(trade: Trade, future: pd.DataFrame, trigger_r: float, lock_r: float) -> Trade:
+        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0)
+        risk = t.risk
+        active_stop = t.stop
+        pending_stop: float | None = None
+        max_fav = max_adv = 0.0
+        for _, row in future.iterrows():
+            if pending_stop is not None:
+                active_stop, pending_stop = pending_stop, None
+            high, low = float(row["high"]), float(row["low"])
+            if t.direction == "LONG":
+                max_fav, max_adv = max(max_fav, high-t.entry), max(max_adv, t.entry-low)
+                stop_hit = low <= active_stop
+                trigger_hit = high >= t.entry + trigger_r*risk
+                new_stop = t.entry + lock_r*risk
+            else:
+                max_fav, max_adv = max(max_fav, t.entry-low), max(max_adv, high-t.entry)
+                stop_hit = high >= active_stop
+                trigger_hit = low <= t.entry - trigger_r*risk
+                new_stop = t.entry - lock_r*risk
+            t.mfe_r, t.mae_r = max_fav/risk, max_adv/risk
+            if stop_hit:
+                t.outcome, t.exit_price, t.exit_time = "EXIT", active_stop, row["timestamp"]
+                return t
+            if trigger_hit:
+                better = new_stop > active_stop if t.direction == "LONG" else new_stop < active_stop
+                if better:
+                    pending_stop = new_stop
+        t.outcome = "UNRESOLVED"
+        if not future.empty:
+            t.exit_price, t.exit_time = float(future.iloc[-1]["close"]), future.iloc[-1]["timestamp"]
+        return t
+
+    @staticmethod
+    def _resolve_ema20(trade: Trade, future: pd.DataFrame) -> Trade:
+        t = replace(trade, outcome="OPEN", exit_price=None, exit_time=None, mfe_r=0.0, mae_r=0.0)
+        risk = t.risk
+        max_fav = max_adv = 0.0
+        for _, row in future.iterrows():
+            high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
+            if t.direction == "LONG":
+                max_fav, max_adv = max(max_fav, high-t.entry), max(max_adv, t.entry-low)
+                if low <= t.stop:
+                    t.outcome, t.exit_price, t.exit_time = "SL", t.stop, row["timestamp"]
+                    return t
+                ema_exit = close < float(row["ema20"])
+            else:
+                max_fav, max_adv = max(max_fav, t.entry-low), max(max_adv, high-t.entry)
+                if high >= t.stop:
+                    t.outcome, t.exit_price, t.exit_time = "SL", t.stop, row["timestamp"]
+                    return t
+                ema_exit = close > float(row["ema20"])
+            t.mfe_r, t.mae_r = max_fav/risk, max_adv/risk
+            if ema_exit:
+                t.outcome, t.exit_price, t.exit_time = "EMA20", close, row["timestamp"]
+                return t
+        t.outcome = "UNRESOLVED"
+        if not future.empty:
+            t.exit_price, t.exit_time = float(future.iloc[-1]["close"]), future.iloc[-1]["timestamp"]
+        return t
 
     def _net_eur(self, trade: Trade) -> float:
         if trade.exit_price is None:
@@ -208,73 +257,104 @@ class V1HistoricalAudit:
         slippage = qty*(trade.entry+trade.exit_price)*self.slippage_rate
         return gross-entry_fee-exit_fee-spread-slippage
 
+    @staticmethod
+    def _realized_r(trade: Trade) -> float:
+        if trade.exit_price is None or trade.risk <= 0:
+            return 0.0
+        return ((trade.exit_price-trade.entry)/trade.risk) if trade.direction == "LONG" else ((trade.entry-trade.exit_price)/trade.risk)
+
+    def _stats(self, trades: list[Trade]) -> dict[str, Any]:
+        resolved = [t for t in trades if t.outcome not in {"UNRESOLVED","AMBIGUOUS","OPEN"} and t.exit_price is not None]
+        net_values = [self._net_eur(t) for t in resolved]
+        wins = [v for v in net_values if v > 0]
+        losses = [-v for v in net_values if v < 0]
+        r_values = [self._realized_r(t) for t in resolved]
+        r_wins = [v for v in r_values if v > 0]
+        r_losses = [-v for v in r_values if v < 0]
+        equity, peak, max_dd = 100.0, 100.0, 0.0
+        for t in sorted(resolved, key=lambda x: x.exit_time):
+            equity += self._net_eur(t)
+            peak = max(peak, equity)
+            max_dd = max(max_dd, peak-equity)
+        return {
+            "resolved": len(resolved), "wins": len(wins), "losses": len(losses),
+            "win_rate": len(wins)/len(resolved) if resolved else 0.0,
+            "net_eur": sum(net_values), "ending_capital": 100.0+sum(net_values),
+            "pf_net_eur": (sum(wins)/sum(losses)) if losses else None,
+            "pf_gross_r": (sum(r_wins)/sum(r_losses)) if r_losses else None,
+            "expectancy_eur": sum(net_values)/len(resolved) if resolved else 0.0,
+            "expectancy_r": sum(r_values)/len(resolved) if resolved else 0.0,
+            "max_drawdown_eur": max_dd,
+            "avg_win_eur": sum(wins)/len(wins) if wins else 0.0,
+            "avg_loss_eur": sum(losses)/len(losses) if losses else 0.0,
+        }
+
     def run(self) -> dict[str, Any]:
         self.logger.info("V1_HISTORICAL_AUDIT_START")
-        all_trades: list[Trade] = []
-        coverage = []
+        base_signals: list[Trade] = []
+        coverage: list[dict[str, Any]] = []
         frames: dict[str,pd.DataFrame] = {}
         for pair in SYMBOLS:
             trades, cov = self._signals_for_pair(pair)
             coverage.append(cov)
-            frame = self._frame(pair,"15m")
-            frames[pair] = frame
-            for trade in trades:
-                future = frame[frame["timestamp"] > trade.time]
-                all_trades.append(self._resolve_trade(trade, future))
-        resolved = [t for t in all_trades if t.outcome in {"TP1","SL"}]
-        ambiguous = [t for t in all_trades if t.outcome == "AMBIGUOUS"]
-        unresolved = [t for t in all_trades if t.outcome == "UNRESOLVED"]
-        wins = [t for t in resolved if t.outcome == "TP1"]
-        losses = [t for t in resolved if t.outcome == "SL"]
-        net = sum(self._net_eur(t) for t in resolved)
-        gross_wins = sum(max(self._net_eur(t),0) for t in resolved)
-        gross_losses = sum(max(-self._net_eur(t),0) for t in resolved)
-        pf = gross_wins/gross_losses if gross_losses>0 else None
-        expectancy = net/len(resolved) if resolved else 0.0
-        equity = 100.0
-        peak = equity
-        max_dd = 0.0
-        for t in sorted(resolved, key=lambda x: x.exit_time):
-            equity += self._net_eur(t)
-            peak = max(peak,equity)
-            max_dd = max(max_dd, peak-equity)
-        summary = {
-            "signals": len(all_trades), "resolved": len(resolved),
-            "wins": len(wins), "losses": len(losses),
-            "ambiguous": len(ambiguous), "unresolved": len(unresolved),
-            "win_rate": len(wins)/len(resolved) if resolved else 0.0,
-            "net_eur": net, "ending_capital": 100.0+net,
-            "profit_factor": pf, "expectancy_eur": expectancy,
-            "max_drawdown_eur": max_dd,
-            "tp2_touched": sum(1 for t in all_trades if t.tp2_touched),
-            "avg_mfe_r": sum(t.mfe_r for t in all_trades)/len(all_trades) if all_trades else 0.0,
-            "avg_mae_r": sum(t.mae_r for t in all_trades)/len(all_trades) if all_trades else 0.0,
-            "coverage": coverage,
-        }
+            frames[pair] = self._indicators(self._frame(pair,"15m"))
+            base_signals.extend(trades)
+
+        def future(t: Trade) -> pd.DataFrame:
+            return frames[t.pair][frames[t.pair]["timestamp"] > t.time]
+
+        original = [self._resolve_fixed(t, future(t), 1.5) for t in base_signals]
+        original_resolved = [t for t in original if t.outcome in {"TP","SL"}]
+        original_stats = self._stats(original)
+        original_stats.update({
+            "signals": len(original),
+            "ambiguous": sum(t.outcome=="AMBIGUOUS" for t in original),
+            "unresolved": sum(t.outcome=="UNRESOLVED" for t in original),
+            "tp2_touched": sum(t.tp2_touched for t in original),
+            "avg_mfe_r": sum(t.mfe_r for t in original)/len(original) if original else 0.0,
+            "avg_mae_r": sum(t.mae_r for t in original)/len(original) if original else 0.0,
+            "avg_risk_pct_wins": sum(t.risk_pct for t in original_resolved if t.outcome=="TP")/max(1,sum(t.outcome=="TP" for t in original_resolved)),
+            "avg_risk_pct_losses": sum(t.risk_pct for t in original_resolved if t.outcome=="SL")/max(1,sum(t.outcome=="SL" for t in original_resolved)),
+        })
+
+        fixed = {}
+        for target_r in (0.50,0.75,1.00,1.25,1.50,2.00):
+            fixed[f"{target_r:.2f}R"] = self._stats([self._resolve_fixed(t, future(t), target_r) for t in base_signals])
+
+        locks = {}
+        for trigger_r, lock_r in ((0.50,0.00),(0.75,0.25),(1.00,0.50),(1.50,1.00)):
+            locks[f"{trigger_r:.2f}->{lock_r:.2f}R"] = self._stats([self._resolve_lock(t, future(t), trigger_r, lock_r) for t in base_signals])
+
+        ema20 = self._stats([self._resolve_ema20(t, future(t)) for t in base_signals])
+        summary = {**original_stats, "coverage": coverage, "fixed_targets": fixed, "locks": locks, "ema20_exit": ema20}
         self.logger.warning("V1_HISTORICAL_AUDIT_SUMMARY %s", summary)
         return summary
 
     @staticmethod
     def format_report(s: dict[str, Any]) -> str:
-        pf = s.get("profit_factor")
-        pf_text = "n/d" if pf is None else f"{pf:.2f}"
-        cov_lines = []
-        for c in s.get("coverage",[]):
-            cov_lines.append(f"• {c['pair']}: 15m={c['bars15']} · 1h={c['bars1h']} · volume={'OK' if c['has_volume'] else 'NO'}")
+        pf_eur = s.get("pf_net_eur")
+        pf_r = s.get("pf_gross_r")
+        def pf(v: Any) -> str:
+            return "n/d" if v is None else f"{v:.2f}"
+        fixed_lines = []
+        for label, x in s.get("fixed_targets",{}).items():
+            fixed_lines.append(f"• TP {label}: WR <b>{100*x['win_rate']:.1f}%</b> · PF <b>{pf(x['pf_net_eur'])}</b> · P&L <b>€{x['net_eur']:+.2f}</b>")
+        lock_lines = []
+        for label, x in s.get("locks",{}).items():
+            lock_lines.append(f"• Protezione {label}: PF <b>{pf(x['pf_net_eur'])}</b> · P&L <b>€{x['net_eur']:+.2f}</b>")
+        ema = s.get("ema20_exit",{})
         return (
-            "📊 <b>AUDIT STORICO BOT V1 ORIGINALE</b>\n"
-            f"Segnali ricostruiti: <b>{s.get('signals',0)}</b>\n"
-            f"Trade risolti: <b>{s.get('resolved',0)}</b>\n"
-            f"🟢 TP1: <b>{s.get('wins',0)}</b> · 🔴 SL: <b>{s.get('losses',0)}</b>\n"
-            f"⚪ Ambigui: <b>{s.get('ambiguous',0)}</b> · irrisolti: <b>{s.get('unresolved',0)}</b>\n"
-            f"Win rate: <b>{100*s.get('win_rate',0):.1f}%</b>\n"
-            f"TP2 toccato prima/dopo TP1: <b>{s.get('tp2_touched',0)}</b>\n"
-            f"P&L netto stimato: <b>€{s.get('net_eur',0):+.2f}</b>\n"
-            f"Capitale teorico: <b>€100,00 → €{s.get('ending_capital',100):.2f}</b>\n"
-            f"Profit Factor: <b>{pf_text}</b>\n"
-            f"Expectancy: <b>€{s.get('expectancy_eur',0):+.3f}/trade</b>\n"
-            f"Max drawdown: <b>€{s.get('max_drawdown_eur',0):.2f}</b>\n"
-            f"MFE medio: <b>+{s.get('avg_mfe_r',0):.2f}R</b> · MAE medio: <b>-{s.get('avg_mae_r',0):.2f}R</b>\n"
-            "\n<b>Copertura dati</b>\n" + "\n".join(cov_lines) +
-            "\n\n⚠️ Backtest diagnostico: regole V1 originali, TP1 come uscita principale; stessa candela SL+TP1 = ambiguo."
+            "📊 <b>AUDIT V1 · ECONOMIA E USCITE</b>\n"
+            f"Segnali: <b>{s.get('signals',0)}</b> · risolti originali: <b>{s.get('resolved',0)}</b>\n"
+            f"Win rate TP1 1,5R: <b>{100*s.get('win_rate',0):.1f}%</b>\n"
+            f"P&L netto originale: <b>€{s.get('net_eur',0):+.2f}</b>\n"
+            f"PF netto in euro: <b>{pf(pf_eur)}</b> · PF in R: <b>{pf(pf_r)}</b>\n"
+            f"Expectancy: <b>€{s.get('expectancy_eur',0):+.3f}</b> · <b>{s.get('expectancy_r',0):+.3f}R</b>/trade\n"
+            f"Vincita media: <b>€{s.get('avg_win_eur',0):.3f}</b> · perdita media: <b>€{s.get('avg_loss_eur',0):.3f}</b>\n"
+            f"Rischio % medio winner: <b>{100*s.get('avg_risk_pct_wins',0):.2f}%</b> · loser: <b>{100*s.get('avg_risk_pct_losses',0):.2f}%</b>\n"
+            f"MFE medio: <b>+{s.get('avg_mfe_r',0):.2f}R</b> · MAE: <b>-{s.get('avg_mae_r',0):.2f}R</b>\n\n"
+            "🎯 <b>Target fissi · stessi ingressi</b>\n" + "\n".join(fixed_lines) +
+            "\n\n🛡 <b>Protezioni progressive</b>\n" + "\n".join(lock_lines) +
+            f"\n\n📉 <b>Uscita EMA20</b>: WR <b>{100*ema.get('win_rate',0):.1f}%</b> · PF <b>{pf(ema.get('pf_net_eur'))}</b> · P&L <b>€{ema.get('net_eur',0):+.2f}</b>\n"
+            "\n⚠️ Diagnostico: nessuna modifica al bot live; costi inclusi."
         )
