@@ -13,6 +13,7 @@ from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
 from project.v1_historical_audit import V1HistoricalAudit
+from project.v1_cost_path_audit import V1CostPathAudit
 from project.velez_entry_audit import VelezEntryAudit
 from project.velez_exit_audit import VelezExitAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
@@ -176,6 +177,15 @@ def main() -> None:
             "report_type": "V1_HISTORICAL_AUDIT",
         }))
         logger.info("V1_HISTORICAL_AUDIT_REPORT_SENT signals=%s", v1_summary.get("signals", 0))
+
+        cost_path_audit = V1CostPathAudit(v1_audit, get_module_logger("v1-cost-path-audit"))
+        cost_path_summary = cost_path_audit.run()
+        event_bus.publish(Event(EventType.REPORT_READY, {
+            "message": cost_path_audit.format_report(cost_path_summary),
+            "trusted_html": True,
+            "report_type": "V1_COST_PATH_AUDIT",
+        }))
+        logger.info("V1_COST_PATH_AUDIT_REPORT_SENT trades=%s", cost_path_summary.get("trades", 0))
     except Exception:
         logger.exception("V1_HISTORICAL_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
