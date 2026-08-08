@@ -12,6 +12,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
+from project.velez_1h_audit import Velez1hAudit
 from project.velez_candidate_audit import VelezCandidateAudit
 from project.velez_edge_validation_audit import VelezEdgeValidationAudit
 from project.velez_entry_audit import VelezEntryAudit
@@ -90,6 +91,23 @@ def main() -> None:
                 logger.info("%s_REPORT_SENT",report_type)
             else: logger.info("%s_SKIP already_completed=true",report_type)
         except Exception: logger.exception("%s_FATAL_GUARD action=CONTINUE_RUNTIME",report_type)
+
+    try:
+        audit_1h=Velez1hAudit(
+            postgres,get_module_logger("velez-1h-audit"),settings.collector_pairs,
+            exchange=settings.exchange_name,notional_eur=PER_TRADE_EUR,
+            buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,
+            spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate,
+            pullback_bars=3,max_bars_per_pair=1800,
+        )
+        summary_1h=audit_1h.run()
+        if not summary_1h.get("skipped"):
+            message=audit_1h.format_report(summary_1h)
+            if message: event_bus.publish(Event(EventType.REPORT_READY,{"message":message,"trusted_html":True,"report_type":"VELEZ_1H_AUDIT"}))
+            logger.info("VELEZ_1H_AUDIT_REPORT_SENT qualified=%s",summary_1h.get("qualified",0))
+        else: logger.info("VELEZ_1H_AUDIT_SKIP already_completed=true")
+    except Exception:
+        logger.exception("VELEZ_1H_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME")
 
     Velez15mScheduler(settings,collector,None,None,scanner,monitor).run_forever()
 
