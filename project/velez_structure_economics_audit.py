@@ -37,6 +37,24 @@ class VelezStructureEconomicsAudit(VelezEdgeValidationAudit):
             (AUDIT_VERSION,),
         ))
 
+    def _load_cached(self) -> dict[str, Any] | None:
+        self._ensure_marker()
+        rows = self.postgres.fetch_all(
+            "SELECT summary FROM statistics.velez_candidate_audit_runs WHERE version=%s LIMIT 1",
+            (AUDIT_VERSION,),
+        )
+        if not rows:
+            return None
+        raw = rows[0][0]
+        if isinstance(raw, dict):
+            summary = dict(raw)
+        else:
+            import json
+            summary = json.loads(raw)
+        summary["cached"] = True
+        summary["version"] = AUDIT_VERSION
+        return summary
+
     def _save_marker(self, summary: dict[str, Any]) -> None:
         import json
         self.postgres.execute(
@@ -131,20 +149,19 @@ class VelezStructureEconomicsAudit(VelezEdgeValidationAudit):
                 "exp":statistics.mean(vals),"netpos":100.0*sum(x>0 for x in vals)/len(vals)}
 
     def run(self) -> dict[str, Any]:
-        if self.already_done():
-            return {"skipped":True,"version":AUDIT_VERSION}
+        cached = self._load_cached()
+        if cached is not None:
+            return cached
         rows=self._rows(); cut=int(len(rows)*0.70); dev,hold=rows[:cut],rows[cut:]
         base={str(t):{"dev":self._econ(dev,t),"hold":self._econ(hold,t)} for t in self.TARGETS}
-
-        # Thresholds are learned only on development data, then frozen on holdout.
         filters: list[tuple[str,Callable[[dict[str,Any]],bool]]] = []
         for key in ("risk_pct","room_pct","room_r"):
             vals=sorted(float(r[key]) for r in dev if r.get(key) is not None and math.isfinite(float(r[key])))
             if not vals: continue
             for q,label in ((0.33,"Q33"),(0.50,"Q50"),(0.67,"Q67")):
                 idx=min(len(vals)-1,max(0,int((len(vals)-1)*q))); v=vals[idx]
-                filters.append((f"{key} >= {v:.3f} ({label})",lambda r,k=key,v=v:r.get(k) is not None and float(r[k])>=v))
-                filters.append((f"{key} <= {v:.3f} ({label})",lambda r,k=key,v=v:r.get(k) is not None and float(r[k])<=v))
+                filters.append((f"{key} ≥ {v:.3f} ({label})",lambda r,k=key,v=v:r.get(k) is not None and float(r[k])>=v))
+                filters.append((f"{key} ≤ {v:.3f} ({label})",lambda r,k=key,v=v:r.get(k) is not None and float(r[k])<=v))
         filters.append(("OPEN_SPACE",lambda r:bool(r.get("open_space"))))
         filters.append(("UTC 06-12",lambda r:6<=int(r["hour"])<12))
 
@@ -155,16 +172,14 @@ class VelezStructureEconomicsAudit(VelezEdgeValidationAudit):
                 ds,hs=self._econ(d,t),self._econ(h,t)
                 if ds["n"]>=40 and hs["n"]>=15:
                     tests.append({"filter":name,"target":t,"dev":ds,"hold":hs})
-
-        # Two-factor combinations are limited to economically meaningful room/risk gates.
         dev_room=[float(r["room_r"]) for r in dev if r.get("room_r") is not None]
         dev_risk=[float(r["risk_pct"]) for r in dev]
         if dev_room and dev_risk:
             room_med=statistics.median(dev_room); risk_med=statistics.median(dev_risk)
             combos=[
-                (f"room_r>={room_med:.2f} & risk_pct>={risk_med:.3f}",lambda r,rm=room_med,rk=risk_med:r.get("room_r") is not None and float(r["room_r"])>=rm and float(r["risk_pct"])>=rk),
-                (f"UTC06-12 & room_r>={room_med:.2f}",lambda r,rm=room_med:6<=int(r["hour"])<12 and r.get("room_r") is not None and float(r["room_r"])>=rm),
-                (f"UTC06-12 & risk_pct>={risk_med:.3f}",lambda r,rk=risk_med:6<=int(r["hour"])<12 and float(r["risk_pct"])>=rk),
+                (f"room_r ≥ {room_med:.2f} & risk_pct ≥ {risk_med:.3f}",lambda r,rm=room_med,rk=risk_med:r.get("room_r") is not None and float(r["room_r"])>=rm and float(r["risk_pct"])>=rk),
+                (f"UTC06-12 & room_r ≥ {room_med:.2f}",lambda r,rm=room_med:6<=int(r["hour"])<12 and r.get("room_r") is not None and float(r["room_r"])>=rm),
+                (f"UTC06-12 & risk_pct ≥ {risk_med:.3f}",lambda r,rk=risk_med:6<=int(r["hour"])<12 and float(r["risk_pct"])>=rk),
             ]
             for name,fn in combos:
                 d=[r for r in dev if fn(r)]; h=[r for r in hold if fn(r)]
@@ -172,7 +187,6 @@ class VelezStructureEconomicsAudit(VelezEdgeValidationAudit):
                     ds,hs=self._econ(d,t),self._econ(h,t)
                     if ds["n"]>=30 and hs["n"]>=12:
                         tests.append({"filter":name,"target":t,"dev":ds,"hold":hs})
-
         tests.sort(key=lambda x:(x["hold"]["exp"],x["hold"]["pf"]),reverse=True)
         robust=[x for x in tests if x["dev"]["pf"]>1 and x["hold"]["pf"]>1 and x["dev"]["exp"]>0 and x["hold"]["exp"]>0]
         summary={
@@ -183,6 +197,10 @@ class VelezStructureEconomicsAudit(VelezEdgeValidationAudit):
             "open_space":sum(bool(r.get("open_space")) for r in rows),"robust":robust[:10],"best":tests[:10],
         }
         self._save_marker(summary); return summary
+
+    @staticmethod
+    def _safe_filter_name(value: Any) -> str:
+        return str(value).replace(">=", "≥").replace("<=", "≤").replace("&", "e")
 
     @staticmethod
     def format_report(s: dict[str, Any]) -> str:
@@ -197,14 +215,17 @@ class VelezStructureEconomicsAudit(VelezEdgeValidationAudit):
             lines.append(f"• TP {t}R · DEV n={d['n']} PF <b>{d['pf']:.2f}</b> Exp <b>€{d['exp']:+.3f}</b> · HOLD n={h['n']} PF <b>{h['pf']:.2f}</b> Exp <b>€{h['exp']:+.3f}</b>")
         lines += ["", "✅ <b>Filtri net-positive sia DEV sia HOLD</b>"]
         if not s.get("robust"):
-            lines.append("• Nessuna combinazione testata mantiene PF netto >1 ed expectancy € positiva in entrambi i periodi.")
+            lines.append("• Nessuna combinazione testata mantiene PF netto maggiore di 1 ed expectancy € positiva in entrambi i periodi.")
         else:
             for x in s["robust"]:
                 d,h=x["dev"],x["hold"]
-                lines.append(f"• {x['filter']} · TP {x['target']:.1f}R · DEV n={d['n']} PF {d['pf']:.2f} Exp €{d['exp']:+.3f} · HOLD n={h['n']} PF {h['pf']:.2f} Exp €{h['exp']:+.3f}")
+                name=VelezStructureEconomicsAudit._safe_filter_name(x['filter'])
+                lines.append(f"• {name} · TP {x['target']:.1f}R · DEV n={d['n']} PF {d['pf']:.2f} Exp €{d['exp']:+.3f} · HOLD n={h['n']} PF {h['pf']:.2f} Exp €{h['exp']:+.3f}")
         lines += ["", "🔎 <b>Migliori nel solo holdout</b>"]
         for x in s.get("best",[])[:5]:
-            h=x["hold"]
-            lines.append(f"• {x['filter']} · TP {x['target']:.1f}R · n={h['n']} · PF {h['pf']:.2f} · P&L €{h['net']:+.2f} · Exp €{h['exp']:+.3f}")
+            h=x["hold"]; name=VelezStructureEconomicsAudit._safe_filter_name(x['filter'])
+            lines.append(f"• {name} · TP {x['target']:.1f}R · n={h['n']} · PF {h['pf']:.2f} · P&amp;L €{h['net']:+.2f} · Exp €{h['exp']:+.3f}")
+        if s.get("cached"):
+            lines.append("\nℹ️ Risultato recuperato dal database: audit non ricalcolato.")
         lines.append("\n⚠️ One-shot diagnostico. Livelli strutturali ricavati esclusivamente dalle 96 barre precedenti all'ingresso; nessun look-ahead e nessuna modifica al live.")
         return "\n".join(lines)
