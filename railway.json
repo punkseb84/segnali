@@ -1,7 +1,7 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "startCommand": "python -m project.daily_coinbase_runtime",
+    "startCommand": "python -m project.daily_coinbase_main",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5
   }
