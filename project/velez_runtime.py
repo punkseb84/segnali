@@ -14,7 +14,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.event_move_discovery_binance_24m_audit import EventMoveDiscoveryBinance24mAudit
+from project.path_edge_discovery_binance_36m_audit import PathEdgeDiscoveryBinance36mAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
 from project.velez_mode2_scanner import RUNTIME_VERSION, VelezMode2Scanner
 from project.velez_monitor import Velez15mMonitor
@@ -41,12 +41,12 @@ def _retire_previous_open_signals(postgres: object) -> None:
     )
 
 
-def _run_requested_event_discovery(settings: object, event_bus: EventBus) -> None:
-    """Run event-first 24m research without blocking the live scheduler."""
-    logger = get_module_logger('event-move-discovery-binance-24m-audit')
+def _run_requested_path_discovery(settings: object, event_bus: EventBus) -> None:
+    """Run 36m barrier/path research without blocking the live scheduler."""
+    logger = get_module_logger('path-edge-discovery-binance-36m-audit')
     try:
         audit_postgres = build_postgres(settings)
-        audit = EventMoveDiscoveryBinance24mAudit(
+        audit = PathEdgeDiscoveryBinance36mAudit(
             audit_postgres,
             logger,
             settings.collector_pairs,
@@ -61,7 +61,7 @@ def _run_requested_event_discovery(settings: object, event_bus: EventBus) -> Non
         )
         summary = audit.run()
         if summary.get('skipped'):
-            logger.info('EVENT_MOVE_DISCOVERY_BINANCE_24M_SKIP already_completed=true')
+            logger.info('PATH_EDGE_DISCOVERY_BINANCE_36M_SKIP already_completed=true')
             return
         message = audit.format_report(summary)
         if message:
@@ -70,24 +70,24 @@ def _run_requested_event_discovery(settings: object, event_bus: EventBus) -> Non
                 {
                     'message': message,
                     'trusted_html': True,
-                    'report_type': 'EVENT_MOVE_DISCOVERY_BINANCE_24M_AUDIT',
+                    'report_type': 'PATH_EDGE_DISCOVERY_BINANCE_36M_AUDIT',
                 },
             ))
-        logger.info('EVENT_MOVE_DISCOVERY_BINANCE_24M_REPORT_SENT')
+        logger.info('PATH_EDGE_DISCOVERY_BINANCE_36M_REPORT_SENT')
     except Exception as exc:
-        logger.exception('EVENT_MOVE_DISCOVERY_BINANCE_24M_FATAL_GUARD action=CONTINUE_RUNTIME')
+        logger.exception('PATH_EDGE_DISCOVERY_BINANCE_36M_FATAL_GUARD action=CONTINUE_RUNTIME')
         err = escape(str(exc)[:800])
         event_bus.publish(Event(
             EventType.REPORT_READY,
             {
                 'message': (
-                    '⚠️ <b>EVENT EDGE DISCOVERY · 24 MESI</b>\n'
+                    '⚠️ <b>PATH EDGE DISCOVERY · 36 MESI</b>\n'
                     'Audit non completato.\n'
                     f'Errore: <code>{err}</code>\n'
                     'Il live Velez continua normalmente.'
                 ),
                 'trusted_html': True,
-                'report_type': 'EVENT_MOVE_DISCOVERY_BINANCE_24M_AUDIT_ERROR',
+                'report_type': 'PATH_EDGE_DISCOVERY_BINANCE_36M_AUDIT_ERROR',
             },
         ))
 
@@ -201,12 +201,12 @@ def main() -> None:
 
     # Research is isolated from the live scheduler and never changes live Velez.
     threading.Thread(
-        target=_run_requested_event_discovery,
+        target=_run_requested_path_discovery,
         args=(settings, event_bus),
-        name='event-move-discovery-binance-24m',
+        name='path-edge-discovery-binance-36m',
         daemon=True,
     ).start()
-    logger.info('EVENT_MOVE_DISCOVERY_BINANCE_24M_THREAD_STARTED')
+    logger.info('PATH_EDGE_DISCOVERY_BINANCE_36M_THREAD_STARTED')
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
