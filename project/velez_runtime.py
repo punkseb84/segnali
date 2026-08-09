@@ -53,7 +53,9 @@ def main()->None:
     common=dict(exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate)
     for audit_cls,name,report_type in [(CostAwareStrategyAudit,'cost-aware-strategy-audit','COST_AWARE_STRATEGY_AUDIT'),(CostAwareEdgeBreakdownAudit,'cost-aware-edge-breakdown-audit','COST_AWARE_EDGE_BREAKDOWN_AUDIT'),(CostAwareWalkForwardAudit,'cost-aware-walkforward-audit','COST_AWARE_WALKFORWARD_AUDIT'),(CostAwareRegimeAudit,'cost-aware-regime-audit','COST_AWARE_REGIME_AUDIT'),(CostAwareRegimeValidationAudit,'cost-aware-regime-validation-audit','COST_AWARE_REGIME_VALIDATION_AUDIT'),(CostAwareVolatilityWalkForwardAudit,'cost-aware-volatility-walkforward-audit','COST_AWARE_VOLATILITY_WALKFORWARD_AUDIT'),(CostAwareVolatilityExCCAudit,'cost-aware-volatility-ex-cc-audit','COST_AWARE_VOLATILITY_EX_CC_AUDIT'),(SupertrendPineBacktestAudit,'supertrend-pine-backtest-audit','SUPERTREND_PINE_BACKTEST_AUDIT')]:
         try:
-            audit=audit_cls(postgres,get_module_logger(name),settings.collector_pairs,**common);summary=audit.run()
+            audit_kwargs=dict(common)
+            if audit_cls is SupertrendPineBacktestAudit:audit_kwargs['max_bars_per_pair']=10000
+            audit=audit_cls(postgres,get_module_logger(name),settings.collector_pairs,**audit_kwargs);summary=audit.run()
             if not summary.get('skipped'):
                 message=audit.format_report(summary)
                 if message:event_bus.publish(Event(EventType.REPORT_READY,{'message':message,'trusted_html':True,'report_type':report_type}))
