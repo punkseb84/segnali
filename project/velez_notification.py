@@ -8,6 +8,15 @@ from project.shared.events import Event, EventType
 from project.velez_mode2_scanner import RUNTIME_VERSION
 
 
+BLOCKED_RESEARCH_REPORT_PREFIXES = (
+    "VELEZ_",
+    "COST_AWARE_",
+    "SUPERTREND_",
+    "EDGE_DISCOVERY_",
+)
+ALLOWED_RESEARCH_REPORT_PREFIX = "CRYPTORESEARCH_V1_CAND000006_"
+
+
 class VelezNotificationEngine(ReliableNotificationEngine):
     @staticmethod
     def _runtime_from_payload(payload: dict[str, Any]) -> str:
@@ -16,7 +25,22 @@ class VelezNotificationEngine(ReliableNotificationEngine):
             return str(state.get("runtime_version") or "")
         return ""
 
+    @staticmethod
+    def _is_obsolete_research_report(event: Event) -> bool:
+        if event.type != EventType.REPORT_READY:
+            return False
+        payload = dict(event.payload)
+        report_type = str(payload.get("report_type") or "").upper()
+        if report_type.startswith(ALLOWED_RESEARCH_REPORT_PREFIX):
+            return False
+        return any(report_type.startswith(prefix) for prefix in BLOCKED_RESEARCH_REPORT_PREFIXES)
+
     def handle_event(self, event: Event) -> None:
+        if self._is_obsolete_research_report(event):
+            report_type = str(dict(event.payload).get("report_type") or "UNKNOWN")
+            self.logger.warning("OBSOLETE_RESEARCH_REPORT_BLOCKED report_type=%s", report_type)
+            return
+
         if event.type == EventType.NEW_SIGNAL:
             payload = dict(event.payload)
             runtime = self._runtime_from_payload(payload)
