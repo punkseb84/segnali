@@ -24,7 +24,7 @@ from project.cryptoresearch_v1_cand000006_binance_12m_audit import (
     PAIR_NAMES,
 )
 
-AUDIT_VERSION_V2 = "CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_20260809_V2_ARCHIVE"
+AUDIT_VERSION_V2 = "CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_20260809_V3_FRESH"
 ARCHIVE_BASE = "https://data.binance.vision/data/spot"
 COLUMNS = [
     "open_time", "open", "high", "low", "close", "volume", "close_time",
