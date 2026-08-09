@@ -14,7 +14,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.path_edge_discovery_binance_36m_v3_audit import PathEdgeDiscoveryBinance36mV3Audit
+from project.path_edge_cost_sensitivity_36m_audit import PathEdgeCostSensitivity36mAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
 from project.velez_mode2_scanner import RUNTIME_VERSION, VelezMode2Scanner
 from project.velez_monitor import Velez15mMonitor
@@ -41,27 +41,25 @@ def _retire_previous_open_signals(postgres: object) -> None:
     )
 
 
-def _run_requested_path_discovery(settings: object, event_bus: EventBus) -> None:
-    """Run 36m barrier/path research without blocking the live scheduler."""
-    logger = get_module_logger('path-edge-discovery-binance-36m-audit')
+def _run_requested_cost_sensitivity(settings: object, event_bus: EventBus) -> None:
+    """Run frozen Path Edge cost-sensitivity research without blocking live PAPER."""
+    logger = get_module_logger('path-edge-cost-sensitivity-36m-audit')
     try:
-        # Immediate visible heartbeat: if this arrives, the research thread and
-        # Telegram REPORT_READY path are both alive before the heavy work starts.
         event_bus.publish(Event(
             EventType.REPORT_READY,
             {
                 'message': (
-                    '🧭 <b>PATH EDGE DISCOVERY · 36 MESI</b>\n'
+                    '💸 <b>PATH EDGE · COST SENSITIVITY 36 MESI</b>\n'
                     'Audit avviato correttamente.\n'
-                    'Scarico lo storico Binance 2023–2026 e poi eseguo la griglia DEV.\n'
-                    'Il live PAPER continua normalmente; il risultato finale arriverà in un secondo messaggio.'
+                    'Ricostruisco le configurazioni congelate sul DEV e poi rivaluto le stesse operazioni a 37/25/15/10/5/0 bps.\n'
+                    'Il live PAPER continua normalmente; il report finale arriverà in un secondo messaggio.'
                 ),
                 'trusted_html': True,
-                'report_type': 'PATH_EDGE_DISCOVERY_BINANCE_36M_STATUS',
+                'report_type': 'PATH_EDGE_COST_SENSITIVITY_36M_STATUS',
             },
         ))
         audit_postgres = build_postgres(settings)
-        audit = PathEdgeDiscoveryBinance36mV3Audit(
+        audit = PathEdgeCostSensitivity36mAudit(
             audit_postgres,
             logger,
             settings.collector_pairs,
@@ -76,13 +74,13 @@ def _run_requested_path_discovery(settings: object, event_bus: EventBus) -> None
         )
         summary = audit.run()
         if summary.get('skipped'):
-            logger.info('PATH_EDGE_DISCOVERY_BINANCE_36M_SKIP already_completed=true')
+            logger.info('PATH_EDGE_COST_SENSITIVITY_36M_SKIP already_completed=true')
             event_bus.publish(Event(
                 EventType.REPORT_READY,
                 {
-                    'message': 'ℹ️ <b>PATH EDGE DISCOVERY · 36 MESI</b>\nAudit già completato per questa versione; nessun nuovo calcolo eseguito.',
+                    'message': 'ℹ️ <b>PATH EDGE · COST SENSITIVITY 36 MESI</b>\nAudit già completato per questa versione; nessun nuovo calcolo eseguito.',
                     'trusted_html': True,
-                    'report_type': 'PATH_EDGE_DISCOVERY_BINANCE_36M_STATUS',
+                    'report_type': 'PATH_EDGE_COST_SENSITIVITY_36M_STATUS',
                 },
             ))
             return
@@ -93,24 +91,24 @@ def _run_requested_path_discovery(settings: object, event_bus: EventBus) -> None
                 {
                     'message': message,
                     'trusted_html': True,
-                    'report_type': 'PATH_EDGE_DISCOVERY_BINANCE_36M_AUDIT',
+                    'report_type': 'PATH_EDGE_COST_SENSITIVITY_36M_AUDIT',
                 },
             ))
-        logger.info('PATH_EDGE_DISCOVERY_BINANCE_36M_REPORT_SENT')
+        logger.info('PATH_EDGE_COST_SENSITIVITY_36M_REPORT_SENT')
     except Exception as exc:
-        logger.exception('PATH_EDGE_DISCOVERY_BINANCE_36M_FATAL_GUARD action=CONTINUE_RUNTIME')
+        logger.exception('PATH_EDGE_COST_SENSITIVITY_36M_FATAL_GUARD action=CONTINUE_RUNTIME')
         err = escape(str(exc)[:800])
         event_bus.publish(Event(
             EventType.REPORT_READY,
             {
                 'message': (
-                    '⚠️ <b>PATH EDGE DISCOVERY · 36 MESI</b>\n'
+                    '⚠️ <b>PATH EDGE · COST SENSITIVITY 36 MESI</b>\n'
                     'Audit non completato.\n'
                     f'Errore: <code>{err}</code>\n'
                     'Il live Velez continua normalmente.'
                 ),
                 'trusted_html': True,
-                'report_type': 'PATH_EDGE_DISCOVERY_BINANCE_36M_AUDIT_ERROR',
+                'report_type': 'PATH_EDGE_COST_SENSITIVITY_36M_AUDIT_ERROR',
             },
         ))
 
@@ -214,22 +212,19 @@ def main() -> None:
     )
     notification.subscribe()
 
-    # Do NOT replay legacy Velez migration/reconciliation history at every deploy.
-    # Keep only the safety check for genuinely active PAPER positions.
     logger.info(
         'VELEZ_STARTUP_STOP_RECONCILIATION closed=%s',
         monitor.reconcile_all_active_hard_stops(),
     )
     _retire_previous_open_signals(postgres)
 
-    # Research is isolated from the live scheduler and never changes live Velez.
     threading.Thread(
-        target=_run_requested_path_discovery,
+        target=_run_requested_cost_sensitivity,
         args=(settings, event_bus),
-        name='path-edge-discovery-binance-36m',
+        name='path-edge-cost-sensitivity-36m',
         daemon=True,
     ).start()
-    logger.info('PATH_EDGE_DISCOVERY_BINANCE_36M_THREAD_STARTED')
+    logger.info('PATH_EDGE_COST_SENSITIVITY_36M_THREAD_STARTED')
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
