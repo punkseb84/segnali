@@ -1,6 +1,7 @@
 """Clean Railway runtime for Oliver Velez 15m PAPER Mode 2 protected lifecycle."""
 from __future__ import annotations
 from dataclasses import replace
+from html import escape
 import project.notification_engine.service as notification_service
 import project.relative_strength_monitor as monitor_module
 from project.capital_protection_migration import run_capital_protection_migration
@@ -10,21 +11,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.cost_aware_strategy_audit import CostAwareStrategyAudit
-from project.cost_aware_edge_breakdown_audit import CostAwareEdgeBreakdownAudit
-from project.cost_aware_walkforward_audit import CostAwareWalkForwardAudit
-from project.cost_aware_regime_audit import CostAwareRegimeAudit
-from project.cost_aware_regime_validation_audit import CostAwareRegimeValidationAudit
-from project.cost_aware_volatility_walkforward_audit import CostAwareVolatilityWalkForwardAudit
-from project.cost_aware_volatility_ex_cc_audit import CostAwareVolatilityExCCAudit
-from project.supertrend_pine_backtest_audit import SupertrendPineBacktestAudit
-from project.supertrend_execution_timing_audit import SupertrendExecutionTimingAudit
-from project.edge_discovery_v2_audit import EdgeDiscoveryV2Audit
-from project.cryptoresearch_v1_cand000006_audit import CryptoResearchV1Cand000006Audit
-from project.cryptoresearch_v1_cand000006_binance_12m_audit import CryptoResearchV1Cand000006Binance12mAudit
-from project.velez_entry_audit import VelezEntryAudit
-from project.velez_exit_audit import VelezExitAudit
-from project.velez_path_audit import VelezPathAudit
+from project.cryptoresearch_v1_cand000006_binance_12m_v2_audit import CryptoResearchV1Cand000006Binance12mV2Audit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
 from project.velez_legacy_reconcile import reconcile_legacy_expired_safe
 from project.velez_targeted_reconcile import reconcile_known_legacy_ids
@@ -49,22 +36,32 @@ def main()->None:
     collector=build_collector(settings,event_bus,postgres);scanner=VelezMode2Scanner(postgres,event_bus,settings.collector_pairs,exchange=settings.exchange_name,trade_notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate,quantity_step=settings.binance_quantity_step,min_qty=settings.binance_min_qty,min_notional_eur=settings.binance_min_notional_eur,signal_cooldown_minutes=60,max_signals_per_cycle=2,max_signals_per_day=8,max_open_positions=MAX_OPEN,max_per_pair_day=2,target_r=1.5,max_hold_candles=48,pullback_bars=3)
     monitor=Velez15mMonitor(postgres,event_bus,ambiguous_candle_mode=settings.ambiguous_candle_mode,max_shadow_signals_per_cycle=300,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate);notification=VelezNotificationEngine(event_bus,enabled=True,max_message_length=settings.telegram_max_message_length,max_retries=settings.telegram_max_retries,postgres=postgres);notification.subscribe()
     logger.info('VELEZ_MIGRATION_DIAGNOSTIC repaired=%s',monitor.reconcile_migration_expired_outcomes());logger.info('VELEZ_SAFE_MIGRATION_OUTCOME_RECONCILIATION repaired=%s',reconcile_legacy_expired_safe(monitor));logger.info('VELEZ_TARGETED_OUTCOME_RECONCILIATION repaired=%s',reconcile_known_legacy_ids(monitor));logger.info('VELEZ_STARTUP_STOP_RECONCILIATION closed=%s',monitor.reconcile_all_active_hard_stops());_retire_previous_open_signals(postgres)
-    for audit_cls,name,report_type,kwargs in [(VelezExitAudit,'velez-exit-audit','VELEZ_EXIT_AUDIT',{}),(VelezEntryAudit,'velez-entry-audit','VELEZ_ENTRY_AUDIT',{}),(VelezPathAudit,'velez-path-audit','VELEZ_PATH_AUDIT',{'notional_eur':PER_TRADE_EUR,'buy_fee_rate':settings.binance_buy_fee_rate,'sell_fee_rate':settings.binance_sell_fee_rate,'spread_rate':settings.binance_spread_rate,'slippage_rate':settings.binance_slippage_rate})]:
-        try:
-            audit=audit_cls(postgres,get_module_logger(name),**kwargs);summary=audit.run();message=audit.format_report(summary)
-            if message:event_bus.publish(Event(EventType.REPORT_READY,{'message':message,'trusted_html':True,'report_type':report_type}))
-        except Exception:logger.exception('%s_FATAL_GUARD action=CONTINUE_RUNTIME',report_type)
-    common=dict(exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,slippage_rate=settings.binance_slippage_rate)
-    for audit_cls,name,report_type in [(CostAwareStrategyAudit,'cost-aware-strategy-audit','COST_AWARE_STRATEGY_AUDIT'),(CostAwareEdgeBreakdownAudit,'cost-aware-edge-breakdown-audit','COST_AWARE_EDGE_BREAKDOWN_AUDIT'),(CostAwareWalkForwardAudit,'cost-aware-walkforward-audit','COST_AWARE_WALKFORWARD_AUDIT'),(CostAwareRegimeAudit,'cost-aware-regime-audit','COST_AWARE_REGIME_AUDIT'),(CostAwareRegimeValidationAudit,'cost-aware-regime-validation-audit','COST_AWARE_REGIME_VALIDATION_AUDIT'),(CostAwareVolatilityWalkForwardAudit,'cost-aware-volatility-walkforward-audit','COST_AWARE_VOLATILITY_WALKFORWARD_AUDIT'),(CostAwareVolatilityExCCAudit,'cost-aware-volatility-ex-cc-audit','COST_AWARE_VOLATILITY_EX_CC_AUDIT'),(SupertrendPineBacktestAudit,'supertrend-pine-backtest-audit','SUPERTREND_PINE_BACKTEST_AUDIT'),(SupertrendExecutionTimingAudit,'supertrend-execution-timing-audit','SUPERTREND_EXECUTION_TIMING_AUDIT'),(EdgeDiscoveryV2Audit,'edge-discovery-v2-audit','EDGE_DISCOVERY_V2_AUDIT'),(CryptoResearchV1Cand000006Audit,'cryptoresearch-v1-cand000006-audit','CRYPTORESEARCH_V1_CAND000006_AUDIT'),(CryptoResearchV1Cand000006Binance12mAudit,'cryptoresearch-v1-cand000006-binance-12m-audit','CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_AUDIT')]:
-        try:
-            audit_kwargs=dict(common)
-            if audit_cls in (SupertrendPineBacktestAudit,SupertrendExecutionTimingAudit,EdgeDiscoveryV2Audit,CryptoResearchV1Cand000006Audit):audit_kwargs['max_bars_per_pair']=10000
-            audit=audit_cls(postgres,get_module_logger(name),settings.collector_pairs,**audit_kwargs);summary=audit.run()
-            if not summary.get('skipped'):
-                message=audit.format_report(summary)
-                if message:event_bus.publish(Event(EventType.REPORT_READY,{'message':message,'trusted_html':True,'report_type':report_type}))
-                logger.info('%s_REPORT_SENT',report_type)
-            else:logger.info('%s_SKIP already_completed=true',report_type)
-        except Exception:logger.exception('%s_FATAL_GUARD action=CONTINUE_RUNTIME',report_type)
+
+    # Research cleanup: historical Velez/cost-aware/Supertrend audits are deliberately
+    # NOT executed at startup anymore. They caused repeated Telegram spam on deploys.
+    # Only the requested frozen Binance 12m recheck runs once via its DB marker.
+    try:
+        audit=CryptoResearchV1Cand000006Binance12mV2Audit(
+            postgres,get_module_logger('cryptoresearch-v1-cand000006-binance-12m-v2-audit'),settings.collector_pairs,
+            exchange=settings.exchange_name,pullback_bars=3,max_bars_per_pair=3200,
+            notional_eur=PER_TRADE_EUR,buy_fee_rate=settings.binance_buy_fee_rate,
+            sell_fee_rate=settings.binance_sell_fee_rate,spread_rate=settings.binance_spread_rate,
+            slippage_rate=settings.binance_slippage_rate,
+        )
+        summary=audit.run()
+        if not summary.get('skipped'):
+            message=audit.format_report(summary)
+            if message:event_bus.publish(Event(EventType.REPORT_READY,{'message':message,'trusted_html':True,'report_type':'CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_V2_AUDIT'}))
+            logger.info('CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_V2_AUDIT_REPORT_SENT')
+        else:logger.info('CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_V2_AUDIT_SKIP already_completed=true')
+    except Exception as exc:
+        logger.exception('CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_V2_AUDIT_FATAL_GUARD action=CONTINUE_RUNTIME')
+        err=escape(str(exc)[:800])
+        event_bus.publish(Event(EventType.REPORT_READY,{
+            'message':f'⚠️ <b>CAND000006 · BINANCE 12 MESI</b>\nAudit non completato.\nErrore: <code>{err}</code>\nIl live Velez continua normalmente.',
+            'trusted_html':True,
+            'report_type':'CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_V2_AUDIT_ERROR',
+        }))
+
     Velez15mScheduler(settings,collector,None,None,scanner,monitor).run_forever()
 if __name__=='__main__':main()
