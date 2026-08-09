@@ -14,7 +14,7 @@ from project.database.postgres import parse_postgres_connection_info, sanitize_p
 from project.shared.events import Event, EventBus, EventType
 from project.shared.logging import get_module_logger
 from project.simple_main import apply_simple_policy, build_collector, build_postgres
-from project.cryptoresearch_v1_cand000006_binance_12m_v2_audit import CryptoResearchV1Cand000006Binance12mV2Audit
+from project.sma20_engulfing_binance_12m_audit import Sma20EngulfingBinance12mAudit
 from project.velez_formatters import format_velez_outcome, format_velez_signal
 from project.velez_mode2_scanner import RUNTIME_VERSION, VelezMode2Scanner
 from project.velez_monitor import Velez15mMonitor
@@ -41,13 +41,12 @@ def _retire_previous_open_signals(postgres: object) -> None:
     )
 
 
-def _run_requested_cand_audit(settings: object, event_bus: EventBus) -> None:
-    """Run the requested frozen Binance study without blocking the live scheduler."""
-    logger = get_module_logger('cryptoresearch-v1-cand000006-binance-12m-v3-audit')
+def _run_requested_sma20_audit(settings: object, event_bus: EventBus) -> None:
+    """Run the requested frozen SMA20+engulfing study without blocking live."""
+    logger = get_module_logger('sma20-engulfing-binance-12m-audit')
     try:
-        # Keep audit DB activity isolated from the live runtime connection/thread.
         audit_postgres = build_postgres(settings)
-        audit = CryptoResearchV1Cand000006Binance12mV2Audit(
+        audit = Sma20EngulfingBinance12mAudit(
             audit_postgres,
             logger,
             settings.collector_pairs,
@@ -62,7 +61,7 @@ def _run_requested_cand_audit(settings: object, event_bus: EventBus) -> None:
         )
         summary = audit.run()
         if summary.get('skipped'):
-            logger.info('CAND000006_BINANCE_12M_V3_SKIP already_completed=true')
+            logger.info('SMA20_ENGULFING_BINANCE_12M_SKIP already_completed=true')
             return
         message = audit.format_report(summary)
         if message:
@@ -71,24 +70,24 @@ def _run_requested_cand_audit(settings: object, event_bus: EventBus) -> None:
                 {
                     'message': message,
                     'trusted_html': True,
-                    'report_type': 'CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_V3_AUDIT',
+                    'report_type': 'SMA20_ENGULFING_BINANCE_12M_AUDIT',
                 },
             ))
-        logger.info('CAND000006_BINANCE_12M_V3_REPORT_SENT')
+        logger.info('SMA20_ENGULFING_BINANCE_12M_REPORT_SENT')
     except Exception as exc:
-        logger.exception('CAND000006_BINANCE_12M_V3_FATAL_GUARD action=CONTINUE_RUNTIME')
+        logger.exception('SMA20_ENGULFING_BINANCE_12M_FATAL_GUARD action=CONTINUE_RUNTIME')
         err = escape(str(exc)[:800])
         event_bus.publish(Event(
             EventType.REPORT_READY,
             {
                 'message': (
-                    '⚠️ <b>CAND000006 · BINANCE 12 MESI</b>\n'
+                    '⚠️ <b>SMA20 + ENGULFING · TEST 12 MESI</b>\n'
                     'Audit non completato.\n'
                     f'Errore: <code>{err}</code>\n'
                     'Il live Velez continua normalmente.'
                 ),
                 'trusted_html': True,
-                'report_type': 'CRYPTORESEARCH_V1_CAND000006_BINANCE_12M_V3_AUDIT_ERROR',
+                'report_type': 'SMA20_ENGULFING_BINANCE_12M_AUDIT_ERROR',
             },
         ))
 
@@ -193,7 +192,6 @@ def main() -> None:
     notification.subscribe()
 
     # Do NOT replay legacy Velez migration/reconciliation history at every deploy.
-    # Those routines could publish hundreds of old STOP_LOSS/TARGET_HIT Telegram events.
     # Keep only the safety check for genuinely active PAPER positions.
     logger.info(
         'VELEZ_STARTUP_STOP_RECONCILIATION closed=%s',
@@ -201,14 +199,14 @@ def main() -> None:
     )
     _retire_previous_open_signals(postgres)
 
-    # Run the requested research in parallel. It must never delay the live 15m scheduler.
+    # Research is isolated from the live scheduler and never changes live Velez.
     threading.Thread(
-        target=_run_requested_cand_audit,
+        target=_run_requested_sma20_audit,
         args=(settings, event_bus),
-        name='cand000006-binance-12m',
+        name='sma20-engulfing-binance-12m',
         daemon=True,
     ).start()
-    logger.info('CAND000006_BINANCE_12M_THREAD_STARTED')
+    logger.info('SMA20_ENGULFING_BINANCE_12M_THREAD_STARTED')
 
     Velez15mScheduler(settings, collector, None, None, scanner, monitor).run_forever()
 
