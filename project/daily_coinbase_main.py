@@ -1,19 +1,19 @@
-"""Entrypoint for the daily Coinbase PAPER signal runtime."""
+"""Entrypoint for the daily BUY/SELL PAPER signal runtime."""
 from __future__ import annotations
 
-from project.daily_coinbase_runtime import DailyCoinbaseRuntime
+from project.daily_coinbase_buy_sell_runtime import DailyCoinbaseBuySellRuntime
 
 
 def main() -> None:
-    runtime = DailyCoinbaseRuntime()
+    runtime = DailyCoinbaseBuySellRuntime()
     runtime.postgres.execute(
         """UPDATE signals.generated_signals
            SET status='EXPIRED',
                closed_at=COALESCE(closed_at, NOW()),
-               outcome_resolution='REPLACED_BY_DAILY_COINBASE_13H_RUNTIME'
+               outcome_resolution='REPLACED_BY_DAILY_BUY_SELL_13H_RUNTIME'
            WHERE status IN ('NEW','OPEN')"""
     )
-    runtime.logger.info('LEGACY_OPEN_SIGNALS_RETIRED_FOR_DAILY_COINBASE_RUNTIME')
+    runtime.logger.info('LEGACY_OPEN_SIGNALS_RETIRED_FOR_DAILY_BUY_SELL_RUNTIME')
     runtime.run_forever()
 
 
