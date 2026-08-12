@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import time
 from typing import Any, Iterator, Sequence
 from urllib.parse import urlparse, urlunparse
 
@@ -58,7 +59,7 @@ def sanitize_postgres_error(message: str, database_url: str) -> str:
 
 
 class PostgresClient:
-    """Thin psycopg wrapper with lazy imports so tests do not require PostgreSQL."""
+    """Thin psycopg wrapper with retries for transient Railway network/DNS failures."""
 
     def __init__(self, config: PostgresConfig) -> None:
         self.config = config
@@ -66,6 +67,22 @@ class PostgresClient:
     @property
     def connection_info(self) -> PostgresConnectionInfo:
         return parse_postgres_connection_info(self.config.database_url)
+
+    @staticmethod
+    def _is_transient_connection_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        transient_markers = (
+            "temporary failure in name resolution",
+            "name or service not known",
+            "could not translate host name",
+            "connection refused",
+            "connection reset",
+            "connection timed out",
+            "timeout expired",
+            "server closed the connection unexpectedly",
+            "network is unreachable",
+        )
+        return any(marker in text for marker in transient_markers)
 
     @contextmanager
     def connect(self) -> Iterator[Any]:
@@ -75,7 +92,29 @@ class PostgresClient:
             import psycopg  # type: ignore[import-not-found]
         except ImportError as exc:
             raise PostgresUnavailableError("Install psycopg[binary] to use PostgreSQL-backed modules") from exc
-        with psycopg.connect(self.config.database_url) as conn:
+
+        # Railway private DNS can briefly become unavailable during deploys or
+        # internal network reconfiguration.  A single failed DNS lookup must not
+        # surface as an operational failure or interrupt the daily signal cycle.
+        delays = (1.0, 2.0, 4.0, 8.0, 12.0)
+        conn = None
+        last_exc: Exception | None = None
+        for attempt in range(len(delays) + 1):
+            try:
+                conn = psycopg.connect(self.config.database_url, connect_timeout=10)
+                break
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_transient_connection_error(exc) or attempt >= len(delays):
+                    raise
+                time.sleep(delays[attempt])
+
+        if conn is None:
+            if last_exc is not None:
+                raise last_exc
+            raise PostgresUnavailableError("PostgreSQL connection could not be established")
+
+        with conn:
             yield conn
 
     def test_connection(self) -> None:
