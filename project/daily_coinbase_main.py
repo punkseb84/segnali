@@ -1,20 +1,7 @@
-"""Entrypoint for the daily BUY/SELL PAPER signal runtime."""
+"""Compatibility entrypoint for the 09:00 Europe/Rome daily Coinbase runtime."""
 from __future__ import annotations
 
-from project.daily_coinbase_buy_sell_runtime import DailyCoinbaseBuySellRuntime
-
-
-def main() -> None:
-    runtime = DailyCoinbaseBuySellRuntime()
-    runtime.postgres.execute(
-        """UPDATE signals.generated_signals
-           SET status='EXPIRED',
-               closed_at=COALESCE(closed_at, NOW()),
-               outcome_resolution='REPLACED_BY_DAILY_BUY_SELL_13H_RUNTIME'
-           WHERE status IN ('NEW','OPEN')"""
-    )
-    runtime.logger.info('LEGACY_OPEN_SIGNALS_RETIRED_FOR_DAILY_BUY_SELL_RUNTIME')
-    runtime.run_forever()
+from project.daily_coinbase_09_main import main
 
 
 if __name__ == '__main__':
