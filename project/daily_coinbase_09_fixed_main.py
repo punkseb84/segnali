@@ -5,11 +5,11 @@ import project.daily_coinbase_runtime as base_runtime
 
 base_runtime.ANALYSIS_HOUR = 9
 
-from project.daily_coinbase_buy_sell_runtime import DailyCoinbaseBuySellRuntime
+from project.daily_coinbase_capped_runtime import DailyCoinbaseCappedRuntime
 
 
 def main() -> None:
-    runtime = DailyCoinbaseBuySellRuntime()
+    runtime = DailyCoinbaseCappedRuntime()
     original_send = runtime.send
 
     def corrected_send(message: str) -> None:
@@ -23,7 +23,7 @@ def main() -> None:
                outcome_resolution='REPLACED_BY_DAILY_BUY_SELL_09H_RUNTIME'
            WHERE status IN ('NEW','OPEN')"""
     )
-    runtime.logger.info('DAILY_BUY_SELL_SCHEDULE analysis=09:00 timezone=Europe/Rome')
+    runtime.logger.info('DAILY_BUY_SELL_SCHEDULE analysis=09:00 timezone=Europe/Rome score_cap=100 disclaimer=true')
     runtime.run_forever()
 
 
